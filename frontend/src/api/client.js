@@ -28,7 +28,7 @@ export async function updateDocument(id, payload) {
 
 // Unified agent endpoint: POST /api/agent/actions/
 export async function runAgentAction(docId, action, payload) {
-  const res = await fetch(`${API_BASE}/agent/actions/`, {
+  const res = await fetch(`${API_BASE}/agent/${docId}/action/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ doc_id: docId, action, payload }),

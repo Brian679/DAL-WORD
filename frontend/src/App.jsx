@@ -127,8 +127,16 @@ export default function App() {
           onBackHome={() => navigate('/')}
           onGenerateOutline={(topic) => runAction('generate_outline', { topic })}
           onEnhanceSection={(query) => runAction('enhance_section', { query, instruction: 'Improve academic clarity' })}
-          onGenerateImage={(query) => runAction('generate_image', { query, prompt: 'Conceptual framework diagram' })}
-          onGenerateChart={(query) => runAction('generate_chart', { query, series: [1, 2, 3, 5, 8], chart_type: 'line' })}
+          onGenerateImage={(query) => runAction('generate_image', {
+            query,
+            prompt: `${query} conceptual framework diagram with clear stages and outcome`,
+          })}
+          onGenerateChart={(query) => runAction('generate_chart', {
+            query,
+            series: [1.8, 2.6, 3.9, 4.7, 5.4],
+            chart_type: 'line',
+            title: `${query} trend overview`,
+          })}
           onGenerateDissertation={(topic) => runAction('generate_dissertation', { topic })}
           onDocumentChanged={refreshDocuments}
         />

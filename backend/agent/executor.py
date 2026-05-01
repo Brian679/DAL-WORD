@@ -51,13 +51,23 @@ def create_outline(document: Document, topic: str) -> Document:
     return _save(document, "outline-generated")
 
 
-def insert_chart(document: Document, section_query: str, series: list[float], chart_type: str = "line") -> Document:
+def insert_chart(
+    document: Document,
+    section_query: str,
+    series: list[float],
+    chart_type: str = "line",
+    title: str | None = None,
+) -> Document:
     idx = find_section(document.content, section_query)
     if idx is None:
         raise ValueError(f"section not found for query: {section_query}")
 
-    chart_path = generate_chart(series=series, chart_type=chart_type)
     section_title = document.content["sections"][idx].get("title", "")
+    chart_path = generate_chart(
+        series=series,
+        chart_type=chart_type,
+        title=title or f"{section_title or section_query} overview",
+    )
     document.content = insert_image_block(
         document.content,
         idx,
@@ -98,7 +108,13 @@ def run_action(document: Document, action: str, payload: dict[str, Any]) -> Docu
     if action == "generate_outline":
         return create_outline(document, payload["topic"])
     if action == "generate_chart":
-        return insert_chart(document, payload["query"], payload.get("series", [1, 2, 3]), payload.get("chart_type", "line"))
+        return insert_chart(
+            document,
+            payload["query"],
+            payload.get("series", [1, 2, 3]),
+            payload.get("chart_type", "line"),
+            payload.get("title"),
+        )
     if action == "generate_image":
         return insert_concept_image(document, payload["query"], payload["prompt"])
     if action == "insert_section":
