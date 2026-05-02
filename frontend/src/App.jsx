@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import HomePage from './components/HomePage';
 import DocumentEditorPage from './components/DocumentEditorPage';
-import { createDocument, listDocuments, runAgentAction } from './api/client';
+import { createDocument, listDocuments, runAgentAction, updateDocument } from './api/client';
 import './styles.css';
 
 function getRouteFromPath(pathname) {
@@ -120,6 +120,24 @@ export default function App() {
           onOpenDocument={openDocument}
           onNewDocument={handleNewDocument}
           onRefresh={refreshDocuments}
+          onImportFile={async ({ title, sections }) => {
+            try {
+              const doc = await createDocument({ title, content: { sections } });
+              await refreshDocuments();
+              openDocument(doc);
+            } catch {
+              setMessage('Could not import file');
+            }
+          }}
+          onNewFromTemplate={async (tpl) => {
+            try {
+              const doc = await createDocument({ title: tpl.label, content: { sections: tpl.sections } });
+              await refreshDocuments();
+              openDocument(doc);
+            } catch {
+              setMessage('Could not create document');
+            }
+          }}
         />
       ) : (
         <DocumentEditorPage
@@ -138,6 +156,16 @@ export default function App() {
             title: `${query} trend overview`,
           })}
           onGenerateDissertation={(topic) => runAction('generate_dissertation', { topic })}
+          onManualSave={async (sections) => {
+            if (!currentDoc) return;
+            const nextContent = {
+              ...(currentDoc.content || {}),
+              sections,
+            };
+            await updateDocument(currentDoc.id, { content: nextContent });
+            await refreshDocuments();
+            setMessage('✓ manual save');
+          }}
           onDocumentChanged={refreshDocuments}
         />
       )}

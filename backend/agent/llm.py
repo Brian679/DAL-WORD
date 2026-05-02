@@ -43,6 +43,10 @@ def chat_with_document(message: str, doc_context: str) -> str:
     return _provider_module().chat_with_document(message, doc_context)
 
 
+def generate_text(prompt: str) -> str:
+    return _provider_module().generate_text(prompt)
+
+
 def enhance_text(text: str, topic: str, instruction: str = "") -> str:
     return _provider_module().enhance_text(text, topic, instruction)
 

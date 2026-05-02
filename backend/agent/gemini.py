@@ -83,9 +83,9 @@ Choose ONE intent:
 Guidance:
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
-- If user says "write full dissertation" -> write_dissertation.
+- If user says "write full dissertation", "write thesis", or "write project on <topic>" -> write_dissertation.
 - If user asks for report/assignment/powerpoint/excel -> map to the matching write_* intent.
-- If user asks for a full/complete/entire project deliverable, treat it as write_report.
+- If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.
 - If user asks to generate substantial new document content, do NOT return chat.
 - If user asks for a full/complete/entire project or long-form deliverable, do NOT return chat; choose the closest write_* intent.
 

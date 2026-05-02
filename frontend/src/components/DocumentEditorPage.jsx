@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bold,
@@ -37,6 +37,77 @@ function normalizeStep(step = '') {
   return step.replace(/^[-\s]+/, '').trim();
 }
 
+function renderFigureBlock(blk, key) {
+  if (!blk || (blk.type !== 'image' && blk.type !== 'chart')) return null;
+  return (
+    <figure key={key} className="doc-figure">
+      <img
+        src={`http://127.0.0.1:8000${blk.src}`}
+        alt={blk.caption || 'Generated image'}
+        className="doc-figure-img"
+        onError={(e) => {
+          e.currentTarget.style.display = 'none';
+          const fb = e.currentTarget.nextSibling;
+          if (fb) fb.textContent = 'Image generation failed';
+        }}
+      />
+      {blk.caption && (
+        <figcaption className="doc-figure-caption">{blk.caption}</figcaption>
+      )}
+    </figure>
+  );
+}
+
+function renderContentWithMarkers(section, sectionIndex) {
+  const rawContent = section?.content || '';
+  const blocks = Array.isArray(section?.blocks) ? section.blocks : [];
+  const parts = [];
+  const markerRe = /\[\[BLOCK:([^\]]+)\]\]/g;
+  let last = 0;
+  let match;
+  const placed = new Set();
+
+  while ((match = markerRe.exec(rawContent)) !== null) {
+    const textPart = rawContent.slice(last, match.index);
+    if (textPart.trim()) {
+      textPart
+        .split('\n\n')
+        .filter(Boolean)
+        .forEach((para, idx) => {
+          parts.push(<p key={`s${sectionIndex}-t${parts.length}-${idx}`}>{para}</p>);
+        });
+    }
+
+    const blockId = (match[1] || '').trim();
+    const block = blocks.find((b) => (b.block_id || '').trim() === blockId);
+    if (block) {
+      placed.add(blockId);
+      parts.push(renderFigureBlock(block, `s${sectionIndex}-b${parts.length}`));
+    }
+    last = markerRe.lastIndex;
+  }
+
+  const tail = rawContent.slice(last);
+  if (tail.trim()) {
+    tail
+      .split('\n\n')
+      .filter(Boolean)
+      .forEach((para, idx) => {
+        parts.push(<p key={`s${sectionIndex}-tail-${idx}`}>{para}</p>);
+      });
+  }
+
+  // Fallback: render any remaining blocks not referenced by marker.
+  blocks.forEach((blk, idx) => {
+    const blockId = (blk.block_id || '').trim();
+    if (!blockId || !placed.has(blockId)) {
+      parts.push(renderFigureBlock(blk, `s${sectionIndex}-fallback-${idx}`));
+    }
+  });
+
+  return parts;
+}
+
 function buildSummaryFromResult(result = {}) {
   if (result.orchestration?.todo_required === false) {
     return null;
@@ -73,6 +144,96 @@ function flattenSections(content) {
     .join('\n\n');
 }
 
+// ── Hierarchical dissertation plan component ─────────────────────────────
+function DissertationPlan({ planItems, todoList, msgId, chapterPlan }) {
+  const [expanded, setExpanded] = useState(true);
+
+  // Build a tree from the flat plan (indented with spaces)
+  const tree = buildPlanTree(planItems.length ? planItems : todoList.map((t) => ({ step: t, status: 'pending' })));
+
+  return (
+    <div className="dplan">
+      <button
+        type="button"
+        className="dplan-toggle"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {expanded ? '▾' : '▸'} Dissertation Plan ({planItems.length} steps)
+      </button>
+      {expanded && (
+        <div className="dplan-tree">
+          {tree.map((node, ni) => (
+            <PlanNode key={`${msgId}-n${ni}`} node={node} depth={0} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildPlanTree(flatItems) {
+  // Each item's level = leading spaces / 2
+  const roots = [];
+  const stack = []; // [{node, level}]
+  for (const item of flatItems) {
+    const raw = item.step || '';
+    const match = raw.match(/^(\s+)/);
+    const level = match ? Math.floor(match[1].length / 2) : 0;
+    const node = {
+      label: normalizeStep(raw),
+      status: item.status || 'pending',
+      level,
+      children: [],
+    };
+    // Pop stack until we find a parent at level-1
+    while (stack.length && stack[stack.length - 1].level >= level) {
+      stack.pop();
+    }
+    if (stack.length === 0) {
+      roots.push(node);
+    } else {
+      stack[stack.length - 1].node.children.push(node);
+    }
+    stack.push({ node, level });
+  }
+  return roots;
+}
+
+function PlanNode({ node, depth }) {
+  const [open, setOpen] = useState(depth < 1); // chapters start expanded; sub-sub collapsed
+  const done = node.status === 'done';
+  const isChapter = depth === 0 && /^writing chapter/i.test(node.label);
+  const hasChildren = node.children.length > 0;
+
+  return (
+    <div className={`pnode pnode--d${depth}`}>
+      <div
+        className={`pnode-row${isChapter ? ' pnode-row--chapter' : ''} ${done ? 'pnode-row--done' : 'pnode-row--pending'}`}
+        onClick={hasChildren ? () => setOpen((v) => !v) : undefined}
+        style={{ cursor: hasChildren ? 'pointer' : 'default' }}
+      >
+        <span className="pnode-tick">{done ? '✓' : '○'}</span>
+        {hasChildren && (
+          <span className="pnode-arrow">{open ? '▾' : '▸'}</span>
+        )}
+        <span className="pnode-label">{node.label}</span>
+        {hasChildren && (
+          <span className="pnode-count">
+            {node.children.filter((c) => c.status === 'done').length}/{node.children.length}
+          </span>
+        )}
+      </div>
+      {hasChildren && open && (
+        <div className="pnode-children">
+          {node.children.map((child, ci) => (
+            <PlanNode key={ci} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DocumentEditorPage({
   document,
   onBackHome,
@@ -81,6 +242,7 @@ export default function DocumentEditorPage({
   onGenerateImage,
   onGenerateChart,
   onGenerateDissertation,
+  onManualSave,
   onDocumentChanged,
 }) {
   const [chats,        setChats]        = useState(INITIAL_CHATS);
@@ -88,9 +250,15 @@ export default function DocumentEditorPage({
   const [showChatList, setShowChatList] = useState(false);
   const [inputValue,   setInputValue]   = useState('');
   const [isThinking,   setIsThinking]   = useState(false);
+  const [isSavingManual, setIsSavingManual] = useState(false);
+  const [isDirty,      setIsDirty]      = useState(false);
+  const [autoSaved,    setAutoSaved]    = useState(false);
+  const [manualError,  setManualError]  = useState('');
+  const [draftSections, setDraftSections] = useState([]);
   const [selectedModel, setSelectedModel] = useState('gemini');
   const [activeModel,  setActiveModel]  = useState('Gemini 1.5 Flash');
-  const bottomRef = useRef(null);
+  const bottomRef    = useRef(null);
+  const autoSaveTimer = useRef(null);
 
   const activeChat = useMemo(
     () => chats.find((chat) => chat.id === activeChatId) || chats[0],
@@ -103,6 +271,75 @@ export default function DocumentEditorPage({
     const clean = docBody.replace(/\s+/g, ' ').trim();
     return clean ? clean.split(' ').length : 0;
   }, [docBody]);
+
+  useEffect(() => {
+    const sections = Array.isArray(document?.content?.sections) ? document.content.sections : [];
+    setDraftSections(
+      (sections.length ? sections : [{ title: '', content: '', blocks: [] }]).map((section) => ({
+        title: section?.title || '',
+        content: section?.content || '',
+        blocks: Array.isArray(section?.blocks) ? section.blocks : [],
+      }))
+    );
+    setIsDirty(false);
+    setAutoSaved(false);
+    setManualError('');
+  }, [document?.id, document?.updated_at]);
+
+  function updateDraftSection(index, field, value) {
+    setDraftSections((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
+    setIsDirty(true);
+    setAutoSaved(false);
+    // debounced auto-save
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => triggerSave(), 1500);
+  }
+
+  function addDraftSection() {
+    setDraftSections((prev) => {
+      const next = [...prev, { title: `Section ${prev.length + 1}`, content: '', blocks: [] }];
+      return next;
+    });
+    setIsDirty(true);
+  }
+
+  function removeDraftSection(index) {
+    setDraftSections((prev) => prev.filter((_, i) => i !== index));
+    setIsDirty(true);
+  }
+
+  const triggerSave = useCallback(async (sections) => {
+    if (!onManualSave) return;
+    setIsSavingManual(true);
+    setManualError('');
+    try {
+      // use latest draft via closure or argument
+      setDraftSections((current) => {
+        const target = sections || current;
+        const cleaned = target
+          .map((s) => ({
+            title: (s.title || '').trim() || 'Untitled section',
+            content: s.content || '',
+            ...(Array.isArray(s.blocks) && s.blocks.length ? { blocks: s.blocks } : {}),
+          }))
+          .filter((s) => s.title || s.content);
+        onManualSave(cleaned).then(() => {
+          setIsDirty(false);
+          setAutoSaved(true);
+          onDocumentChanged?.();
+          setTimeout(() => setAutoSaved(false), 2500);
+        }).catch((err) => {
+          setManualError(err?.message || 'Save failed');
+        }).finally(() => {
+          setIsSavingManual(false);
+        });
+        return current;
+      });
+    } catch (err) {
+      setManualError(err?.message || 'Save failed');
+      setIsSavingManual(false);
+    }
+  }, [onManualSave, onDocumentChanged]);
 
   function chatNameFromMessage(text) {
     const trimmed = text.trim();
@@ -232,10 +469,69 @@ export default function DocumentEditorPage({
         {/* Paper */}
         <section className="doc-paper-zone">
           <div className="doc-paper">
+            <div className="doc-edit-toolbar">
+              <button
+                className="doc-edit-btn doc-edit-btn--save"
+                onClick={() => triggerSave()}
+                disabled={isSavingManual || !isDirty}
+                title="Save changes"
+              >
+                {isSavingManual ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                className="doc-edit-btn"
+                onClick={addDraftSection}
+                disabled={isSavingManual}
+              >
+                + Section
+              </button>
+              {autoSaved && <span className="doc-autosaved-badge">✓ Saved</span>}
+              {isDirty && !autoSaved && !isSavingManual && (
+                <span className="doc-dirty-badge">Unsaved changes</span>
+              )}
+            </div>
+            {!!manualError && <p className="doc-manual-error">{manualError}</p>}
             <h1>{document?.title || 'Untitled Document'}</h1>
-            {docBody.split('\n\n').map((block, i) => (
-              <p key={`${i}-${block.slice(0, 10)}`}>{block}</p>
-            ))}
+            <div className="doc-manual-editor">
+              {(draftSections.length
+                ? draftSections
+                : [{ title: '', content: '', blocks: [] }]
+              ).map((section, si) => (
+                <div key={si} className="doc-manual-section">
+                  <div className="doc-manual-section-head">
+                    <input
+                      className="doc-manual-title-input"
+                      value={section.title}
+                      onChange={(e) => updateDraftSection(si, 'title', e.target.value)}
+                      placeholder="Section title…"
+                    />
+                    <button
+                      className="doc-edit-btn doc-edit-btn--danger"
+                      onClick={() => removeDraftSection(si)}
+                      disabled={draftSections.length <= 1 || isSavingManual}
+                      title="Remove section"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <textarea
+                    className="doc-manual-content-input"
+                    value={section.content}
+                    onChange={(e) => updateDraftSection(si, 'content', e.target.value)}
+                    placeholder="Start typing here…"
+                    rows={Math.max(6, Math.ceil((section.content?.length || 0) / 90))}
+                  />
+                  {/* inline preview of any embedded images / charts */}
+                  {Array.isArray(section.blocks) && section.blocks.length > 0 && (
+                    <div className="doc-inline-blocks">
+                      {section.blocks.map((blk, bi) =>
+                        renderFigureBlock(blk, `${si}-blk-${bi}`)
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -297,23 +593,8 @@ export default function DocumentEditorPage({
                       <div className="dap-summary-card">
                         <p className="dap-summary-row"><strong>Stage:</strong> {msg.summary.stage}</p>
                         <p className="dap-summary-row"><strong>Done (brief):</strong> {msg.summary.done_brief}</p>
-                        <p className="dap-summary-row"><strong>To-do list:</strong> {msg.summary.todo_list?.length || 0} task(s)</p>
-                        <p className="dap-summary-row"><strong>Completion:</strong> {msg.summary.completion_percent || 0}%</p>
-                        <p className="dap-summary-row"><strong>Completed:</strong> {msg.summary.tasks_completed || 0}</p>
-                        <p className="dap-summary-row"><strong>Not completed:</strong> {msg.summary.tasks_pending || 0}</p>
-                        <p className="dap-summary-row"><strong>Next tasks:</strong> {(msg.summary.next_tasks || []).length ? msg.summary.next_tasks.join(', ') : 'None (all completed)'}</p>
                         {!!(msg.summary.todo_list || []).length && (
-                          <div className="dap-summary-todo">
-                            {((msg.plan || []).length ? (msg.plan || []).slice(0, 20) : (msg.summary.todo_list || []).slice(0, 12).map((task) => ({ step: task, status: 'pending' }))).map((item, idx) => {
-                              const stepLabel = normalizeStep(item.step || '');
-                              const done = item.status === 'done';
-                              return (
-                                <div key={`${msg.id}-todo-${idx}`} className={`dap-bullet ${done ? 'dap-bullet--done' : 'dap-bullet--pending'}`}>
-                                  {done ? '✓' : '○'} {stepLabel}
-                                </div>
-                              );
-                            })}
-                          </div>
+                          <DissertationPlan planItems={msg.plan || []} todoList={msg.summary.todo_list || []} msgId={msg.id} chapterPlan={msg.summary.chapter_plan || []} />
                         )}
                       </div>
                     ) : (

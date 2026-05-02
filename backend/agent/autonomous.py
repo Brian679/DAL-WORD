@@ -6,6 +6,7 @@ direct edits on the document using a selectable LLM provider.
 from __future__ import annotations
 
 import logging
+import json
 import re
 from typing import Any
 
@@ -20,12 +21,12 @@ from .llm import (
     get_model_label,
     generate_outline_sections,
     generate_section_content,
+    generate_text,
 )
 from .tools import (
     find_section,
     generate_chart,
     generate_image,
-    insert_image_block,
     update_section,
 )
 
@@ -49,12 +50,40 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
     {
         "title": "Chapter 2: Literature Review",
         "subsections": [
-            "2.1 Introduction",
-            "2.2 Conceptual Review",
-            "2.3 Theoretical Framework",
-            "2.4 Empirical Review",
-            "2.5 Research Gap",
-            "2.6 Chapter Summary",
+            {
+                "title": "2.1 Introduction",
+                "children": [],
+            },
+            {
+                "title": "2.2 Conceptual Review",
+                "children": [
+                    {"title": "2.2.1 Key Concepts", "children": []},
+                    {"title": "2.2.2 Variables and Relationships", "children": []},
+                ],
+            },
+            {
+                "title": "2.3 Theoretical Framework",
+                "children": [
+                    {"title": "2.3.1 Supporting Theories", "children": []},
+                    {"title": "2.3.2 Applicability to the Study", "children": []},
+                ],
+            },
+            {
+                "title": "2.4 Empirical Review",
+                "children": [
+                    {"title": "2.4.1 Evidence from Developed Economies", "children": []},
+                    {"title": "2.4.2 Evidence from Developing Economies", "children": []},
+                    {"title": "2.4.3 Synthesis of Empirical Findings", "children": []},
+                ],
+            },
+            {
+                "title": "2.5 Research Gap",
+                "children": [],
+            },
+            {
+                "title": "2.6 Chapter Summary",
+                "children": [],
+            },
         ],
     },
     {
@@ -73,13 +102,7 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
     },
     {
         "title": "Chapter 4: Results and Discussion",
-        "subsections": [
-            "4.1 Introduction",
-            "4.2 Data Presentation",
-            "4.3 Analysis of Findings",
-            "4.4 Discussion of Findings",
-            "4.5 Chapter Summary",
-        ],
+        "subsections": [],
     },
     {
         "title": "Chapter 5: Conclusion and Recommendations",
@@ -93,12 +116,551 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
         ],
     },
     {
-        "title": "References",
+        "title": "Chapter 6: References and Appendices",
         "subsections": [
-            "Reference List",
+            "6.1 References",
+            "6.2 Appendices",
         ],
     },
 ]
+
+
+def _normalize_subsection_node(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        return {"title": raw, "children": [], "kind": "text"}
+    if isinstance(raw, dict):
+        children = [_normalize_subsection_node(ch) for ch in raw.get("children", [])]
+        return {
+            "title": str(raw.get("title") or "Untitled subsection"),
+            "children": children,
+            "kind": raw.get("kind", "text"),
+            "meta": raw.get("meta", {}),
+        }
+    return {"title": str(raw), "children": [], "kind": "text"}
+
+
+def _research_design(message: str, topic: str, document: Document) -> str:
+    source = " ".join(
+        [
+            message or "",
+            topic or "",
+            _flatten_doc(document),
+        ]
+    ).lower()
+    if "mixed method" in source or "mixed-method" in source or "mixed methods" in source:
+        return "mixed"
+    if "quantitative" in source:
+        return "quantitative"
+    if "qualitative" in source:
+        return "qualitative"
+    if any(k in source for k in ["systematic review", "scoping review", "conceptual paper", "theoretical"]):
+        return "non_empirical"
+    return "quantitative"
+
+
+def _extract_objectives(document: Document, topic: str) -> list[str]:
+    sections = (document.content or {}).get("sections", [])
+    chapter_1_idx = find_section(document.content, "Chapter 1")
+    chapter_1 = sections[chapter_1_idx] if chapter_1_idx is not None and chapter_1_idx < len(sections) else {}
+    chapter_1_text = (chapter_1.get("content") or "").strip()
+
+    lines = [ln.strip(" -\t") for ln in chapter_1_text.splitlines() if ln.strip()]
+    hits: list[str] = []
+    for line in lines:
+        if len(hits) >= 5:
+            break
+        if re.search(r"\bobjective\b", line.lower()) and len(line) > 24:
+            hits.append(line[:140])
+
+    if hits:
+        return hits
+
+    short_topic = (topic or "the study topic").strip()
+    return [
+        f"Determine the current state of {short_topic}",
+        f"Evaluate key drivers and constraints affecting {short_topic}",
+        f"Propose evidence-based recommendations for improving outcomes in {short_topic}",
+    ]
+
+
+def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = [
+        {"title": "4.1 Introduction", "children": []},
+    ]
+
+    if research_design in {"quantitative", "qualitative", "mixed"}:
+        demo_children: list[dict[str, Any]] = [
+            {
+                "title": "4.2.1 Demographic Distribution of Respondents",
+                "kind": "table",
+                "children": [],
+                "meta": {"table_type": "demographics"},
+            }
+        ]
+        if research_design in {"quantitative", "mixed"}:
+            demo_children.append(
+                {
+                    "title": "4.2.2 Demographic Distribution Chart",
+                    "kind": "chart",
+                    "children": [],
+                    "meta": {"chart_type": "demographics"},
+                }
+            )
+        nodes.append({"title": "4.2 Respondent Profile", "children": demo_children})
+
+    start_index = 3 if research_design in {"quantitative", "qualitative", "mixed"} else 2
+    objective_children: list[dict[str, Any]] = []
+    for idx, objective in enumerate(objectives, start=1):
+        objective_node: dict[str, Any] = {
+            "title": f"4.{start_index}.{idx} Findings for Objective {idx}: {objective[:80]}",
+            "children": [],
+        }
+        if research_design in {"quantitative", "mixed"}:
+            objective_node["children"] = [
+                {
+                    "title": f"4.{start_index}.{idx}.a Summary Table for Objective {idx}",
+                    "kind": "table",
+                    "children": [],
+                    "meta": {"objective": objective},
+                },
+                {
+                    "title": f"4.{start_index}.{idx}.b Visualization for Objective {idx}",
+                    "kind": "chart",
+                    "children": [],
+                    "meta": {"objective": objective},
+                },
+            ]
+        elif research_design == "qualitative":
+            objective_node["children"] = [
+                {
+                    "title": f"4.{start_index}.{idx}.a Theme Matrix for Objective {idx}",
+                    "kind": "table",
+                    "children": [],
+                    "meta": {"objective": objective},
+                }
+            ]
+        objective_children.append(objective_node)
+
+    nodes.append({"title": f"4.{start_index} Results by Research Objective", "children": objective_children})
+    nodes.append({"title": f"4.{start_index + 1} Discussion of Findings", "children": []})
+    nodes.append({"title": f"4.{start_index + 2} Chapter Summary", "children": []})
+    return [_normalize_subsection_node(n) for n in nodes]
+
+
+def _table_text_for_node(node_title: str, research_design: str, topic: str, objective: str | None = None) -> str:
+    seed_text = f"{node_title}|{research_design}|{topic}|{objective or ''}"
+    seed = sum(ord(c) for c in seed_text)
+
+    def pct_triplet(total: int = 100) -> tuple[int, int, int]:
+        a = 24 + (seed % 19)
+        b = 29 + ((seed // 3) % 17)
+        c = total - a - b
+        if c < 18:
+            c = 18
+            b = total - a - c
+        return a, b, c
+
+    if "demographic" in node_title.lower():
+        male = 45 + (seed % 31)
+        female = 120 - male
+        age1, age2, age3 = pct_triplet(120)
+        return (
+            "| Variable | Category | Frequency | Percentage |\n"
+            "|---|---|---:|---:|\n"
+            f"| Gender | Male | {male} | {male / 120 * 100:.1f}% |\n"
+            f"| Gender | Female | {female} | {female / 120 * 100:.1f}% |\n"
+            f"| Age | 18-29 | {age1} | {age1 / 120 * 100:.1f}% |\n"
+            f"| Age | 30-39 | {age2} | {age2 / 120 * 100:.1f}% |\n"
+            f"| Age | 40+ | {age3} | {age3 / 120 * 100:.1f}% |"
+        )
+    if research_design == "qualitative":
+        t1 = 2 + (seed % 4)
+        t2 = 2 + ((seed // 5) % 4)
+        t3 = 2 + ((seed // 11) % 4)
+        return (
+            "| Theme | Supporting Mentions | Representative Insight | Interpretation |\n"
+            "|---|---|---|\n"
+            f"| Theme 1 | {t1} | Participants highlighted concerns around {topic[:40]} | Indicates persistent implementation barriers |\n"
+            f"| Theme 2 | {t2} | Respondents reported uneven institutional readiness | Suggests need for governance alignment |\n"
+            f"| Theme 3 | {t3} | Stakeholders requested stronger policy direction | Supports a coordinated reform approach |"
+        )
+    objective_text = objective or "the objective"
+    a = round(2.6 + (seed % 16) * 0.11, 2)
+    b = round(3.1 + ((seed // 7) % 14) * 0.12, 2)
+    c = round(2.4 + ((seed // 13) % 15) * 0.1, 2)
+    return (
+        "| Metric | Observation | Interpretation |\n"
+        "|---|---:|---|\n"
+        f"| Indicator A ({objective_text[:30]}) | {a} | Moderate performance with room for improvement |\n"
+        f"| Indicator B | {b} | Stronger outcome where controls were applied |\n"
+        f"| Indicator C | {c} | Weakest dimension and major constraint area |"
+    )
+
+
+def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
+    """Ask the LLM to produce realistic numeric data for a chart.
+
+    Returns a dict with keys:
+      - series: list[float]   — the data points
+      - chart_type: str       — suggested chart type (bar/line/scatter/area/pie)
+      - x_labels: list[str]   — short label for each point
+      - unit: str             — measurement unit, e.g. "%", "score", "count"
+    Falls back to seed-based data on any error so the pipeline never breaks.
+    """
+    prompt = (
+        f"You are a data analyst. Generate realistic numeric data for a chart about:\n"
+        f"  \"{context}\"\n\n"
+        f"Rules:\n"
+        f"- Return ONLY a JSON object, no markdown, no extra text.\n"
+        f"- Exactly {n_points} data points. Values must be realistic for the topic.\n"
+        f"- Pick the best chart_type from: bar, line, scatter, area, pie.\n"
+        f"- x_labels: short (1-3 word) label for each data point (e.g. year, category, group).\n"
+        f"- unit: the measurement unit (e.g. '%%', 'score', 'count', 'USD', 'years').\n"
+        f"- Do NOT use random-looking numbers. Make them believable for the topic.\n\n"
+        f"Format:\n"
+        f"{{\"series\":[...],\"chart_type\":\"bar\",\"x_labels\":[...],\"unit\":\"%%\"}}"
+    )
+
+    try:
+        raw = generate_text(prompt)
+        # strip any accidental fences
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        data = json.loads(raw)
+        series = [float(v) for v in (data.get("series") or []) if v is not None]
+        if not series:
+            raise ValueError("empty series")
+        return {
+            "series": series,
+            "chart_type": str(data.get("chart_type") or "bar").lower(),
+            "x_labels": [str(label) for label in (data.get("x_labels") or [])],
+            "unit": str(data.get("unit") or ""),
+        }
+    except Exception as exc:
+        logger.warning("_ai_chart_series fallback (%s): %s", context[:60], exc)
+        seed = sum(ord(c) for c in context)
+        base = 10.0 + (seed % 30)
+        return {
+            "series": [round(base + i * 3.5 + (seed + i) % 7, 1) for i in range(n_points)],
+            "chart_type": "bar",
+            "x_labels": [f"Item {i+1}" for i in range(n_points)],
+            "unit": "",
+        }
+
+
+def _extract_json_obj(raw: str) -> dict[str, Any]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-z]*\n?", "", text).rstrip("`").strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("no json object found")
+    parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("json payload is not an object")
+    return parsed
+
+
+def _default_framework_spec(topic: str, prompt: str) -> dict[str, Any]:
+    short_topic = (topic or "the study").strip()
+    return {
+        "title": f"Conceptual Framework: {short_topic}",
+        "left_label": "Independent Variables",
+        "left_items": ["Policy factors", "Resource capacity", "Stakeholder readiness"],
+        "middle_label": "Mediating Factors",
+        "middle_items": ["Implementation quality", "Operational efficiency"],
+        "right_label": "Dependent Variable",
+        "right_items": [short_topic],
+        "control_label": "Control Variables",
+        "control_items": ["Context", "Institution size", "Time"],
+        "notes": (prompt or "").strip()[:180],
+    }
+
+
+def _framework_target_index(document: Document, target: str | None, prompt: str) -> int | None:
+    sections = (document.content or {}).get("sections", [])
+    if not sections:
+        return None
+
+    if target:
+        direct = find_section(document.content, target)
+        if direct is not None:
+            return direct
+
+    text = f"{(target or '')} {(prompt or '')}".lower()
+    looks_framework = any(k in text for k in ["conceptual", "theoretical", "framework", "model"])
+    if looks_framework:
+        preferred_titles = [
+            "2.3 Theoretical Framework",
+            "Theoretical Framework",
+            "2.2 Conceptual Review",
+            "Conceptual Review",
+            "Literature Review",
+            "Chapter 2",
+        ]
+        for query in preferred_titles:
+            idx = find_section(document.content, query)
+            if idx is not None:
+                return idx
+
+        for i, section in enumerate(sections):
+            combined = f"{section.get('title', '')}\n{section.get('content', '')}".lower()
+            if any(k in combined for k in ["conceptual framework", "theoretical framework", "framework"]):
+                return i
+
+    return len(sections) - 1
+
+
+def _build_framework_spec(document: Document, target: str | None, prompt: str) -> dict[str, Any]:
+    sections = (document.content or {}).get("sections", [])
+    idx = _framework_target_index(document, target, prompt)
+    local_title = ""
+    local_content = ""
+    if idx is not None and 0 <= idx < len(sections):
+        local_title = str(sections[idx].get("title") or "")
+        local_content = str(sections[idx].get("content") or "")
+
+    full_context = _full_context_for_generation(document)[:5000]
+    topic = str((document.content or {}).get("topic") or document.title or "Study")
+    objectives = _extract_objectives(document, topic)
+    objective_text = "\n".join(f"- {item}" for item in objectives[:4])
+
+    llm_prompt = (
+        "You are an academic research assistant. Build a professional conceptual framework specification "
+        "for a dissertation figure.\n\n"
+        f"Document title: {document.title}\n"
+        f"Topic: {topic}\n"
+        f"Target section title: {local_title or 'N/A'}\n"
+        f"User request: {prompt}\n\n"
+        "Research objectives:\n"
+        f"{objective_text or '- N/A'}\n\n"
+        "Relevant section content:\n"
+        f"{local_content[:1400]}\n\n"
+        "Whole document context:\n"
+        f"{full_context}\n\n"
+        "Return JSON only with this exact shape:\n"
+        "{"
+        '"title":"...",'
+        '"left_label":"Independent Variables",'
+        '"left_items":["...","..."],'
+        '"middle_label":"Mediating/Moderating Variables",'
+        '"middle_items":["...","..."],'
+        '"right_label":"Dependent Variable",'
+        '"right_items":["..."],'
+        '"control_label":"Control Variables",'
+        '"control_items":["...","..."],'
+        '"notes":"Short rationale under 180 chars"'
+        "}\n"
+        "Rules: keep labels short, items concrete and topic-aware, no markdown."
+    )
+
+    try:
+        data = _extract_json_obj(generate_text(llm_prompt))
+        return {
+            "title": str(data.get("title") or f"Conceptual Framework: {topic}"),
+            "left_label": str(data.get("left_label") or "Independent Variables"),
+            "left_items": [str(x) for x in (data.get("left_items") or [])][:4],
+            "middle_label": str(data.get("middle_label") or "Mediating Variables"),
+            "middle_items": [str(x) for x in (data.get("middle_items") or [])][:4],
+            "right_label": str(data.get("right_label") or "Dependent Variable"),
+            "right_items": [str(x) for x in (data.get("right_items") or [])][:4],
+            "control_label": str(data.get("control_label") or "Control Variables"),
+            "control_items": [str(x) for x in (data.get("control_items") or [])][:4],
+            "notes": str(data.get("notes") or "")[0:180],
+        }
+    except Exception as exc:
+        logger.warning("_build_framework_spec fallback: %s", exc)
+        return _default_framework_spec(topic, prompt)
+
+
+def _insert_block_marker(section_text: str, block_id: str, prompt: str) -> str:
+    text = section_text or ""
+    marker = f"[[BLOCK:{block_id}]]"
+    if marker in text:
+        return text
+
+    lines = text.splitlines()
+    lowered_prompt = (prompt or "").lower()
+    framework_request = any(k in lowered_prompt for k in ["conceptual", "theoretical", "framework", "model"])
+
+    if framework_request:
+        for i, line in enumerate(lines):
+            lower_line = line.lower().strip()
+            if any(k in lower_line for k in ["conceptual framework", "theoretical framework", "framework"]):
+                lines.insert(i + 1, marker)
+                return "\n".join(lines)
+
+    if not text.strip():
+        return marker
+    return text.rstrip() + "\n\n" + marker
+
+
+def _chart_series_for_node(node_title: str, objective: str | None = None) -> list[float]:
+    context = node_title + (f" — {objective}" if objective else "")
+    result = _ai_chart_series(context, n_points=8)
+    return result["series"]
+
+
+def _next_caption_number(document: Document, kind: str) -> int:
+    token = "figure" if kind == "figure" else "table"
+    max_seen = 0
+
+    sections = (document.content or {}).get("sections", [])
+    for section in sections:
+        content = section.get("content", "") or ""
+        for match in re.finditer(rf"\b{token}\s+(\d+)\b", content, flags=re.IGNORECASE):
+            max_seen = max(max_seen, int(match.group(1)))
+
+        for block in section.get("blocks", []) or []:
+            caption = (block.get("caption") or "")
+            for match in re.finditer(rf"\b{token}\s+(\d+)\b", caption, flags=re.IGNORECASE):
+                max_seen = max(max_seen, int(match.group(1)))
+
+    return max_seen + 1
+
+
+def _table_discussion_text(node_title: str, research_design: str, objective: str | None = None) -> str:
+    if "demographic" in node_title.lower():
+        return (
+            "Interpretation: The respondent profile indicates a reasonably balanced distribution across key demographic categories, "
+            "which supports broad coverage of participant perspectives.\n"
+            "Discussion: This distribution improves confidence that subsequent objective-level findings are not overly driven by a single subgroup."
+        )
+
+    if research_design == "qualitative":
+        return (
+            "Interpretation: The theme matrix shows recurring viewpoints across participants, with some themes appearing more frequently than others.\n"
+            "Discussion: The pattern suggests consistent experiential concerns and provides evidence for targeted policy and implementation recommendations."
+        )
+
+    obj = (objective or "the objective").strip()
+    return (
+        f"Interpretation: The metric pattern for {obj[:70]} shows uneven performance across indicators, with stronger outcomes in selected dimensions.\n"
+        "Discussion: The spread across indicators highlights where focused interventions are required to improve overall study outcomes."
+    )
+
+
+def _chart_discussion_text(series: list[float], objective: str | None = None) -> str:
+    avg = round(sum(series) / len(series), 2) if series else 0.0
+    high = max(series) if series else 0.0
+    low = min(series) if series else 0.0
+    trend = "upward" if len(series) > 1 and series[-1] >= series[0] else "mixed"
+    objective_label = (objective or "the objective").strip()
+    return (
+        f"Interpretation: Figure trend is {trend}, with values ranging from {low:.2f} to {high:.2f} and an average of {avg:.2f}.\n"
+        f"Discussion: For {objective_label[:70]}, the visual pattern reinforces the numerical evidence and clarifies priority areas for action."
+    )
+
+
+def _append_node_plan_steps(plan: list[dict[str, Any]], nodes: list[dict[str, Any]], depth: int = 1) -> None:
+    indent = "  " * depth
+    for node in nodes:
+        kind = node.get("kind", "text")
+        verb = "Writing"
+        if kind == "table":
+            verb = "Creating table for"
+        elif kind == "chart":
+            verb = "Creating chart for"
+        plan.append({"step": f"{indent}{verb} {node.get('title', 'Untitled subsection')}", "status": "pending"})
+        _append_node_plan_steps(plan, node.get("children", []), depth + 1)
+
+
+def _execute_subsection_nodes(
+    nodes: list[dict[str, Any]],
+    section_title: str,
+    topic: str,
+    research_design: str,
+    rolling_context: str,
+    plan: list[dict[str, Any]],
+    plan_cursor: list[int],
+    figure_counter: list[int],
+    table_counter: list[int],
+) -> tuple[str, str, list[dict[str, str]]]:
+    chunks: list[str] = []
+    blocks: list[dict[str, str]] = []
+    local_context = rolling_context
+
+    for node in nodes:
+        _done(plan, plan_cursor[0])
+        plan_cursor[0] += 1
+
+        title = node.get("title", "Untitled subsection")
+        kind = node.get("kind", "text")
+        meta = node.get("meta", {}) if isinstance(node.get("meta", {}), dict) else {}
+
+        if kind == "table":
+            objective = str(meta.get("objective") or "") or None
+            table_no = table_counter[0]
+            table_counter[0] += 1
+            table_caption = f"Table {table_no}: {title}"
+            body = (
+                f"{table_caption}\n"
+                f"{_table_text_for_node(title, research_design, topic, objective)}\n\n"
+                f"{_table_discussion_text(title, research_design, objective)}"
+            )
+        elif kind == "chart":
+            objective = str(meta.get("objective") or "") or None
+            figure_no = figure_counter[0]
+            figure_counter[0] += 1
+            figure_caption = f"Figure {figure_no}: {title}"
+            context_str = title + (f" — {objective}" if objective else "")
+            ai_data = _ai_chart_series(context_str, n_points=8)
+            chart_path = generate_chart(
+                series=ai_data["series"],
+                chart_type=ai_data["chart_type"],
+                title=title,
+            )
+            block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+            blocks.append({
+                "type": "chart",
+                "src": chart_path,
+                "caption": figure_caption,
+                "block_id": block_id,
+            })
+            body = (
+                f"{figure_caption}\n"
+                f"[[BLOCK:{block_id}]]\n"
+                f"{_chart_discussion_text(ai_data['series'], objective)}"
+            )
+        else:
+            try:
+                body = generate_section_content(
+                    title=title,
+                    topic=topic,
+                    context=(
+                        f"Parent chapter: {section_title}\n"
+                        f"Research design: {research_design}\n"
+                        f"Context from previous sections:\n{local_context[-2200:]}"
+                    ),
+                    word_count=220,
+                )
+            except Exception:
+                body = _fallback_subsection_text(topic, section_title, title)
+
+        chunks.append(f"{title}\n{body}")
+        local_context = f"{local_context}\n\n{title}\n{body}".strip()
+
+        child_nodes = [_normalize_subsection_node(n) for n in node.get("children", [])]
+        if child_nodes:
+            child_text, local_context, child_blocks = _execute_subsection_nodes(
+                child_nodes,
+                section_title,
+                topic,
+                research_design,
+                local_context,
+                plan,
+                plan_cursor,
+                figure_counter,
+                table_counter,
+            )
+            if child_text:
+                chunks.append(child_text)
+            if child_blocks:
+                blocks.extend(child_blocks)
+
+    return "\n\n".join(chunks), local_context, blocks
 
 
 def _heuristic_intent(message: str) -> dict[str, Any]:
@@ -138,18 +700,51 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     ):
         return {"intent": "summarize_document", "target_section": None, "topic": None}
 
-    if "full dissertation" in text or ("write" in text and "dissertation" in text):
-        topic_match = re.search(r"\bon\b\s+(.+)$", text)
+    dissertation_triggers = [
+        "full dissertation",
+        "write dissertation",
+        "write a dissertation",
+        "write me a dissertation",
+        "create dissertation",
+        "create a dissertation",
+        "do a dissertation",
+        "do dissertation",
+        "generate dissertation",
+        "produce dissertation",
+        "full thesis",
+        "write thesis",
+        "write a thesis",
+        "write me a thesis",
+        "create thesis",
+        "create a thesis",
+        "do a thesis",
+        "do thesis",
+        "generate thesis",
+        "write project",
+        "write a project",
+        "write me a project",
+        "full project",
+        "complete project",
+        "entire project",
+    ]
+    if any(t in text for t in dissertation_triggers) or (
+        "dissertation" in text
+        and any(k in text for k in ["write", "full", "complete", "entire", "create", "do", "generate"])
+    ) or (
+        "thesis" in text
+        and any(k in text for k in ["write", "full", "complete", "entire", "create", "do", "generate"])
+    ):
+        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
         return {"intent": "write_dissertation", "target_section": None, "topic": topic}
 
     if (
         "project" in text
-        and any(k in text for k in ["full", "complete", "entire", "whole", "write", "create", "build"])
+        and any(k in text for k in ["full", "complete", "entire", "whole", "write", "create", "build", "do", "generate"])
     ):
-        topic_match = re.search(r"\bon\b\s+(.+)$", text)
+        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
-        return {"intent": "write_report", "target_section": None, "topic": topic}
+        return {"intent": "write_dissertation", "target_section": None, "topic": topic}
 
     if "outline" in text:
         topic_match = re.search(r"\bon\b\s+(.+)$", text)
@@ -383,10 +978,18 @@ def _build_chat_summary(plan: list[dict[str, Any]], intent: str, document_update
     if document_updated:
         stage = f"{stage}; document updated"
 
+    # Chapter-level plan (top-level items only — indent = 0)
+    chapter_plan = [
+        {"step": _step_label(s.get("step", "")), "status": s.get("status", "pending")}
+        for s in plan
+        if not (s.get("step") or "").startswith(" ")
+    ]
+
     return {
         "stage": stage,
         "intent": intent,
         "todo_list": items,
+        "chapter_plan": chapter_plan,
         "completion_percent": completion_percent,
         "tasks_completed": completed,
         "tasks_pending": pending,
@@ -594,7 +1197,7 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
         elif intent == "write_section":
             reply, updated = _write_section(document, target_section, topic, message, plan)
         elif intent == "write_dissertation":
-            reply, updated = _write_dissertation(document, topic, plan)
+            reply, updated = _write_dissertation(document, topic, message, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "write_report":
@@ -879,88 +1482,86 @@ def _rewrite_chapter_batch(
     return "No chapters were rewritten.", updated
 
 
-def _write_dissertation(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    # Build a hierarchical todo plan (chapter + subsection) for visibility and traceability.
+def _write_dissertation(
+    document: Document,
+    topic: str,
+    instruction: str,
+    plan: list,
+) -> tuple[str, bool]:
     plan.clear()
     plan.append({"step": "Creating dissertation to-do list", "status": "pending"})
 
-    suggested = generate_outline_sections(topic)
-    suggested_by_number: dict[int, dict[str, Any]] = {}
-    for chapter in suggested:
-        if not isinstance(chapter, dict):
-            continue
-        num = _chapter_number_from_title(chapter.get("title", ""))
-        if num is not None:
-            suggested_by_number[num] = chapter
+    design = _research_design(instruction, topic, document)
+    objectives = _extract_objectives(document, topic)
 
-    # Strict dissertation structure: Chapter 1-5 + References.
     chapter_blueprints: list[dict[str, Any]] = []
     for template in DISSERTATION_TEMPLATE:
-        chapter_num = _chapter_number_from_title(template["title"])
-        suggested_item = suggested_by_number.get(chapter_num) if chapter_num is not None else None
-        subsections = (
-            suggested_item.get("subsections", []) if suggested_item else []
-        ) or template.get("subsections", [])
-        chapter_blueprints.append(
-            {
-                "title": template["title"],
-                "subsections": subsections,
-            }
-        )
+        title = template["title"]
+        if "chapter 4" in title.lower():
+            nodes = _chapter4_subsections(design, objectives)
+        else:
+            nodes = [_normalize_subsection_node(s) for s in template.get("subsections", [])]
+        chapter_blueprints.append({"title": title, "nodes": nodes})
 
-    # Expand plan with detailed steps
     for chapter in chapter_blueprints:
         plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
-        for subsection in chapter["subsections"]:
-            plan.append({"step": f"- {subsection}", "status": "pending"})
+        _append_node_plan_steps(plan, chapter["nodes"], depth=1)
 
     _done(plan, 0)
 
-    # Full dissertation commands should replace prior structure from scratch.
     sections: list[dict[str, Any]] = []
+    plan_cursor = [1]
+    figure_counter = [_next_caption_number(document, "figure")]
+    table_counter = [_next_caption_number(document, "table")]
 
-    plan_idx = 1
-    chapter_summaries: list[str] = []
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
-        _done(plan, plan_idx)
-        plan_idx += 1
+        ch_num = _chapter_number_from_title(chapter_title)
 
-        # Generate subsection-by-subsection and accumulate into chapter content.
-        context = _full_context_for_generation(document)
-        chapter_content = _build_section_content(
+        # After Chapter 1 is written, re-extract objectives for Chapter 4
+        if ch_num == 4 and sections:
+            real_objectives = _extract_objectives(document, topic)
+            candidate_nodes = _chapter4_subsections(design, real_objectives)
+            # Only swap if top-level node count is unchanged (preserves plan cursor alignment)
+            if len(candidate_nodes) == len(chapter["nodes"]):
+                chapter["nodes"] = candidate_nodes
+
+        _done(plan, plan_cursor[0])
+        plan_cursor[0] += 1
+
+        current_context = _full_context_for_generation(document)
+        chapter_text, _, chapter_blocks = _execute_subsection_nodes(
+            nodes=chapter["nodes"],
             section_title=chapter_title,
-            subsection_titles=chapter["subsections"],
             topic=topic,
-            context=context,
+            research_design=design,
+            rolling_context=current_context,
+            plan=plan,
+            plan_cursor=plan_cursor,
+            figure_counter=figure_counter,
+            table_counter=table_counter,
         )
 
-        for _ in chapter["subsections"]:
-            _done(plan, plan_idx)
-            plan_idx += 1
+        section_payload: dict[str, Any] = {"title": chapter_title, "content": chapter_text}
+        if chapter_blocks:
+            section_payload["blocks"] = chapter_blocks
+        sections.append(section_payload)
 
-        # Replace if exists, append if new.
-        existing_idx = find_section({"sections": sections}, chapter_title)
-        if existing_idx is not None:
-            sections[existing_idx]["content"] = chapter_content
-            sections[existing_idx]["title"] = chapter_title
-        else:
-            sections.append({"title": chapter_title, "content": chapter_content})
-
-        document.content = {"topic": topic, "sections": sections}
+        document.content = {
+            "topic": topic,
+            "research_design": design,
+            "research_objectives": objectives,
+            "sections": sections,
+        }
         _save(document, f"dissertation-step:{chapter_title}")
-
-        chapter_summaries.append(
-            f"{chapter_title}: completed {len(chapter['subsections'])} subsection(s)."
-        )
 
     document.title = f"Dissertation: {topic}"
     document.save(update_fields=["title", "updated_at"])
     _all_done(plan)
 
     reply = (
-        f"Dissertation generation complete for '{topic}'. "
-        "All generated content has been written directly into the open document."
+        f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design flow. "
+        "The agent executed chapter-level and nested subsection to-do lists with individual prompts per step."
     )
     return reply, True
 
@@ -1049,10 +1650,12 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
     section = sections[idx]
     _done(plan, 1)
 
+    _section_title = section.get("title", "Data")
+    _ai = _ai_chart_series(_section_title, n_points=8)
     chart_path = generate_chart(
-        series=[3.2, 4.1, 5.7, 4.8, 6.3, 7.1],
-        chart_type="bar",
-        title=section.get("title", "Data"),
+        series=_ai["series"],
+        chart_type=_ai["chart_type"],
+        title=_section_title,
     )
     section.setdefault("blocks", []).append(
         {"type": "chart", "src": chart_path, "caption": f"Chart for {section.get('title', 'section')}"}
@@ -1067,18 +1670,42 @@ def _add_image(
 ) -> tuple[str, bool]:
     _done(plan, 0)
     sections = (document.content or {}).get("sections", [])
-    idx = find_section(document.content, target) if target else (len(sections) - 1 if sections else 0)
-    if idx is None:
-        idx = 0
 
-    image_path = generate_image(prompt)
+    idx = _framework_target_index(document, target, prompt)
+    if idx is None:
+        _all_done(plan)
+        return "No sections available. Create an outline first.", False
+
+    framework_request = any(
+        key in (prompt or "").lower()
+        for key in ["conceptual", "theoretical", "framework", "research model", "model"]
+    )
+
+    framework_spec = _build_framework_spec(document, target, prompt) if framework_request else None
+
+    try:
+        image_path = generate_image(prompt, framework_spec=framework_spec)
+    except Exception as exc:
+        _all_done(plan)
+        return f"Image generation failed: {exc}", False
+
     _done(plan, 1)
 
     if sections:
-        sections[idx].setdefault("blocks", []).append(
-            {"type": "image", "src": image_path, "caption": prompt[:80]}
+        section = sections[idx]
+        blocks = section.setdefault("blocks", [])
+        block_id = f"img-{idx + 1}-{len(blocks) + 1}"
+        caption = (
+            (framework_spec or {}).get("title")
+            or prompt[:80]
+            or f"Image for {section.get('title', 'section')}"
         )
+        blocks.append(
+            {"type": "image", "src": image_path, "caption": str(caption)[:120], "block_id": block_id}
+        )
+        section["content"] = _insert_block_marker(section.get("content", ""), block_id, prompt)
         _save(document, f"image:{target or 'section'}")
 
     _all_done(plan)
-    return "Added an image to the document.", True
+    section_name = sections[idx].get("title", "the section") if sections else "the section"
+    return f"Added an image to '{section_name}' using full-document context.", True
