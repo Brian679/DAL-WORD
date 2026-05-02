@@ -41,7 +41,7 @@ class AgentActionView(APIView):
 class ChatView(APIView):
     def post(self, request, document_id: int):
         message = request.data.get("message", "").strip()
-        model_choice = request.data.get("model", "gemini")
+        model_choice = request.data.get("model", "grok")
         if not message:
             return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
 

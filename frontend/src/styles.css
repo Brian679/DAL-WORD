@@ -1166,6 +1166,78 @@ ul { list-style: none; margin: 0; padding: 0; }
   background: #fdfeff;
 }
 
+.doc-blank-textarea {
+  width: 100%;
+  min-height: 600px;
+  border: none;
+  padding: 2rem 2rem;
+  resize: vertical;
+  font-family: 'Calibri', 'Segoe UI', sans-serif;
+  font-size: 1rem;
+  line-height: 1.8;
+  color: #1c2535;
+  box-sizing: border-box;
+  background: #ffffff;
+}
+.doc-blank-textarea:focus {
+  outline: none;
+  background: #ffffff;
+}
+
+.doc-simple-root {
+  height: 100vh;
+  width: 100%;
+  background: #ffffff;
+  padding: 0;
+  margin: 0;
+}
+
+.doc-simple-editor {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: #ffffff;
+  color: #111827;
+  font-family: Calibri, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 48px 64px;
+  box-sizing: border-box;
+}
+
+.doc-simple-editor:focus {
+  outline: none;
+  border: none;
+}
+
+.doc-manual-editor--plain {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.doc-paper-editor {
+  width: 100%;
+  min-height: 640px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: Calibri, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 36px 42px;
+  box-sizing: border-box;
+}
+
+.doc-paper-editor:focus {
+  border: none;
+  outline: none;
+}
+
 /* ── Dissertation hierarchical plan ───────────────────────────── */
 .dplan {
   margin-top: 0.6rem;
@@ -1191,6 +1263,50 @@ ul { list-style: none; margin: 0; padding: 0; }
   overflow-y: auto;
   padding: 4px 0;
 }
+.dplan-table {
+  width: calc(100% - 12px);
+  margin: 6px;
+  border-collapse: collapse;
+  background: #ffffff;
+  border: 1px solid #d5e0ef;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.dplan-table th,
+.dplan-table td {
+  border-bottom: 1px solid #edf3fa;
+  padding: 6px 8px;
+  font-size: 0.76rem;
+  text-align: left;
+}
+.dplan-table th {
+  background: #eff5fd;
+  color: #2d4f7f;
+  font-weight: 700;
+}
+.dplan-table tr:last-child td {
+  border-bottom: none;
+}
+.dplan-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.dplan-chip--done {
+  background: #ddf4e5;
+  color: #1c6a3c;
+}
+.dplan-chip--pending {
+  background: #edf1f6;
+  color: #5b687b;
+}
+.dplan-chip--in_progress {
+  background: #e2edff;
+  color: #2459a8;
+}
 .pnode {}
 .pnode-row {
   display: flex;
@@ -1212,9 +1328,14 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .pnode-row--done .pnode-tick  { color: #197a3e; font-weight: 700; }
 .pnode-row--pending .pnode-tick { color: #9ba5b4; }
+.pnode-row--in-progress .pnode-tick { color: #2f6bc2; }
 .pnode-row--done .pnode-label  { color: #3a4a3c; }
 .pnode-row--pending .pnode-label { color: #55607a; }
+.pnode-row--in-progress .pnode-label { color: #274f92; font-weight: 700; }
 .pnode-tick  { flex-shrink: 0; width: 14px; font-size: 0.75rem; }
+.pnode-tick--spin {
+  animation: dplan-spin 1.1s linear infinite;
+}
 .pnode-arrow { flex-shrink: 0; font-size: 0.65rem; color: #7a8caa; margin-right: 2px; }
 .pnode-label { flex: 1; }
 .pnode-count {
@@ -1230,6 +1351,11 @@ ul { list-style: none; margin: 0; padding: 0; }
 .pnode--d2 .pnode-row { padding-left: 34px; background: #f7fafd; font-size: 0.77rem; }
 .pnode--d3 .pnode-row { padding-left: 48px; background: #f4f8fe; font-size: 0.74rem; }
 .pnode-children { border-left: 2px solid #d0dff2; margin-left: 16px; }
+
+@keyframes dplan-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 
 /* Status bar */
 .doc-status-bar {

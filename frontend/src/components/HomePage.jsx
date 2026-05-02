@@ -45,7 +45,6 @@ function timeAgo(iso) {
   if (mins < 1)  return 'Just now';
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
@@ -54,86 +53,7 @@ function timeAgo(iso) {
 const TEMPLATES = [
   {
     id: 'blank', label: 'Blank Document', color: '#2563eb', abbr: 'W',
-    sections: [{ title: 'Untitled Section', content: '' }],
-  },
-  {
-    id: 'assignment', label: 'Assignment', color: '#7c3aed', abbr: 'A',
-    sections: [
-      { title: 'Title Page', content: 'Course:\nStudent Name:\nDate:\nInstructor:' },
-      { title: 'Introduction', content: 'Provide background and state the purpose of this assignment.' },
-      { title: 'Main Body', content: 'Develop your arguments and analysis here.' },
-      { title: 'Conclusion', content: 'Summarise key findings and their implications.' },
-      { title: 'References', content: '' },
-    ],
-  },
-  {
-    id: 'report', label: 'Report', color: '#0891b2', abbr: 'R',
-    sections: [
-      { title: 'Title Page', content: 'Title:\nAuthor:\nDate:\nOrganisation:' },
-      { title: 'Executive Summary', content: 'A brief overview of the report.' },
-      { title: 'Introduction', content: 'Background, scope, and objectives.' },
-      { title: 'Methodology', content: 'How was the research or analysis conducted?' },
-      { title: 'Findings', content: 'Present key findings here.' },
-      { title: 'Discussion', content: 'Interpret and discuss the findings.' },
-      { title: 'Conclusion', content: 'Summary of findings and recommendations.' },
-      { title: 'References', content: '' },
-    ],
-  },
-  {
-    id: 'essay', label: 'Essay', color: '#059669', abbr: 'E',
-    sections: [
-      { title: 'Introduction', content: 'Hook, background, and thesis statement.' },
-      { title: 'Body Paragraph 1', content: 'Topic sentence, evidence, analysis.' },
-      { title: 'Body Paragraph 2', content: 'Topic sentence, evidence, analysis.' },
-      { title: 'Body Paragraph 3', content: 'Topic sentence, evidence, analysis.' },
-      { title: 'Conclusion', content: 'Restate thesis and summarise arguments.' },
-      { title: 'Bibliography', content: '' },
-    ],
-  },
-  {
-    id: 'presentation', label: 'Presentation', color: '#d97706', abbr: 'P',
-    sections: [
-      { title: 'Title Slide', content: 'Presentation Title\nPresenter:\nDate:' },
-      { title: 'Introduction', content: 'Overview and objectives of the presentation.' },
-      { title: 'Key Points', content: '• Point 1\n• Point 2\n• Point 3' },
-      { title: 'Data & Evidence', content: 'Charts, tables, and supporting data.' },
-      { title: 'Conclusion', content: 'Summary of key takeaways.' },
-      { title: 'Q&A', content: 'Thank you. Questions?' },
-    ],
-  },
-  {
-    id: 'letter', label: 'Letter', color: '#dc2626', abbr: 'L',
-    sections: [
-      { title: 'Header', content: 'Your Name\nAddress\nCity, Postcode\nDate' },
-      { title: 'Recipient', content: 'Recipient Name\nTitle\nOrganisation\nAddress' },
-      { title: 'Salutation', content: 'Dear [Name],' },
-      { title: 'Body', content: 'Write the main content of your letter here.' },
-      { title: 'Closing', content: 'Yours sincerely,\n\n[Your Name]' },
-    ],
-  },
-  {
-    id: 'cv', label: 'CV / Résumé', color: '#0f766e', abbr: 'CV',
-    sections: [
-      { title: 'Personal Information', content: 'Name:\nEmail:\nPhone:\nLinkedIn:' },
-      { title: 'Personal Statement', content: 'A concise summary of your skills and career goals.' },
-      { title: 'Education', content: 'Degree, Institution, Year' },
-      { title: 'Work Experience', content: 'Role, Company, Dates\n• Responsibility 1\n• Responsibility 2' },
-      { title: 'Skills', content: '• Skill 1\n• Skill 2\n• Skill 3' },
-      { title: 'References', content: 'Available on request.' },
-    ],
-  },
-  {
-    id: 'lab', label: 'Lab Report', color: '#475569', abbr: 'Lab',
-    sections: [
-      { title: 'Title', content: 'Experiment title, date, group members.' },
-      { title: 'Abstract', content: 'Brief summary of the experiment and results.' },
-      { title: 'Introduction', content: 'Background theory and hypothesis.' },
-      { title: 'Materials & Methods', content: 'Equipment used and procedure followed.' },
-      { title: 'Results', content: 'Data tables and observations.' },
-      { title: 'Discussion', content: 'Interpret results and compare with expectations.' },
-      { title: 'Conclusion', content: 'Was the hypothesis supported? Key findings.' },
-      { title: 'References', content: '' },
-    ],
+    sections: [],
   },
 ];
 
@@ -317,9 +237,11 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
         <div className="tpl-section">
           <div className="tpl-header">
             <span className="tpl-heading">New</span>
-            <button className="tpl-toggle" onClick={() => setShowAll(v => !v)}>
-              {showAll ? 'Show less' : 'More templates'}
-            </button>
+            {TEMPLATES.length > 1 && (
+              <button className="tpl-toggle" onClick={() => setShowAll(v => !v)}>
+                {showAll ? 'Show less' : 'More templates'}
+              </button>
+            )}
           </div>
           <div className={`tpl-grid${showAll ? ' tpl-grid--all' : ''}`}>
             {(showAll ? TEMPLATES : TEMPLATES.slice(0, 5)).map(tpl => (

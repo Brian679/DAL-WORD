@@ -26,6 +26,12 @@ export async function updateDocument(id, payload) {
   return res.json();
 }
 
+export async function getDocument(id) {
+  const res = await fetch(`${API_BASE}/documents/${id}/`);
+  if (!res.ok) throw new Error('Failed to fetch document');
+  return res.json();
+}
+
 // Unified agent endpoint: POST /api/agent/actions/
 export async function runAgentAction(docId, action, payload) {
   const res = await fetch(`${API_BASE}/agent/${docId}/action/`, {
@@ -37,7 +43,7 @@ export async function runAgentAction(docId, action, payload) {
   return res.json();
 }
 
-export async function chatWithDocument(docId, message, model = 'gemini') {
+export async function chatWithDocument(docId, message, model = 'grok') {
   const res = await fetch(`${API_BASE}/agent/${docId}/chat/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

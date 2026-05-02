@@ -16,6 +16,7 @@ export default function App() {
   const [documents,   setDocuments]   = useState([]);
   const [message,     setMessage]     = useState('');
   const [route,       setRoute]       = useState(() => getRouteFromPath(window.location.pathname));
+  const [chatHint,    setChatHint]    = useState(null);
 
   async function refreshDocuments() {
     try {
@@ -53,7 +54,8 @@ export default function App() {
     }
   }
 
-  function openDocument(doc) {
+  function openDocument(doc, hint) {
+    setChatHint(hint || null);
     navigate(`/document/${encodeURIComponent(doc.id)}`);
   }
 
@@ -131,7 +133,7 @@ export default function App() {
           }}
           onNewFromTemplate={async (tpl) => {
             try {
-              const doc = await createDocument({ title: tpl.label, content: { sections: tpl.sections } });
+              const doc = await createDocument({ title: tpl.label, content: { sections: [] } });
               await refreshDocuments();
               openDocument(doc);
             } catch {
@@ -142,6 +144,7 @@ export default function App() {
       ) : (
         <DocumentEditorPage
           document={currentDoc}
+          initialChatHint={chatHint}
           onBackHome={() => navigate('/')}
           onGenerateOutline={(topic) => runAction('generate_outline', { topic })}
           onEnhanceSection={(query) => runAction('enhance_section', { query, instruction: 'Improve academic clarity' })}

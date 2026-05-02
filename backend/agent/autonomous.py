@@ -183,6 +183,23 @@ def _extract_objectives(document: Document, topic: str) -> list[str]:
     ]
 
 
+def _objective_section_title(objective: str) -> str:
+    """Derive a short readable section title from a full objective statement."""
+    text = re.sub(
+        r"^(to\s+|the\s+study\s+aims?\s+to\s+|this\s+study\s+(aims?\s+to|seeks?\s+to|will)\s+|"
+        r"to\s+examine\s+|to\s+determine\s+|to\s+assess\s+|to\s+evaluate\s+|"
+        r"to\s+investigate\s+|to\s+analyse\s+|to\s+analyze\s+)",
+        "",
+        objective.strip(),
+        flags=re.IGNORECASE,
+    )
+    text = text[0].upper() + text[1:] if text else objective
+    if len(text) > 65:
+        cut = text[:65].rsplit(" ", 1)[0]
+        return cut
+    return text
+
+
 def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = [
         {"title": "4.1 Introduction", "children": []},
@@ -207,43 +224,43 @@ def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[d
                 }
             )
         nodes.append({"title": "4.2 Respondent Profile", "children": demo_children})
+        obj_start = 3
+    else:
+        obj_start = 2
 
-    start_index = 3 if research_design in {"quantitative", "qualitative", "mixed"} else 2
-    objective_children: list[dict[str, Any]] = []
-    for idx, objective in enumerate(objectives, start=1):
-        objective_node: dict[str, Any] = {
-            "title": f"4.{start_index}.{idx} Findings for Objective {idx}: {objective[:80]}",
-            "children": [],
-        }
-        if research_design in {"quantitative", "mixed"}:
-            objective_node["children"] = [
+    # Each objective gets its own top-level section: 4.X <Short Objective Title>
+    for i, objective in enumerate(objectives):
+        sec_num = obj_start + i
+        short_title = _objective_section_title(objective)
+        if research_design == "qualitative":
+            table_title = f"4.{sec_num}.1 Theme Matrix"
+        else:
+            table_title = f"4.{sec_num}.1 Summary Table"
+
+        obj_node: dict[str, Any] = {
+            "title": f"4.{sec_num} {short_title}",
+            "kind": "objective_findings",
+            "meta": {"objective": objective},
+            "children": [
                 {
-                    "title": f"4.{start_index}.{idx}.a Summary Table for Objective {idx}",
+                    "title": table_title,
                     "kind": "table",
                     "children": [],
                     "meta": {"objective": objective},
                 },
                 {
-                    "title": f"4.{start_index}.{idx}.b Visualization for Objective {idx}",
+                    "title": f"4.{sec_num}.2 Data Visualization",
                     "kind": "chart",
                     "children": [],
                     "meta": {"objective": objective},
                 },
-            ]
-        elif research_design == "qualitative":
-            objective_node["children"] = [
-                {
-                    "title": f"4.{start_index}.{idx}.a Theme Matrix for Objective {idx}",
-                    "kind": "table",
-                    "children": [],
-                    "meta": {"objective": objective},
-                }
-            ]
-        objective_children.append(objective_node)
+            ],
+        }
+        nodes.append(obj_node)
 
-    nodes.append({"title": f"4.{start_index} Results by Research Objective", "children": objective_children})
-    nodes.append({"title": f"4.{start_index + 1} Discussion of Findings", "children": []})
-    nodes.append({"title": f"4.{start_index + 2} Chapter Summary", "children": []})
+    last_idx = obj_start + len(objectives)
+    nodes.append({"title": f"4.{last_idx} Discussion of Findings", "children": []})
+    nodes.append({"title": f"4.{last_idx + 1} Chapter Summary", "children": []})
     return [_normalize_subsection_node(n) for n in nodes]
 
 
@@ -577,13 +594,14 @@ def _execute_subsection_nodes(
     plan_cursor: list[int],
     figure_counter: list[int],
     table_counter: list[int],
+    on_node_completed: Any | None = None,
 ) -> tuple[str, str, list[dict[str, str]]]:
     chunks: list[str] = []
     blocks: list[dict[str, str]] = []
     local_context = rolling_context
 
     for node in nodes:
-        _done(plan, plan_cursor[0])
+        step_idx = plan_cursor[0]
         plan_cursor[0] += 1
 
         title = node.get("title", "Untitled subsection")
@@ -624,20 +642,57 @@ def _execute_subsection_nodes(
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_chart_discussion_text(ai_data['series'], objective)}"
             )
-        else:
+        elif kind == "objective_findings":
+            objective = str(meta.get("objective") or title)
             try:
                 body = generate_section_content(
                     title=title,
                     topic=topic,
                     context=(
-                        f"Parent chapter: {section_title}\n"
+                        f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
-                        f"Context from previous sections:\n{local_context[-2200:]}"
+                        f"Parent chapter: {section_title}\n"
+                        f"Context from previous sections:\n{local_context[-2000:]}\n\n"
+                        "Write 2-3 paragraphs presenting findings specifically for this objective. "
+                        "Discuss patterns, trends, and how findings directly address the objective. "
+                        "Be specific and academically rigorous."
                     ),
-                    word_count=220,
+                    word_count=280,
                 )
             except Exception:
                 body = _fallback_subsection_text(topic, section_title, title)
+        else:
+            lowered_title = title.lower()
+            is_pointform = any(
+                k in lowered_title
+                for k in ["research objective", "objectives", "research question", "hypothes"]
+            )
+            if is_pointform:
+                try:
+                    body = generate_text(
+                        f"Write the '{title}' subsection for a research paper about: '{topic}'.\n"
+                        f"Research design: {research_design}\n"
+                        "Format as a numbered list ONLY (1. ... 2. ... 3. ...). "
+                        "Write 3-5 clear, specific, measurable points. "
+                        "Each item must be a complete standalone sentence. "
+                        "Do NOT write any prose paragraph. Do NOT add an introductory sentence before the list."
+                    )
+                except Exception:
+                    body = _fallback_subsection_text(topic, section_title, title)
+            else:
+                try:
+                    body = generate_section_content(
+                        title=title,
+                        topic=topic,
+                        context=(
+                            f"Parent chapter: {section_title}\n"
+                            f"Research design: {research_design}\n"
+                            f"Context from previous sections:\n{local_context[-2200:]}"
+                        ),
+                        word_count=220,
+                    )
+                except Exception:
+                    body = _fallback_subsection_text(topic, section_title, title)
 
         chunks.append(f"{title}\n{body}")
         local_context = f"{local_context}\n\n{title}\n{body}".strip()
@@ -654,11 +709,19 @@ def _execute_subsection_nodes(
                 plan_cursor,
                 figure_counter,
                 table_counter,
+                on_node_completed,
             )
             if child_text:
                 chunks.append(child_text)
             if child_blocks:
                 blocks.extend(child_blocks)
+
+        _done(plan, step_idx)
+        if callable(on_node_completed):
+            try:
+                on_node_completed("\n\n".join(chunks), list(blocks), title)
+            except Exception as exc:
+                logger.warning("Subsection progress callback failed for '%s': %s", title, exc)
 
     return "\n\n".join(chunks), local_context, blocks
 
@@ -1529,6 +1592,34 @@ def _write_dissertation(
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
 
+        # Add chapter placeholder first so subsection updates are persisted progressively.
+        section_payload: dict[str, Any] = {"title": chapter_title, "content": chapter_title}
+        sections.append(section_payload)
+        document.content = {
+            "topic": topic,
+            "research_design": design,
+            "research_objectives": objectives,
+            "sections": sections,
+        }
+        _save(document, f"dissertation-step:{chapter_title}:start")
+
+        def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
+            safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
+            content = f"{chapter_title}\n\n{partial_text}" if partial_text.strip() else chapter_title
+            section_payload["content"] = content
+            if partial_blocks:
+                section_payload["blocks"] = partial_blocks
+            elif "blocks" in section_payload:
+                section_payload.pop("blocks", None)
+
+            document.content = {
+                "topic": topic,
+                "research_design": design,
+                "research_objectives": objectives,
+                "sections": sections,
+            }
+            _save(document, f"dissertation-step:{chapter_title}:{safe_node}")
+
         current_context = _full_context_for_generation(document)
         chapter_text, _, chapter_blocks = _execute_subsection_nodes(
             nodes=chapter["nodes"],
@@ -1540,12 +1631,16 @@ def _write_dissertation(
             plan_cursor=plan_cursor,
             figure_counter=figure_counter,
             table_counter=table_counter,
+            on_node_completed=_persist_subsection_progress,
         )
 
-        section_payload: dict[str, Any] = {"title": chapter_title, "content": chapter_text}
+        # Ensure chapter heading appears before chapter content in the editor body.
+        chapter_content = f"{chapter_title}\n\n{chapter_text}" if chapter_text.strip() else chapter_text
+        section_payload = {"title": chapter_title, "content": chapter_content}
         if chapter_blocks:
             section_payload["blocks"] = chapter_blocks
-        sections.append(section_payload)
+        elif "blocks" in section_payload:
+            section_payload.pop("blocks", None)
 
         document.content = {
             "topic": topic,

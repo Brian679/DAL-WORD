@@ -5,7 +5,7 @@ from typing import Any
 
 from . import gemini, grok
 
-_ACTIVE_MODEL: ContextVar[str] = ContextVar("active_model", default="gemini")
+_ACTIVE_MODEL: ContextVar[str] = ContextVar("active_model", default="grok")
 
 
 def _normalize_model_choice(model_choice: str | None) -> str:
