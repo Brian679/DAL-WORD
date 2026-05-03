@@ -57,28 +57,38 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
             {
                 "title": "2.2 Conceptual Review",
                 "children": [
-                    {"title": "2.2.1 Key Concepts", "children": []},
-                    {"title": "2.2.2 Variables and Relationships", "children": []},
+                    {"title": "2.2.1 Definition and Conceptualisation of Key Terms", "children": []},
+                    {"title": "2.2.2 Core Concepts and Theoretical Constructs", "children": []},
+                    {"title": "2.2.3 Dimensions, Indicators, and Measurement", "children": []},
+                    {"title": "2.2.4 Relationships Between Variables", "children": []},
                 ],
             },
             {
                 "title": "2.3 Theoretical Framework",
                 "children": [
-                    {"title": "2.3.1 Supporting Theories", "children": []},
-                    {"title": "2.3.2 Applicability to the Study", "children": []},
+                    {"title": "2.3.1 Overview of Relevant Theories", "children": []},
+                    {"title": "2.3.2 Foundational and Classical Theories", "children": []},
+                    {"title": "2.3.3 Contemporary and Emerging Theories", "children": []},
+                    {"title": "2.3.4 Applicability and Justification to the Study", "children": []},
                 ],
             },
             {
                 "title": "2.4 Empirical Review",
                 "children": [
-                    {"title": "2.4.1 Evidence from Developed Economies", "children": []},
-                    {"title": "2.4.2 Evidence from Developing Economies", "children": []},
-                    {"title": "2.4.3 Synthesis of Empirical Findings", "children": []},
+                    {"title": "2.4.1 Global Evidence and Trends", "children": []},
+                    {"title": "2.4.2 Evidence from Developed Economies", "children": []},
+                    {"title": "2.4.3 Evidence from Emerging Economies", "children": []},
+                    {"title": "2.4.4 Evidence from Developing Economies and Africa", "children": []},
+                    {"title": "2.4.5 Sectoral and Industry-Specific Evidence", "children": []},
+                    {"title": "2.4.6 Synthesis and Critical Appraisal of Empirical Studies", "children": []},
                 ],
             },
             {
                 "title": "2.5 Research Gap",
-                "children": [],
+                "children": [
+                    {"title": "2.5.1 Identified Gaps in the Literature", "children": []},
+                    {"title": "2.5.2 Contribution and Justification of the Present Study", "children": []},
+                ],
             },
             {
                 "title": "2.6 Chapter Summary",
@@ -595,6 +605,7 @@ def _execute_subsection_nodes(
     figure_counter: list[int],
     table_counter: list[int],
     on_node_completed: Any | None = None,
+    default_word_count: int = 220,
 ) -> tuple[str, str, list[dict[str, str]]]:
     chunks: list[str] = []
     blocks: list[dict[str, str]] = []
@@ -662,37 +673,57 @@ def _execute_subsection_nodes(
             except Exception:
                 body = _fallback_subsection_text(topic, section_title, title)
         else:
-            lowered_title = title.lower()
-            is_pointform = any(
-                k in lowered_title
-                for k in ["research objective", "objectives", "research question", "hypothes"]
-            )
-            if is_pointform:
-                try:
-                    body = generate_text(
-                        f"Write the '{title}' subsection for a research paper about: '{topic}'.\n"
-                        f"Research design: {research_design}\n"
-                        "Format as a numbered list ONLY (1. ... 2. ... 3. ...). "
-                        "Write 3-5 clear, specific, measurable points. "
-                        "Each item must be a complete standalone sentence. "
-                        "Do NOT write any prose paragraph. Do NOT add an introductory sentence before the list."
-                    )
-                except Exception:
-                    body = _fallback_subsection_text(topic, section_title, title)
-            else:
-                try:
-                    body = generate_section_content(
-                        title=title,
-                        topic=topic,
-                        context=(
-                            f"Parent chapter: {section_title}\n"
+                is_lit_review = "literature review" in section_title.lower() or "chapter 2" in section_title.lower()
+                lowered_title = title.lower()
+                is_pointform = any(
+                    k in lowered_title
+                    for k in ["research objective", "objectives", "research question", "hypothes"]
+                )
+                if is_pointform:
+                    try:
+                        body = generate_text(
+                            f"Write the '{title}' subsection for a research paper about: '{topic}'.\n"
                             f"Research design: {research_design}\n"
-                            f"Context from previous sections:\n{local_context[-2200:]}"
-                        ),
-                        word_count=220,
-                    )
-                except Exception:
-                    body = _fallback_subsection_text(topic, section_title, title)
+                            "Format as a numbered list ONLY (1. ... 2. ... 3. ...). "
+                            "Write 3-5 clear, specific, measurable points. "
+                            "Each item must be a complete standalone sentence. "
+                            "Do NOT write any prose paragraph. Do NOT add an introductory sentence before the list."
+                        )
+                    except Exception:
+                        body = _fallback_subsection_text(topic, section_title, title)
+                elif is_lit_review:
+                    try:
+                        body = generate_section_content(
+                            title=title,
+                            topic=topic,
+                            context=(
+                                f"Parent chapter: {section_title}\n"
+                                f"Research design: {research_design}\n"
+                                f"Context from previous sections:\n{local_context[-2200:]}\n\n"
+                                "Requirements: Write 3-5 full paragraphs (~{wc} words total). "
+                                "Reference 3-5 relevant scholars, studies, or theoretical positions by name and year (e.g., Smith, 2019; Jones & Patel, 2021). "
+                                "Be analytical, not merely descriptive. "
+                                "Discuss contrasting views, debates, and how different authors' positions relate to {topic}. "
+                                "Maintain formal academic tone throughout.".format(wc=default_word_count, topic=topic)
+                            ),
+                            word_count=default_word_count,
+                        )
+                    except Exception:
+                        body = _fallback_subsection_text(topic, section_title, title)
+                else:
+                    try:
+                        body = generate_section_content(
+                            title=title,
+                            topic=topic,
+                            context=(
+                                f"Parent chapter: {section_title}\n"
+                                f"Research design: {research_design}\n"
+                                f"Context from previous sections:\n{local_context[-2200:]}"
+                            ),
+                            word_count=default_word_count,
+                        )
+                    except Exception:
+                        body = _fallback_subsection_text(topic, section_title, title)
 
         chunks.append(f"{title}\n{body}")
         local_context = f"{local_context}\n\n{title}\n{body}".strip()
@@ -710,6 +741,7 @@ def _execute_subsection_nodes(
                 figure_counter,
                 table_counter,
                 on_node_completed,
+                default_word_count,
             )
             if child_text:
                 chunks.append(child_text)
@@ -832,10 +864,19 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     if "excel" in text or "spreadsheet" in text:
         return {"intent": "write_spreadsheet", "target_section": None, "topic": None}
 
-    if any(k in text for k in ["correct", "improve", "enhance", "fix"]):
+    if any(k in text for k in [
+        "correct", "improve", "enhance", "fix",
+        "put it again", "add it again", "add it back",
+        "put back", "put the", "include the",
+        "write it again", "write it back", "write again",
+        "generate the", "regenerate the",
+    ]):
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
-    if any(k in text for k in ["redo", "rewrite", "write chapter", "replace chapter"]):
+    if any(k in text for k in [
+        "redo", "rewrite", "write chapter", "replace chapter",
+        "write the", "write me the", "write a new",
+    ]):
         return {"intent": "write_section", "target_section": target, "topic": None}
 
     return {"intent": "chat", "target_section": None, "topic": None}
@@ -945,6 +986,7 @@ def _extract_subsection_phrase(instruction: str) -> str:
     if subsection_num:
         return subsection_num.group(0)
 
+    # Ordered from most specific to least so longer matches win
     known = [
         "background of the study",
         "background of study",
@@ -954,19 +996,48 @@ def _extract_subsection_phrase(instruction: str) -> str:
         "research hypotheses",
         "significance of the study",
         "scope and delimitations",
+        "definition of key terms",
+        "key terms",
         "conceptual review",
         "empirical review",
         "theoretical framework",
+        "research design",
+        "target population",
+        "sampling techniques",
+        "data collection",
+        "data analysis",
+        "reliability and validity",
+        "ethical considerations",
         "data presentation",
         "discussion of findings",
         "summary of findings",
         "recommendations",
+        "limitations of the study",
+        "areas for further research",
+        "further research",
+        "literature review",
+        "methodology",
+        "results and discussion",
+        "conclusion and recommendations",
+        "references and appendices",
+        "introduction",
         "conclusion",
+        "abstract",
+        "references",
+        "appendices",
     ]
     for phrase in known:
         if phrase in text:
             return phrase
-    # Fallback: keep original instruction.
+    # Fallback: extract what comes after action verbs
+    verb_match = re.search(
+        r"(?:correct|fix|enhance|improve|rewrite|write|add|put|include|generate)\s+(?:the\s+|a\s+|an\s+)?(.+)",
+        text,
+    )
+    if verb_match:
+        candidate = verb_match.group(1).strip().rstrip(".!?")
+        if candidate and len(candidate) < 80:
+            return candidate
     return instruction
 
 
@@ -1098,8 +1169,12 @@ def _chat_summary_text(summary: dict[str, Any]) -> str:
 
 def _needs_todo_workflow(intent: str, message: str) -> bool:
     text = (message or "").strip().lower()
+    if intent == "write_dissertation":
+        return True
+
     if intent in {
-        "write_dissertation",
+        "chat",
+        "summarize_document",
         "create_outline",
         "write_report",
         "write_assignment",
@@ -1111,9 +1186,6 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
         "add_chart",
         "add_image",
     }:
-        return True
-
-    if intent in {"chat", "summarize_document"}:
         return any(
             k in text
             for k in [
@@ -1125,7 +1197,7 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
                 "stages",
                 "execute",
             ]
-        ) and intent == "chat"  # summarize_document always direct
+        )
 
     return False
 
@@ -1149,13 +1221,30 @@ def _compact_doc_summary(document: Document) -> str:
 def _summarize_document(document: Document, user_message: str, plan: list) -> tuple[str, bool]:
     if plan:
         _done(plan, 0)
-    doc_context = _flatten_doc(document)
+    doc_context = _flatten_doc(document, truncate=False)
+    msg_lower = user_message.lower()
+    if any(w in msg_lower for w in ["analys", "analyze", "review", "examine"]):
+        task_instruction = (
+            "Provide a thorough academic analysis of this document. Cover:\n"
+            "1. Overview of the topic and main argument\n"
+            "2. Structure and organisation (chapters/sections present, logical flow)\n"
+            "3. Strength of content in each chapter\n"
+            "4. Gaps, weaknesses, or areas needing improvement\n"
+            "5. Language and academic writing quality\n"
+            "6. Overall assessment and specific recommendations\n"
+            "Be specific — reference actual section titles and content from the document."
+        )
+    else:
+        task_instruction = (
+            "Write a clear, concise summary of this document. Include:\n"
+            "1. The main topic and purpose\n"
+            "2. Key points covered in each chapter or section\n"
+            "3. Main findings or conclusions\n"
+            "Be specific — reference actual section titles and content from the document."
+        )
     summary_prompt = (
-        f"The user says: \"{user_message}\"\n\n"
-        "Respond directly and helpfully based on what the user asked. "
-        "If they asked to analyse or review the document, provide a thorough analysis: "
-        "assess the structure, content quality, argument strength, gaps, and give specific feedback. "
-        "If they asked for a summary, give a concise human-readable summary. "
+        f"{task_instruction}\n\n"
+        f"User request: \"{user_message}\"\n"
         "Do NOT modify the document. Respond in plain prose."
     )
     try:
@@ -1169,7 +1258,7 @@ def _summarize_document(document: Document, user_message: str, plan: list) -> tu
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _flatten_doc(document: Document) -> str:
+def _flatten_doc(document: Document, truncate: bool = False) -> str:
     content = document.content or {}
     parts = [f"Title: {document.title}"]
     for section in content.get("sections", []):
@@ -1178,7 +1267,7 @@ def _flatten_doc(document: Document) -> str:
         if title:
             parts.append(f"\n## {title}")
         if body:
-            parts.append(body[:600])
+            parts.append(body[:600] if truncate else body)
     return "\n".join(parts)
 
 
@@ -1368,28 +1457,31 @@ def _enhance_section(
     idx = find_section(document.content, query)
     if idx is None:
         idx = _find_section_index_by_subsection(document, query)
+
+    # Section does not exist — write/generate it instead of erroring
     if idx is None:
-        titles = ", ".join(
-            s.get("title", "") for s in (document.content or {}).get("sections", [])
-        )
-        _all_done(plan)
-        return (
-            f"Could not find section '{query}'. "
-            f"Available sections: {titles or 'none — create an outline first.'}",
-            False,
-        )
+        return _write_section(document, query, topic, instruction, plan)
 
     section = document.content["sections"][idx]
-    original = section.get("content", "") or f"Write about {section.get('title', query)}"
+    original = (section.get("content") or "").strip()
+
+    # Section exists but is empty — write it fresh
+    if not original:
+        return _write_section(document, query, topic, instruction, plan)
+
     _done(plan, 1)
 
+    enhance_instruction = (
+        f"{instruction}\n\n"
+        "Improve this section: fix grammar, strengthen academic tone, improve argument clarity "
+        "and structure. Preserve all factual claims and headings. "
+        "Return ONLY the improved text with no meta-commentary."
+    )
     try:
-        enhanced = enhance_text(original, topic, instruction)
+        enhanced = enhance_text(original, topic, enhance_instruction)
     except Exception:
         enhanced = _fallback_subsection_text(topic, section.get("title", query), query)
 
-    # If user asks for a specific subsection (e.g., "correct background of study"),
-    # replace only that block when possible; otherwise replace whole section.
     subsection_block = _replace_subsection_if_present(
         original,
         subsection_query=query,
@@ -1401,8 +1493,8 @@ def _enhance_section(
     _save(document, f"enhance-section:{query}")
     _all_done(plan)
     return (
-        f"Enhanced section '{section.get('title', query)}' with improved "
-        "clarity, structure, and academic tone.",
+        f"Corrected and enhanced section '{section.get('title', query)}' — "
+        "improved clarity, structure, and academic tone.",
         True,
     )
 
@@ -1621,6 +1713,7 @@ def _write_dissertation(
             _save(document, f"dissertation-step:{chapter_title}:{safe_node}")
 
         current_context = _full_context_for_generation(document)
+        ch_word_count = 500 if ch_num == 2 else 220
         chapter_text, _, chapter_blocks = _execute_subsection_nodes(
             nodes=chapter["nodes"],
             section_title=chapter_title,
@@ -1632,6 +1725,7 @@ def _write_dissertation(
             figure_counter=figure_counter,
             table_counter=table_counter,
             on_node_completed=_persist_subsection_progress,
+            default_word_count=ch_word_count,
         )
 
         # Ensure chapter heading appears before chapter content in the editor body.

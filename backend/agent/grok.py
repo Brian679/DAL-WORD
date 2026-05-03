@@ -123,7 +123,7 @@ Return JSON exactly:
 def chat_with_document(message: str, doc_context: str) -> str:
     prompt = (
         "You are an expert academic writing assistant embedded in a word processor.\n"
-        f"Document:\n{doc_context[:5000]}\n\n"
+        f"Document:\n{doc_context[:15000]}\n\n"
         f"User: {message}\n\n"
         "Give a helpful, direct response. Be concise and professional."
     )
@@ -150,13 +150,14 @@ def generate_section_content(
     word_count: int = 220,
 ) -> str:
     prompt = (
-        f"Write a detailed academic paragraph (~{word_count} words) for the section "
-        f"titled '{title}' in a research paper about: '{topic}'.\n"
-        f"{'Additional context: ' + context[:700] if context else ''}\n"
-        "Use clear, formal academic language. Be specific and substantive. "
+        f"Write a detailed academic section (~{word_count} words) titled '{title}' "
+        f"for a research paper about: '{topic}'.\n"
+        f"{'Additional context: ' + context[:2000] if context else ''}\n"
+        "Use clear, formal academic language. Be specific, substantive, and analytical. "
         "Write with natural human flow: varied sentence lengths, precise claims, and grounded examples. "
         "Avoid filler, repeated sentence templates, and AI-sounding phrases such as 'in today's world', "
-        "'it is important to note', or meta references to being an AI."
+        "'it is important to note', or meta references to being an AI. "
+        f"Aim for approximately {word_count} words — do not stop early."
     )
     return generate_text(prompt)
 

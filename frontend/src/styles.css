@@ -986,18 +986,19 @@ ul { list-style: none; margin: 0; padding: 0; }
 .doc-paper-zone {
   flex: 1;
   overflow: auto;
-  padding: 14px 24px 16px;
+  background: #b0b3b8;
+  padding: 20px 0;
   min-height: 0;
 }
 
 .doc-paper {
-  width: min(760px, 100%);
+  width: min(816px, 96%);
   margin: 0 auto;
-  background: #fff;
-  border: 1px solid #d1d4db;
-  box-shadow: 0 1px 2px rgba(11, 17, 29, 0.08);
-  min-height: 1080px;
-  padding: 46px 58px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  min-height: auto;
+  padding: 0;
 }
 
 .doc-paper h1 {
@@ -1220,17 +1221,27 @@ ul { list-style: none; margin: 0; padding: 0; }
 
 .doc-paper-editor {
   width: 100%;
-  min-height: 640px;
+  min-height: 900px;
+  height: auto;
   border: none;
   outline: none;
-  resize: vertical;
-  background: #ffffff;
+  resize: none;
+  overflow: hidden;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #ffffff 0px,
+    #ffffff 1096px,
+    #b0b3b8 1096px,
+    #b0b3b8 1120px
+  );
+  background-color: #ffffff;
   color: #1a1a1a;
   font-family: Calibri, "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: 1.6;
-  padding: 36px 42px;
+  padding: 46px 72px;
   box-sizing: border-box;
+  display: block;
 }
 
 .doc-paper-editor:focus {
@@ -1629,6 +1640,86 @@ ul { list-style: none; margin: 0; padding: 0; }
   border-radius: 8px;
   background: #0d1117;
   padding: 8px;
+}
+
+.copilot-workflow-card {
+  border: 1px solid #2d333b;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #0d1117 0%, #0f141b 100%);
+  padding: 10px;
+}
+
+.copilot-workflow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.copilot-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8ab4f8;
+  letter-spacing: 0.02em;
+}
+
+.copilot-stage {
+  font-size: 11px;
+  color: #9da7b3;
+}
+
+.copilot-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.copilot-progress-track {
+  flex: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: #1c232b;
+  overflow: hidden;
+}
+
+.copilot-progress-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2f81f7 0%, #56a8ff 100%);
+}
+
+.copilot-progress-text {
+  font-size: 11px;
+  color: #9da7b3;
+  min-width: 44px;
+  text-align: right;
+}
+
+.copilot-current-step {
+  margin: 0 0 7px;
+  font-size: 12px;
+  color: #d3dbe5;
+}
+
+.copilot-updates {
+  border: 1px solid #232b34;
+  background: #0b1016;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.copilot-update-line {
+  margin: 0;
+  font-size: 11px;
+  color: #9da7b3;
+  line-height: 1.45;
+}
+
+.copilot-update-line + .copilot-update-line {
+  margin-top: 4px;
 }
 
 .dap-summary-row {

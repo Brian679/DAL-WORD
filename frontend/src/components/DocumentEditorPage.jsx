@@ -203,6 +203,73 @@ function buildSummaryFromPlan(plan = [], stage = 'Execution in progress') {
   };
 }
 
+function statusLabel(step = '') {
+  return normalizeStep(step).replace(/^Writing\s+/i, '');
+}
+
+function buildWorkflowFromPlan(plan = [], previous = null) {
+  const current = plan.find((item) => item.status === 'in_progress');
+  const completedItems = plan.filter((item) => item.status === 'done').map((item) => statusLabel(item.step || ''));
+  const previousStatuses = Array.isArray(previous?.statuses) ? previous.statuses : [];
+  const updates = Array.isArray(previous?.updates) ? [...previous.updates] : [];
+
+  plan.forEach((item, idx) => {
+    const prevStatus = previousStatuses[idx];
+    const nowStatus = item.status;
+    const label = statusLabel(item.step || '');
+    if (prevStatus !== 'done' && nowStatus === 'done' && label !== 'Creating dissertation to-do list') {
+      updates.unshift(`Completed: ${label}`);
+    }
+  });
+
+  const prevCurrent = previous?.currentStep;
+  const nowCurrent = current ? statusLabel(current.step || '') : '';
+  if (nowCurrent && nowCurrent !== prevCurrent) {
+    updates.unshift(`Now doing: ${nowCurrent}`);
+  }
+
+  const capped = updates.filter(Boolean).slice(0, 12);
+  return {
+    statuses: plan.map((item) => item.status || 'pending'),
+    currentStep: nowCurrent,
+    completedCount: completedItems.length,
+    totalCount: plan.length,
+    updates: capped,
+  };
+}
+
+function CopilotWorkflowCard({ summary, planItems, msgId, workflow }) {
+  const pct = summary?.completion_percent ?? 0;
+  const done = summary?.tasks_completed ?? 0;
+  const total = (summary?.tasks_completed || 0) + (summary?.tasks_pending || 0);
+  const updates = workflow?.updates || [];
+  return (
+    <div className="copilot-workflow-card">
+      <div className="copilot-workflow-head">
+        <span className="copilot-badge">Agent Workflow</span>
+        <span className="copilot-stage">{summary?.stage || 'Working'}</span>
+      </div>
+      <div className="copilot-progress-row">
+        <div className="copilot-progress-track">
+          <span className="copilot-progress-fill" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+        </div>
+        <span className="copilot-progress-text">{done}/{total || planItems.length || 0}</span>
+      </div>
+      {!!workflow?.currentStep && (
+        <p className="copilot-current-step">Now doing: {workflow.currentStep}</p>
+      )}
+      {!!updates.length && (
+        <div className="copilot-updates">
+          {updates.slice(0, 6).map((line, idx) => (
+            <p key={`${msgId}-upd-${idx}`} className="copilot-update-line">{line}</p>
+          ))}
+        </div>
+      )}
+      <DissertationPlan planItems={planItems || []} todoList={summary?.todo_list || []} msgId={msgId} chapterPlan={summary?.chapter_plan || []} />
+    </div>
+  );
+}
+
 function extractChapterRows(planItems = []) {
   return planItems
     .filter((item) => /^writing chapter\s*\d+/i.test(normalizeStep(item.step || '')))
@@ -465,7 +532,9 @@ export default function DocumentEditorPage({
   const bottomRef    = useRef(null);
   const autoSaveTimer = useRef(null);
   const progressPollRef = useRef(null);
+  const editorTextareaRef = useRef(null);
   const progressPollBusyRef = useRef(false);
+  const workflowStateRef = useRef({});
 
   function clearProgressPolling() {
     if (progressPollRef.current) {
@@ -489,6 +558,14 @@ export default function DocumentEditorPage({
   const wordCount = useMemo(() => {
     const clean = plainDocText.replace(/\s+/g, ' ').trim();
     return clean ? clean.split(' ').length : 0;
+  }, [plainDocText]);
+
+  // Auto-resize textarea to content height (no inner scrollbar)
+  useEffect(() => {
+    const el = editorTextareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.max(el.scrollHeight, 900) + 'px';
   }, [plainDocText]);
 
   useEffect(() => {
@@ -591,6 +668,7 @@ export default function DocumentEditorPage({
 
   function startDissertationProgressPolling(docId, chatId, messageId, previewPlan) {
     clearProgressPolling();
+    workflowStateRef.current[messageId] = buildWorkflowFromPlan(previewPlan, null);
 
     progressPollRef.current = setInterval(async () => {
       if (progressPollBusyRef.current) return;
@@ -613,10 +691,15 @@ export default function DocumentEditorPage({
           ? `Generating ${normalizeStep(activeStep.step).replace(/^Writing\s+/i, '')}...`
           : 'Finalizing dissertation...';
 
+        const previousWorkflow = workflowStateRef.current[messageId] || null;
+        const nextWorkflow = buildWorkflowFromPlan(planFromDoc, previousWorkflow);
+        workflowStateRef.current[messageId] = nextWorkflow;
+
         updateAssistantMessage(chatId, messageId, (msg) => ({
           ...msg,
           plan: planFromDoc,
           summary: buildSummaryFromPlan(planFromDoc, stageLabel),
+          workflow: nextWorkflow,
         }));
       } catch {
         // Continue polling; transient network errors are expected while backend is busy.
@@ -653,11 +736,15 @@ export default function DocumentEditorPage({
     const finalPlan = (Array.isArray(result.plan) && result.plan.length)
       ? result.plan.map((item) => ({ ...item, status: 'done' }))
       : derivePlanFromDocument(previewPlan, generatedSections).map((item) => ({ ...item, status: 'done' }));
+    const finalWorkflow = buildWorkflowFromPlan(finalPlan, workflowStateRef.current[messageId] || null);
+    finalWorkflow.updates = [`Completed: Dissertation generation finished`, ...finalWorkflow.updates].slice(0, 12);
+    workflowStateRef.current[messageId] = finalWorkflow;
     updateAssistantMessage(chatId, messageId, (msg) => ({
       ...msg,
       text: result.reply,
       plan: finalPlan,
       summary: buildSummaryFromPlan(finalPlan, 'All planned tasks completed; document updated'),
+      workflow: finalWorkflow,
     }));
   }
 
@@ -698,6 +785,16 @@ export default function DocumentEditorPage({
                     text: 'Starting dissertation workflow...',
                     summary: buildSummaryFromPlan(previewPlan, `Generating ${DISSERTATION_TODO_TEMPLATE[0].chapter}...`),
                     plan: previewPlan,
+                    workflow: {
+                      currentStep: statusLabel(previewPlan.find((item) => item.status === 'in_progress')?.step || ''),
+                      completedCount: previewPlan.filter((item) => item.status === 'done').length,
+                      totalCount: previewPlan.length,
+                      statuses: previewPlan.map((item) => item.status),
+                      updates: [
+                        'Created dissertation to-do list',
+                        `Now doing: ${statusLabel(previewPlan.find((item) => item.status === 'in_progress')?.step || '')}`,
+                      ],
+                    },
                   },
                 ],
               }
@@ -756,6 +853,7 @@ export default function DocumentEditorPage({
     } finally {
       clearProgressPolling();
       setLiveProgressMsgId(null);
+      delete workflowStateRef.current[progressMessageId];
       setIsThinking(false);
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     }
@@ -813,12 +911,16 @@ export default function DocumentEditorPage({
               {!!manualError && <p className="doc-manual-error">{manualError}</p>}
               <div className="doc-manual-editor doc-manual-editor--plain">
                 <textarea
+                  ref={editorTextareaRef}
                   className="doc-paper-editor"
                   value={plainDocText}
                   placeholder=""
                   autoFocus
                   onChange={(e) => {
                     const next = e.target.value;
+                    // auto-resize inline
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.max(e.target.scrollHeight, 900) + 'px';
                     setDraftSections([{ title: '', content: next, blocks: [] }]);
                     setIsDirty(true);
                     setAutoSaved(false);
@@ -886,13 +988,12 @@ export default function DocumentEditorPage({
                   <div key={msg.id} className="dap-msg dap-msg--ai">
                     <div className="dap-msg-body">
                       {msg.summary ? (
-                        <div className="dap-summary-card">
-                          <p className="dap-summary-row"><strong>Stage:</strong> {msg.summary.stage}</p>
-                          <p className="dap-summary-row"><strong>Done (brief):</strong> {msg.summary.done_brief}</p>
-                          {!!(msg.summary.todo_list || []).length && (
-                            <DissertationPlan planItems={msg.plan || []} todoList={msg.summary.todo_list || []} msgId={msg.id} chapterPlan={msg.summary.chapter_plan || []} />
-                          )}
-                        </div>
+                        <CopilotWorkflowCard
+                          summary={msg.summary}
+                          planItems={msg.plan || []}
+                          msgId={msg.id}
+                          workflow={msg.workflow || null}
+                        />
                       ) : (
                         msg.text.split('\n').map((line, li) =>
                           line.startsWith('•') ? (
