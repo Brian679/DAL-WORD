@@ -215,14 +215,21 @@ def generate_section_content(
     word_count: int = 220,
 ) -> str:
     prompt = (
-        f"Write a detailed academic section (~{word_count} words) titled '{title}' "
-        f"for a research paper about: '{topic}'.\n"
-        f"{'Additional context:\n' + context[:5000] if context else ''}\n"
-        "Use clear, formal academic language. Be specific, substantive, and analytical. "
-        "Write with natural human flow: varied sentence lengths, precise claims, and grounded examples. "
-        "Avoid filler, repeated sentence templates, and AI-sounding phrases such as 'in today's world', "
-        "'it is important to note', or meta references to being an AI. "
-        f"Aim for approximately {word_count} words — do not stop early."
+        f"You are writing a section of a formal academic dissertation.\n"
+        f"Section title: '{title}'\n"
+        f"Research study topic: '{topic}'\n\n"
+        f"{'Context and instructions:\n' + context[:5000] + chr(10) + chr(10) if context else ''}"
+        f"Write the content for this section (~{word_count} words).\n"
+        f"Requirements:\n"
+        f"- Write SPECIFICALLY about '{topic}' — not generic academic filler that could apply to any study\n"
+        f"- Ground every claim in the actual research topic, objectives, and design provided in the context above\n"
+        f"- Use clear, formal academic language with varied sentence rhythm and precise claims\n"
+        f"- Reference the specific context: methodology, objectives, population, findings — whatever is relevant\n"
+        f"- Do NOT include the section heading in your response\n"
+        f"- Avoid generic AI phrases: 'in today's world', 'it is important to note', "
+        f"'this section will discuss', or meta-references to being an AI\n"
+        f"- Aim for exactly ~{word_count} words — do not stop early\n"
+        f"Begin writing now:"
     )
     return generate_text(prompt)
 

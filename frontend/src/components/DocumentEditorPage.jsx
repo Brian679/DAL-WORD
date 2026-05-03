@@ -388,6 +388,44 @@ function flattenSections(content) {
     .join('\n\n');
 }
 
+function cloneSections(sections = []) {
+  return (Array.isArray(sections) ? sections : []).map((section) => ({
+    title: section?.title || '',
+    content: section?.content || '',
+    blocks: Array.isArray(section?.blocks) ? section.blocks : [],
+  }));
+}
+
+function sectionHash(section = {}) {
+  return JSON.stringify({
+    title: section?.title || '',
+    content: section?.content || '',
+    blocks: Array.isArray(section?.blocks) ? section.blocks : [],
+  });
+}
+
+function detectEditedSections(beforeSections = [], afterSections = []) {
+  const beforeMap = new Map(
+    (beforeSections || []).map((section) => [
+      String(section?.title || '').trim().toLowerCase(),
+      sectionHash(section),
+    ])
+  );
+  const edited = [];
+
+  for (const section of afterSections || []) {
+    const title = String(section?.title || '').trim() || 'Untitled section';
+    const key = title.toLowerCase();
+    const nextHash = sectionHash(section);
+    const prevHash = beforeMap.get(key);
+    if (!prevHash || prevHash !== nextHash) {
+      edited.push(title);
+    }
+  }
+
+  return Array.from(new Set(edited));
+}
+
 // ── Hierarchical dissertation plan component ─────────────────────────────
 function DissertationPlan({ planItems, todoList, msgId, chapterPlan }) {
   const [expanded, setExpanded] = useState(true);
@@ -532,6 +570,7 @@ export default function DocumentEditorPage({
   const [activeModel,  setActiveModel]  = useState('Grok');
   const [liveProgressMsgId, setLiveProgressMsgId] = useState(null);
   const [editorHeight, setEditorHeight] = useState(MIN_EDITOR_HEIGHT);
+  const [highlightedSections, setHighlightedSections] = useState([]);
   const bottomRef    = useRef(null);
   const autoSaveTimer = useRef(null);
   const progressPollRef = useRef(null);
@@ -614,37 +653,9 @@ export default function DocumentEditorPage({
   }
 
   const triggerSave = useCallback(async (sections) => {
-    if (!onManualSave) return;
-    setIsSavingManual(true);
-    setManualError('');
-    try {
-      // use latest draft via closure or argument
-      setDraftSections((current) => {
-        const target = sections || current;
-        const cleaned = target
-          .map((s) => ({
-            title: (s.title || '').trim() || 'Untitled section',
-            content: s.content || '',
-            ...(Array.isArray(s.blocks) && s.blocks.length ? { blocks: s.blocks } : {}),
-          }))
-          .filter((s) => s.title || s.content);
-        onManualSave(cleaned).then(() => {
-          setIsDirty(false);
-          setAutoSaved(true);
-          onDocumentChanged?.();
-          setTimeout(() => setAutoSaved(false), 2500);
-        }).catch((err) => {
-          setManualError(err?.message || 'Save failed');
-        }).finally(() => {
-          setIsSavingManual(false);
-        });
-        return current;
-      });
-    } catch (err) {
-      setManualError(err?.message || 'Save failed');
-      setIsSavingManual(false);
-    }
-  }, [onManualSave, onDocumentChanged]);
+    const target = sections || draftSections;
+    await persistSectionsNow(target);
+  }, [draftSections, onManualSave, onDocumentChanged]);
 
   function chatNameFromMessage(text) {
     const trimmed = text.trim();
@@ -673,6 +684,54 @@ export default function DocumentEditorPage({
         };
       })
     );
+  }
+
+  async function persistSectionsNow(sections, onSuccess) {
+    if (!onManualSave) return;
+    setIsSavingManual(true);
+    setManualError('');
+    try {
+      const cleaned = (Array.isArray(sections) ? sections : [])
+        .map((s) => ({
+          title: (s?.title || '').trim() || 'Untitled section',
+          content: s?.content || '',
+          ...(Array.isArray(s?.blocks) && s.blocks.length ? { blocks: s.blocks } : {}),
+        }))
+        .filter((s) => s.title || s.content);
+
+      await onManualSave(cleaned);
+      setIsDirty(false);
+      setAutoSaved(true);
+      onDocumentChanged?.();
+      if (typeof onSuccess === 'function') onSuccess();
+      setTimeout(() => setAutoSaved(false), 2500);
+    } catch (err) {
+      setManualError(err?.message || 'Save failed');
+    } finally {
+      setIsSavingManual(false);
+    }
+  }
+
+  async function keepAgentChanges(chatId, messageId) {
+    updateAssistantMessage(chatId, messageId, (msg) => ({
+      ...msg,
+      changeSet: msg.changeSet ? { ...msg.changeSet, pending: false } : msg.changeSet,
+    }));
+    setHighlightedSections([]);
+  }
+
+  async function undoAgentChanges(chatId, messageId, beforeSections) {
+    const restored = cloneSections(beforeSections);
+    setDraftSections(restored);
+    setHighlightedSections([]);
+    await persistSectionsNow(restored, () => {
+      updateAssistantMessage(chatId, messageId, (msg) => ({
+        ...msg,
+        changeSet: msg.changeSet
+          ? { ...msg.changeSet, pending: false, undone: true }
+          : msg.changeSet,
+      }));
+    });
   }
 
   function startDissertationProgressPolling(docId, chatId, messageId, previewPlan) {
@@ -718,7 +777,7 @@ export default function DocumentEditorPage({
     }, 1200);
   }
 
-  async function playbackDissertationResult(chatId, messageId, result, previewPlan) {
+  async function playbackDissertationResult(chatId, messageId, result, previewPlan, beforeSections = []) {
     const generatedSections = Array.isArray(result?.document?.content?.sections)
       ? result.document.content.sections
       : [];
@@ -741,6 +800,8 @@ export default function DocumentEditorPage({
       }))
     );
     setIsDirty(false);
+    const editedTitles = detectEditedSections(beforeSections, generatedSections);
+    setHighlightedSections(editedTitles);
 
     const finalPlan = (Array.isArray(result.plan) && result.plan.length)
       ? result.plan.map((item) => ({ ...item, status: 'done' }))
@@ -754,6 +815,11 @@ export default function DocumentEditorPage({
       plan: finalPlan,
       summary: buildSummaryFromPlan(finalPlan, 'All planned tasks completed; document updated'),
       workflow: finalWorkflow,
+      changeSet: {
+        pending: true,
+        editedSections: editedTitles,
+        beforeSections: cloneSections(beforeSections),
+      },
     }));
   }
 
@@ -762,6 +828,7 @@ export default function DocumentEditorPage({
     const userText = text.trim();
     const userMsg = { id: Date.now(), role: 'user', text: text.trim() };
     const currentChatId = activeChatId;
+    const beforeAgentSections = cloneSections(draftSections);
     const dissertationRequest = looksLikeDissertationRequest(userText);
     const progressMessageId = Date.now() + 1;
     setChats((prev) =>
@@ -822,8 +889,9 @@ export default function DocumentEditorPage({
       clearProgressPolling();
 
       if (dissertationRequest) {
-        await playbackDissertationResult(currentChatId, progressMessageId, result, previewPlan);
+        await playbackDissertationResult(currentChatId, progressMessageId, result, previewPlan, beforeAgentSections);
       } else {
+        const assistantMsgId = Date.now() + 1;
         setChats((prev) =>
           prev.map((chat) =>
             chat.id === currentChatId
@@ -832,7 +900,7 @@ export default function DocumentEditorPage({
                   messages: [
                     ...chat.messages,
                     {
-                      id: Date.now() + 1,
+                      id: assistantMsgId,
                       role: 'assistant',
                       text: result.reply,
                       summary: buildSummaryFromResult(result),
@@ -843,6 +911,22 @@ export default function DocumentEditorPage({
               : chat
           )
         );
+
+        if (result.document_updated && Array.isArray(result?.document?.content?.sections)) {
+          const nextSections = cloneSections(result.document.content.sections);
+          const editedTitles = detectEditedSections(beforeAgentSections, nextSections);
+          setDraftSections(nextSections);
+          setIsDirty(false);
+          setHighlightedSections(editedTitles);
+          updateAssistantMessage(currentChatId, assistantMsgId, (msg) => ({
+            ...msg,
+            changeSet: {
+              pending: true,
+              editedSections: editedTitles,
+              beforeSections: beforeAgentSections,
+            },
+          }));
+        }
       }
       if (result.document_updated) {
         onDocumentChanged?.();
@@ -918,6 +1002,14 @@ export default function DocumentEditorPage({
           <section className="doc-paper-zone">
             <div className="doc-paper">
               {!!manualError && <p className="doc-manual-error">{manualError}</p>}
+              {!!highlightedSections.length && (
+                <div className="doc-change-highlight-strip" role="status" aria-live="polite">
+                  <span className="doc-change-highlight-label">Agent updated:</span>
+                  {highlightedSections.map((title, idx) => (
+                    <span className="doc-change-highlight-chip" key={`${title}-${idx}`}>{title}</span>
+                  ))}
+                </div>
+              )}
               <div className="doc-manual-editor doc-manual-editor--plain">
                 <textarea
                   ref={editorTextareaRef}
@@ -1035,6 +1127,33 @@ export default function DocumentEditorPage({
                         )
                       )}
                     </div>
+                    {!!msg?.changeSet?.editedSections?.length && (
+                      <div className="dap-change-summary">
+                        <span className="dap-change-summary-label">Updated sections:</span>
+                        {msg.changeSet.editedSections.map((title, idx) => (
+                          <span className="dap-change-chip" key={`${msg.id}-${idx}`}>{title}</span>
+                        ))}
+                      </div>
+                    )}
+                    {!!msg?.changeSet?.pending && (
+                      <div className="dap-task-actions">
+                        <button
+                          type="button"
+                          className="dap-keep-btn"
+                          onClick={() => keepAgentChanges(activeChatId, msg.id)}
+                        >
+                          Keep
+                        </button>
+                        <button
+                          type="button"
+                          className="dap-undo-btn"
+                          onClick={() => undoAgentChanges(activeChatId, msg.id, msg.changeSet.beforeSections || [])}
+                          disabled={isSavingManual}
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    )}
                     <div className="dap-msg-actions">
                       <button className="dap-msg-act-btn"><RotateCcw size={12} /></button>
                       <button className="dap-msg-act-btn"><Copy size={12} /></button>

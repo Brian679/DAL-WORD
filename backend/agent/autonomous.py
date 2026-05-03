@@ -41,16 +41,22 @@ logger = logging.getLogger(__name__)
 SUBSECTION_GUIDELINES: dict[str, str] = {
     # ── Chapter 1 ──────────────────────────────────────────────────────────
     "background of the study": (
-        "Write the background in 2-3 paragraphs. Open with the global/industry context, "
-        "then narrow to the specific problem domain, and close by explaining why this study is "
-        "needed now. Reference real-world trends and academic context. "
-        "Do NOT list objectives or findings here."
+        "Write the background in 3 paragraphs, grounded in the specific research topic. "
+        "Paragraph 1: open with the global/industry context directly relevant to this study's topic — "
+        "cite real-world trends, statistics, and developments in the specific field. "
+        "Paragraph 2: narrow to the specific problem domain and geographic or sectoral context of this study. "
+        "Paragraph 3: explain why this specific study is needed now, referencing existing gaps. "
+        "Name the industry, technology, phenomenon, or population that this study is about. "
+        "Do NOT list objectives or findings here. Do NOT write about a different topic."
     ),
     "statement of the problem": (
-        "Write a focused 2-3 paragraph problem statement. Clearly articulate the specific "
-        "gap or challenge the study addresses. Reference existing shortcomings in the literature "
-        "and practice. Build logically toward the research objectives. "
-        "Use evidence-based language (cite implied statistics or prior study failures)."
+        "Write a focused 2-3 paragraph problem statement for this specific study. "
+        "Clearly articulate the specific gap or challenge that THIS study addresses — name the "
+        "phenomenon, industry, population, or technology that is the focus. "
+        "Reference existing shortcomings in practice or literature relating to this exact topic. "
+        "Build logically toward the research objectives of this study. "
+        "Use evidence-based language: cite implied statistics, trends, or documented failures "
+        "specific to this topic. Do NOT write a generic problem statement."
     ),
     "research objective": (
         "Write research objectives as a numbered SMART list ONLY (1. 2. 3. ...). "
@@ -65,10 +71,14 @@ SUBSECTION_GUIDELINES: dict[str, str] = {
         "Do NOT add introductory text — output ONLY the numbered list."
     ),
     "hypothes": (
-        "Write 3-5 testable hypotheses as a numbered list. Format as:\n"
-        "H1: [null hypothesis]\nH1a: [alternative hypothesis]\n"
-        "Each pair must correspond to a research question. "
-        "Do NOT add introductory paragraphs — output ONLY the hypothesis list."
+        "Write hypotheses in point form ONLY as null and alternative pairs. "
+        "Use exactly this format:\n"
+        "1. H0: [null hypothesis statement]\n"
+        "   H1: [alternative hypothesis statement]\n"
+        "2. H0: ...\n"
+        "   H1: ...\n"
+        "Provide 3-5 pairs. Each pair must align with a research question/objective and be testable. "
+        "Do NOT write paragraphs, explanations, or introductory text — output ONLY the list."
     ),
     "significance of the study": (
         "Write 2-3 paragraphs covering three distinct contributions: "
@@ -89,25 +99,43 @@ SUBSECTION_GUIDELINES: dict[str, str] = {
     ),
     # ── Chapter 2 ──────────────────────────────────────────────────────────
     "empirical review": (
-        "Write a critical empirical review of 3-5 full paragraphs. "
-        "Reference real scholars by name and year (e.g., Smith, 2021; Jones & Patel, 2020). "
-        "Discuss study findings, contrasting views, methodological approaches, and identified gaps. "
-        "Be analytical — compare and critique, do not merely summarize."
+        "Write a critical empirical review of 4-5 full paragraphs, focused entirely on "
+        "prior empirical studies that investigated this study's exact topic or closely related constructs. "
+        "Name specific scholars and years (e.g., Smith, 2021; Jones & Patel, 2020) who conducted "
+        "studies relevant to this research topic. "
+        "For each study cited: state what was investigated, what was found, what methodology was used, "
+        "and what limitation or gap it left. "
+        "Compare contrasting findings. Conclude by identifying the gap that this current study fills. "
+        "Be analytical — compare and critique. Do NOT review studies on unrelated topics."
     ),
     "conceptual review": (
-        "Write a conceptual review covering key constructs and their relationships. "
-        "Define each construct, reference 3-5 scholarly sources by name and year, and explain "
-        "how constructs relate to this study's variables. Use 3-4 analytical paragraphs."
+        "Write a conceptual review of 3-4 analytical paragraphs covering the key constructs "
+        "central to this specific study. "
+        "Identify and define 3-5 constructs that are directly relevant to this study's topic and variables. "
+        "For each construct: provide a scholarly definition (cite author and year), explain the construct's "
+        "significance in the context of this study's research problem, and describe its relationship "
+        "to the other constructs. "
+        "Reference 4-6 scholars by name and year who have theorised or measured these constructs. "
+        "Do NOT discuss constructs unrelated to this study's topic."
     ),
     "theoretical framework": (
-        "Write a theoretical framework section. Identify 2-3 relevant theories, state their "
-        "originators and year, summarise their core propositions, and explicitly explain how each "
-        "theory applies to this study's context and variables. Use 3-4 paragraphs."
+        "Write a theoretical framework section of 3-4 paragraphs, identifying 2-3 theories "
+        "that are directly applicable to this study's topic and variables. "
+        "For each theory: name the theory and its originator(s) and year, summarise its core propositions, "
+        "and — most importantly — explicitly explain how this theory applies to THIS specific study: "
+        "which variables does it explain, how does it predict the relationships being studied, "
+        "and why is it appropriate for this study's methodology and context. "
+        "Choose theories that scholars have used to study the same phenomenon or topic as this research. "
+        "Do NOT include theories that are unrelated to this study's specific topic."
     ),
     "conceptual framework": (
-        "Describe the conceptual framework for this study. Explain the independent, dependent, "
-        "and moderating/mediating variables, and how they relate to each other. "
-        "Reference at least 2 scholars whose work informed the framework."
+        "Describe the conceptual framework for this specific study in 2-3 paragraphs. "
+        "Name the independent variable(s), dependent variable(s), and any moderating or mediating "
+        "variables — use the actual constructs relevant to this study's topic. "
+        "Explain the hypothesised relationships between these variables. "
+        "Reference at least 2-3 scholars whose empirical or theoretical work informed this framework. "
+        "Explain how the framework guides this study's data collection and analysis. "
+        "Do NOT describe a generic framework — name the specific variables of THIS study."
     ),
     "chapter summary": (
         "Write a concise chapter summary of 1-2 paragraphs. Recap the key themes, arguments, "
@@ -116,10 +144,15 @@ SUBSECTION_GUIDELINES: dict[str, str] = {
     ),
     # ── Chapter 3 ──────────────────────────────────────────────────────────
     "research design": (
-        "Explain the chosen research design (quantitative/qualitative/mixed-methods). "
-        "Justify the selection by linking it to the research objectives. "
-        "Describe the overall research strategy (e.g., survey, case study, experiment). "
-        "Use 2-3 paragraphs with methodological reasoning."
+        "Write 2-3 paragraphs explaining the research design adopted for this specific study. "
+        "Paragraph 1: State the research design (quantitative/qualitative/mixed-methods) and the "
+        "research strategy (survey, case study, experiment, etc.) — explain that this specific design "
+        "was chosen because it is appropriate for investigating this study's research objectives and topic. "
+        "Paragraph 2: Justify the design by linking it explicitly to the research objectives — "
+        "explain what this design allows the researcher to do in the context of this study's topic. "
+        "Paragraph 3 (optional): Contrast with alternatives and explain why they were not adopted "
+        "for this particular study. "
+        "Use the actual research design determined for this study — do NOT guess a different design."
     ),
     "research philosophy": (
         "Explain the epistemological position (positivism, interpretivism, pragmatism, etc.), "
@@ -130,27 +163,49 @@ SUBSECTION_GUIDELINES: dict[str, str] = {
         "Justify the choice and link it to the hypotheses/questions. 1-2 paragraphs."
     ),
     "target population": (
-        "Identify the study population: who they are, their key characteristics, and why they "
-        "were selected. State the total population size if known. 1-2 paragraphs."
+        "Write 1-2 paragraphs identifying the study population for this specific study. "
+        "State exactly who the target population is — the specific group of people, organisations, "
+        "or entities relevant to this study's topic and context. "
+        "Describe their key characteristics (role, industry, location, or other defining features) "
+        "and explain why this population was appropriate for studying this specific research problem. "
+        "State the total accessible population size if it can be inferred from the document. "
+        "Do NOT name a population that is unrelated to this study's topic."
     ),
     "sampling technique": (
-        "Describe the sampling method used (e.g., stratified random sampling, purposive sampling). "
-        "Justify the choice, state the sample size, and explain how it was calculated "
-        "(e.g., Yamane formula, Cochran formula). 2 paragraphs."
+        "Write 2 paragraphs describing the sampling technique for this study. "
+        "Paragraph 1: State the sampling method (e.g., stratified random sampling, purposive sampling, "
+        "simple random sampling) — explain why this method was appropriate for this study's population "
+        "and research objectives. "
+        "Paragraph 2: State the sample size, show or reference the formula used to calculate it "
+        "(e.g., Yamane's formula: n = N / (1 + N*e²)), plug in the relevant numbers, "
+        "and explain how the resulting sample size ensures adequate representativeness "
+        "for this particular study. Use numbers consistent with the document if available."
     ),
     "sample size": (
         "State and justify the sample size. Show or reference the formula used to calculate it "
         "(e.g., Yamane's formula). Explain how the size ensures representativeness. 1-2 paragraphs."
     ),
     "data collection": (
-        "Describe the data collection instrument (questionnaire, interview guide, observation). "
-        "Explain its structure, number of items, scale used (e.g., Likert 1-5), "
-        "and how it was administered. 2-3 paragraphs."
+        "Write 2-3 paragraphs describing the data collection method for this specific study. "
+        "Paragraph 1: Identify the primary instrument (e.g., structured questionnaire, "
+        "semi-structured interview guide, observation checklist) — match this to the research design "
+        "and explain why it is appropriate for collecting data on this study's topic and objectives. "
+        "Paragraph 2: Describe the instrument's structure in detail — number of sections, "
+        "total number of items/questions, scale used (e.g., 5-point Likert scale), "
+        "and how each section aligns with a specific research objective. "
+        "Paragraph 3: Explain the administration process — how, where, and to whom the instrument "
+        "was administered, and how ethical procedures (consent, confidentiality) were observed during collection."
     ),
     "data analysis": (
-        "Specify the data analysis methods: statistical tools for quantitative data "
-        "(descriptive statistics, regression, ANOVA in SPSS/R) or qualitative methods "
-        "(thematic analysis, content analysis). Justify why each method was chosen. 2-3 paragraphs."
+        "Write 2-3 paragraphs specifying the data analysis approach for this specific study. "
+        "Paragraph 1: State the overall analytical strategy — for quantitative studies: "
+        "descriptive statistics (frequencies, means, standard deviations) followed by "
+        "inferential tests (correlation, regression, ANOVA) using SPSS, R, or Stata; "
+        "for qualitative: thematic analysis or content analysis using NVivo or manual coding. "
+        "Paragraph 2: Justify each specific technique by linking it to a research objective — "
+        "explain what each technique will reveal about the study's specific variables and relationships. "
+        "Paragraph 3: Mention any reliability/validity checks applied during analysis "
+        "(e.g., Cronbach's alpha for internal consistency, member-checking for qualitative credibility)."
     ),
     "reliability": (
         "Discuss reliability testing: Cronbach's alpha threshold (≥0.7), pilot test size, "
@@ -168,23 +223,38 @@ SUBSECTION_GUIDELINES: dict[str, str] = {
     ),
     # ── Chapter 4/5 ────────────────────────────────────────────────────────
     "summary of findings": (
-        "Write a 2-3 paragraph summary that synthesises the key results from the analysis. "
-        "Relate each main finding back to the specific research objectives. "
-        "Be specific — reference actual results (percentages, themes, or test outcomes) "
-        "from the data already analysed in this chapter."
+        "Write a 2-3 paragraph summary synthesising the key results of this specific study. "
+        "Each paragraph should address one or two of the study's research objectives directly. "
+        "Be specific — reference actual or plausible results: cite percentages, means, correlations, "
+        "or thematic patterns that align with this study's topic and variables. "
+        "Do NOT repeat the analysis verbatim — synthesise and connect findings across objectives. "
+        "Every result must relate to THIS study's topic and variables, not a generic study."
     ),
     "discussion": (
-        "Write a discussion of 3-5 paragraphs. Interpret what the findings mean, "
-        "compare them with the literature reviewed in Chapter 2, explain agreements and contradictions, "
-        "and state the theoretical and practical implications. "
-        "Do NOT simply repeat what was found — analyse and interpret."
+        "Write a discussion of 3-5 paragraphs interpreting the findings of this specific study. "
+        "Paragraph 1: Interpret the primary finding in relation to this study's main research question — "
+        "explain what the results mean in the context of this study's topic and setting. "
+        "Paragraphs 2-3: Compare findings with specific empirical studies reviewed in Chapter 2 — "
+        "name scholars and years, explain where this study's findings agree or contradict prior research, "
+        "and offer a reasoned explanation for any divergence. "
+        "Paragraph 4: State the theoretical implications — which theoretical framework is supported "
+        "or challenged by these findings, and why. "
+        "Paragraph 5 (optional): Practical implications for the specific industry, population, "
+        "or context that this study focused on. "
+        "Do NOT merely summarise the findings — analyse, interpret, and debate."
     ),
     # ── Chapter 6 ──────────────────────────────────────────────────────────
     "conclusion": (
-        "Write the conclusions section in 2-3 paragraphs. Synthesise all research findings, "
-        "directly answer each research question, and draw evidence-based conclusions. "
-        "State what the study has demonstrated about the topic. "
-        "Do NOT introduce new findings or recommendations here."
+        "Write the conclusions section in 2-3 paragraphs, tying everything back to this specific study. "
+        "Paragraph 1: Restate what this study set out to do and the core finding — "
+        "state specifically what was demonstrated about this study's topic (name the topic, population, "
+        "and key relationships investigated). "
+        "Paragraph 2: Directly and concisely answer each research question, referencing the specific "
+        "evidence and findings from the analysis chapters. "
+        "Paragraph 3: State the theoretical and practical contributions of this specific study. "
+        "Do NOT introduce new findings or recommendations. "
+        "Do NOT write a generic conclusion that could apply to any study — "
+        "name the specific topic and findings of THIS research."
     ),
     "recommendation": (
         "Write practical recommendations as a numbered list. "
@@ -407,6 +477,53 @@ def _objective_section_title(objective: str) -> str:
         cut = re.sub(r"\b(of|in|on|for|to|and|the|with|by|at)$", "", cut.strip(), flags=re.IGNORECASE).strip()
         return cut or text[:95]
     return text
+
+
+def _extract_document_brief(document: Document, topic: str, research_design: str) -> str:
+    """Build a structured brief of the document's research content for grounding subsection prompts."""
+    doc_title = (document.title or "").strip()
+    content = document.content or {}
+    sections = content.get("sections", [])
+
+    # Objectives already extracted with intelligence
+    objectives = _extract_objectives(document, topic)
+    obj_text = "\n".join(f"  {i + 1}. {o}" for i, o in enumerate(objectives[:5]))
+
+    # Pull research questions from Chapter 1 text (lines containing "?")
+    ch1_text = ""
+    for sec in sections:
+        if "chapter 1" in str(sec.get("title", "")).lower():
+            ch1_text = sec.get("content", "")
+            break
+    questions: list[str] = []
+    for line in ch1_text.splitlines():
+        ln = line.strip(" -\t")
+        if "?" in ln and len(ln) > 20:
+            questions.append(ln[:140])
+        if len(questions) >= 4:
+            break
+    q_text = (
+        "\n".join(f"  {i + 1}. {q}" for i, q in enumerate(questions))
+        if questions
+        else "  (infer from the research objectives above)"
+    )
+
+    design_label = {
+        "quantitative": "Quantitative (survey/statistical)",
+        "qualitative": "Qualitative (interviews/thematic analysis)",
+        "mixed": "Mixed-Methods (quantitative + qualitative)",
+        "non_empirical": "Non-Empirical / Theoretical / Conceptual",
+    }.get(research_design, "Quantitative (survey/statistical)")
+
+    return (
+        "══ THIS STUDY'S BRIEF — ground ALL writing in these specifics ══\n"
+        f"Document Title  : {doc_title}\n"
+        f"Research Topic  : {topic}\n"
+        f"Research Design : {design_label}\n"
+        f"Research Objectives:\n{obj_text}\n"
+        f"Research Questions:\n{q_text}\n"
+        "══ END OF STUDY BRIEF ══"
+    )
 
 
 def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[dict[str, Any]]:
@@ -940,6 +1057,9 @@ def _execute_subsection_nodes(
     blocks: list[dict[str, str]] = []
     local_context = rolling_context
 
+    # Build study brief ONCE per call (shared by every node in this invocation)
+    document_brief = _extract_document_brief(document, topic, research_design)
+
     for node in nodes:
         step_idx = plan_cursor[0]
         plan_cursor[0] += 1
@@ -1071,22 +1191,26 @@ def _execute_subsection_nodes(
                 logger.info("▶ Generating: %s", step_label)
 
                 prompt_context = (
-                    f"Parent chapter: {section_title}\n"
-                    f"Research design: {research_design}\n"
-                    f"Study topic: {topic}\n\n"
-                    f"--- CURRENT DOCUMENT (read this before writing) ---\n"
-                    f"{current_document_context[-4000:]}\n"
-                    f"--- END OF DOCUMENT ---\n\n"
+                    f"{document_brief}\n\n"
+                    f"You are writing the section: '{title}'\n"
+                    f"Parent chapter: {section_title}\n\n"
+                    f"--- DOCUMENT CONTENT ALREADY WRITTEN (read this and build on it) ---\n"
+                    f"{current_document_context[-3000:]}\n"
+                    f"--- END OF EXISTING DOCUMENT ---\n\n"
                     + (
-                        f"WRITING INSTRUCTIONS FOR THIS SECTION:\n{guidelines}\n\n"
+                        f"SECTION-SPECIFIC INSTRUCTIONS:\n{guidelines}\n\n"
                         if guidelines else
                         "Write in formal academic prose. Be specific, substantive, and analytical.\n\n"
                     )
-                    + "IMPORTANT: Do NOT include the section heading in your response. "
-                    "Do NOT use filler phrases such as 'this section will discuss', "
+                    + "CRITICAL RULES:\n"
+                    "1. Every sentence must be specifically about the research topic in the STUDY BRIEF above.\n"
+                    "2. Reference the actual topic, objectives, methodology, and context of this specific study.\n"
+                    "3. Do NOT write generic academic content that could apply to any study.\n"
+                    "4. Do NOT include the section heading in your response.\n"
+                    "5. Do NOT use filler phrases such as 'this section will discuss', "
                     "'in today's world', 'it is important to note', or "
-                    "'the analysis will be developed in accordance with'. "
-                    "Write actual content — not a description of what the section will do."
+                    "'the analysis will be developed in accordance with'.\n"
+                    "6. Write actual academic content — grounded in THIS specific research.\n"
                 )
                 try:
                     body = generate_section_content(
@@ -1105,19 +1229,44 @@ def _execute_subsection_nodes(
                         "writing instructions for this section",
                         "current document (read this",
                     ]
-                    if not body or len(body.strip()) < 80 or any(f in body.lower() for f in _FILLERS):
+                    is_hypothesis_section = "hypoth" in lowered_title
+                    bad_hypothesis_shape = (
+                        is_hypothesis_section
+                        and (
+                            ("h0" not in body.lower() and "null hypothesis" not in body.lower())
+                            or ("h1" not in body.lower() and "alternative hypothesis" not in body.lower())
+                            or len(body.strip().splitlines()) < 2
+                        )
+                    )
+                    if (
+                        not body
+                        or len(body.strip()) < 80
+                        or any(f in body.lower() for f in _FILLERS)
+                        or bad_hypothesis_shape
+                    ):
                         logger.warning(
                             "▶ RETRY — placeholder/echo detected for '%s'. Sending direct prompt.", title
                         )
                         retry_context = (
-                            f"You are writing a dissertation on: '{topic}'.\n"
+                            f"{document_brief}\n\n"
+                            f"You are writing a dissertation section on: '{topic}'.\n"
                             f"Chapter: {section_title}\n"
                             f"Research design: {research_design}\n\n"
                             + (f"{guidelines}\n\n" if guidelines else "")
-                            + "Write ONLY the actual academic content for this section. "
+                            + "Write ONLY the actual academic content for this section, "
+                            "grounded in the specific research topic above. "
                             "Do NOT repeat these instructions. Do NOT include the heading. "
-                            "Do NOT output bullet points about what you will write — write it."
+                            "Do NOT output generic content — write specifically about THIS study."
                         )
+                        if is_hypothesis_section:
+                            retry_context += (
+                                "\n\nMandatory format for this section:\n"
+                                "1. H0: ...\n"
+                                "   H1: ...\n"
+                                "2. H0: ...\n"
+                                "   H1: ...\n"
+                                "Only null/alternative pairs. No paragraphs."
+                            )
                         body = generate_section_content(
                             title=title,
                             topic=topic,
@@ -1125,7 +1274,19 @@ def _execute_subsection_nodes(
                             word_count=wc,
                         )
                         # If retry also looks bad, escalate to fallback
-                        if not body or len(body.strip()) < 80 or any(f in body.lower() for f in _FILLERS):
+                        bad_hypothesis_shape = (
+                            is_hypothesis_section
+                            and (
+                                ("h0" not in body.lower() and "null hypothesis" not in body.lower())
+                                or ("h1" not in body.lower() and "alternative hypothesis" not in body.lower())
+                            )
+                        )
+                        if (
+                            not body
+                            or len(body.strip()) < 80
+                            or any(f in body.lower() for f in _FILLERS)
+                            or bad_hypothesis_shape
+                        ):
                             logger.error(
                                 "▶ FALLBACK — retry also produced bad output for '%s'.", title
                             )
@@ -1284,6 +1445,50 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     ]):
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
+    # ── Section-keyword detection ────────────────────────────────────────────
+    # Detect named sections BEFORE falling through to dissertation triggers so that
+    # "redo the hypothesis" never escalates to write_dissertation.
+    _SECTION_KEYWORD_MAP: list[tuple[list[str], str]] = [
+        (["hypothesis", "hypothes", "null hypothesis", "alternative hypothesis", "h0", "h1"], "Research Hypotheses"),
+        (["background of the study", "background of study"], "Background of the Study"),
+        (["statement of the problem", "problem statement"], "Statement of the Problem"),
+        (["research objectives", "research objective"], "Research Objectives"),
+        (["research questions", "research question"], "Research Questions"),
+        (["significance of the study", "significance of study"], "Significance of the Study"),
+        (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
+        (["definition of key terms", "key terms"], "Definition of Key Terms"),
+        (["conceptual review", "conceptual framework"], "Conceptual Review"),
+        (["theoretical framework", "theoretical review"], "Theoretical Framework"),
+        (["empirical review", "empirical literature"], "Empirical Review"),
+        (["research gap"], "Research Gap"),
+        (["research design"], "Research Design"),
+        (["target population", "study population"], "Target Population"),
+        (["sampling technique", "sample size", "sampling method"], "Sampling Techniques and Sample Size"),
+        (["data collection"], "Data Collection Methods"),
+        (["data analysis", "analysis technique"], "Data Analysis Techniques"),
+        (["reliability and validity", "reliability", "validity"], "Reliability and Validity"),
+        (["ethical consideration", "research ethics"], "Ethical Considerations"),
+        (["summary of findings", "findings summary"], "Summary of Findings"),
+        (["recommendations"], "Recommendations"),
+        (["limitations of the study", "limitations"], "Limitations of the Study"),
+        (["areas for further research", "future research", "further research"], "Areas for Further Research"),
+        (["discussion of findings", "discussion"], "Discussion of Findings"),
+        (["abstract"], "Abstract"),
+        (["conclusion"], "Conclusion"),
+        (["references"], "References"),
+        (["appendices", "appendix"], "Appendices"),
+    ]
+
+    _SECTION_ACTION_WORDS = [
+        "redo", "rewrite", "rewrite", "write", "define", "fix", "correct",
+        "improve", "enhance", "update", "replace", "regenerate", "generate",
+    ]
+
+    if any(verb in text for verb in _SECTION_ACTION_WORDS):
+        for keywords, section_name in _SECTION_KEYWORD_MAP:
+            if any(kw in text for kw in keywords):
+                return {"intent": "write_section", "target_section": section_name, "topic": None}
+
     if any(k in text for k in [
         "redo", "rewrite", "write chapter", "replace chapter",
         "write the", "write me the", "write a new",
@@ -1291,6 +1496,54 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         return {"intent": "write_section", "target_section": target, "topic": None}
 
     return {"intent": "chat", "target_section": None, "topic": None}
+
+
+def _explicit_section_target_from_message(message: str) -> str | None:
+    """Return a concrete section target when the user clearly names one."""
+    text = (message or "").strip().lower()
+    if not text:
+        return None
+
+    # Prefer numeric subsection references (e.g., 1.5)
+    subsection_num = re.search(r"\b\d+\.\d+(?:\.\d+)*\b", text)
+    if subsection_num:
+        return subsection_num.group(0)
+
+    keyword_map: list[tuple[list[str], str]] = [
+        (["hypothesis", "hypotheses", "null hypothesis", "alternative hypothesis", "h0", "h1"], "Research Hypotheses"),
+        (["background of the study", "background of study"], "Background of the Study"),
+        (["statement of the problem", "problem statement"], "Statement of the Problem"),
+        (["research objective", "research objectives"], "Research Objectives"),
+        (["research question", "research questions"], "Research Questions"),
+        (["significance of the study", "significance of study"], "Significance of the Study"),
+        (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
+        (["definition of key terms", "key terms"], "Definition of Key Terms"),
+        (["conceptual review", "conceptual framework"], "Conceptual Review"),
+        (["theoretical framework", "theoretical review"], "Theoretical Framework"),
+        (["empirical review", "empirical literature"], "Empirical Review"),
+        (["research gap"], "Research Gap"),
+        (["research design"], "Research Design"),
+        (["target population", "study population"], "Target Population"),
+        (["sampling technique", "sample size", "sampling method"], "Sampling Techniques and Sample Size"),
+        (["data collection"], "Data Collection Methods"),
+        (["data analysis", "analysis technique"], "Data Analysis Techniques"),
+        (["reliability and validity", "reliability", "validity"], "Reliability and Validity"),
+        (["ethical consideration", "research ethics"], "Ethical Considerations"),
+        (["summary of findings", "findings summary"], "Summary of Findings"),
+        (["recommendations"], "Recommendations"),
+        (["limitations of the study", "limitations"], "Limitations of the Study"),
+        (["areas for further research", "future research", "further research"], "Areas for Further Research"),
+        (["discussion of findings", "discussion"], "Discussion of Findings"),
+        (["abstract"], "Abstract"),
+        (["conclusion"], "Conclusion"),
+        (["references"], "References"),
+        (["appendices", "appendix"], "Appendices"),
+    ]
+    for keys, section in keyword_map:
+        if any(k in text for k in keys):
+            return section
+
+    return None
 
 
 def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -> str:
@@ -1311,7 +1564,17 @@ def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -
 
     sub = subsection.strip()
     sec = section_title.strip().lower()
-    if "research objective" in sub.lower() or "research question" in sub.lower() or "hypoth" in sub.lower():
+    if "hypoth" in sub.lower():
+        return (
+            "1. H0: Artificial intelligence adoption has no statistically significant effect on operational efficiency in the selected organisations.\n"
+            "   H1: Artificial intelligence adoption has a statistically significant positive effect on operational efficiency in the selected organisations.\n"
+            "2. H0: AI-enabled risk analytics has no statistically significant relationship with fraud detection accuracy.\n"
+            "   H1: AI-enabled risk analytics has a statistically significant positive relationship with fraud detection accuracy.\n"
+            "3. H0: AI-driven customer-service systems have no statistically significant effect on customer satisfaction levels.\n"
+            "   H1: AI-driven customer-service systems have a statistically significant positive effect on customer satisfaction levels."
+        )
+
+    if "research objective" in sub.lower() or "research question" in sub.lower():
         return (
             "1. To evaluate the extent to which artificial intelligence tools improve operational efficiency in banking processes, "
             "including turnaround time and process accuracy.\n"
@@ -1456,56 +1719,56 @@ def _extract_subsection_phrase(instruction: str) -> str:
         return subsection_num.group(0)
 
     # Ordered from most specific to least so longer matches win
-    known = [
-        "background of the study",
-        "background of study",
-        "statement of the problem",
-        "research objectives",
-        "research questions",
-        "research hypotheses",
-        "significance of the study",
-        "scope and delimitations",
-        "definition of key terms",
-        "key terms",
-        "conceptual review",
-        "empirical review",
-        "theoretical framework",
-        "research design",
-        "target population",
-        "sampling techniques",
-        "data collection",
-        "data analysis",
-        "reliability and validity",
-        "ethical considerations",
-        "data presentation",
-        "discussion of findings",
-        "summary of findings",
-        "recommendations",
-        "limitations of the study",
-        "areas for further research",
-        "further research",
-        "literature review",
-        "methodology",
-        "results and discussion",
-        "conclusion and recommendations",
-        "references and appendices",
-        "introduction",
-        "conclusion",
-        "abstract",
-        "references",
-        "appendices",
+    # Maps: (keywords to detect) -> canonical section name returned
+    known_map: list[tuple[tuple[str, ...], str]] = [
+        (("background of the study", "background of study"), "Background of the Study"),
+        (("statement of the problem", "problem statement"), "Statement of the Problem"),
+        (("research objectives", "research objective"), "Research Objectives"),
+        (("research questions", "research question"), "Research Questions"),
+        (("research hypotheses", "hypotheses", "hypothesis", "null hypothesis", "alternative hypothesis", "h0", "h1"), "Research Hypotheses"),
+        (("significance of the study", "significance of study"), "Significance of the Study"),
+        (("scope and delimitations", "scope of the study", "delimitations"), "Scope and Delimitations"),
+        (("definition of key terms", "key terms"), "Definition of Key Terms"),
+        (("conceptual review", "conceptual framework"), "Conceptual Review"),
+        (("empirical review", "empirical literature"), "Empirical Review"),
+        (("theoretical framework", "theoretical review"), "Theoretical Framework"),
+        (("research gap",), "Research Gap"),
+        (("research design",), "Research Design"),
+        (("target population", "study population"), "Target Population"),
+        (("sampling techniques", "sampling technique", "sample size", "sampling method"), "Sampling Techniques and Sample Size"),
+        (("data collection",), "Data Collection Methods"),
+        (("data analysis", "analysis technique"), "Data Analysis Techniques"),
+        (("reliability and validity",), "Reliability and Validity"),
+        (("ethical considerations", "ethical consideration", "research ethics"), "Ethical Considerations"),
+        (("data presentation",), "Data Presentation"),
+        (("discussion of findings", "discussion of results"), "Discussion of Findings"),
+        (("summary of findings", "findings summary"), "Summary of Findings"),
+        (("recommendations",), "Recommendations"),
+        (("limitations of the study", "limitations"), "Limitations of the Study"),
+        (("areas for further research", "further research", "future research"), "Areas for Further Research"),
+        (("literature review",), "Literature Review"),
+        (("methodology",), "Methodology"),
+        (("results and discussion",), "Results and Discussion"),
+        (("conclusion and recommendations",), "Conclusion and Recommendations"),
+        (("references and appendices",), "References and Appendices"),
+        (("introduction",), "Introduction"),
+        (("conclusion",), "Conclusion"),
+        (("abstract",), "Abstract"),
+        (("references",), "References"),
+        (("appendices", "appendix"), "Appendices"),
     ]
-    for phrase in known:
-        if phrase in text:
-            return phrase
-    # Fallback: extract what comes after action verbs
+    for keywords, canonical in known_map:
+        if any(kw in text for kw in keywords):
+            return canonical
+    # Fallback: extract what comes after action verbs (never return bare action words)
+    _ACTION_ONLY = {"redo", "rewrite", "fix", "correct", "improve", "enhance", "update", "replace", "generate", "write"}
     verb_match = re.search(
-        r"(?:correct|fix|enhance|improve|rewrite|write|add|put|include|generate)\s+(?:the\s+|a\s+|an\s+)?(.+)",
+        r"(?:correct|fix|enhance|improve|rewrite|write|add|put|include|generate|redo)\s+(?:the\s+|a\s+|an\s+)?(.+)",
         text,
     )
     if verb_match:
-        candidate = verb_match.group(1).strip().rstrip(".!?")
-        if candidate and len(candidate) < 80:
+        candidate = verb_match.group(1).strip().rstrip(".!?,;")
+        if candidate and len(candidate) < 80 and candidate.lower() not in _ACTION_ONLY:
             return candidate
     return instruction
 
@@ -1960,6 +2223,30 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     )
     topic = re.sub(r"^on\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
 
+    # Safety guard: explicit section-target edit requests must remain section-scoped.
+    explicit_target = _explicit_section_target_from_message(message)
+    has_section_action = any(
+        k in lowered_message
+        for k in [
+            "redo", "rewrite", "define", "fix", "correct", "improve", "enhance",
+            "update", "replace", "regenerate", "generate", "write",
+        ]
+    )
+    full_doc_request = any(
+        k in lowered_message
+        for k in [
+            "full dissertation", "entire dissertation", "complete dissertation", "whole dissertation",
+            "full thesis", "entire thesis", "complete thesis", "whole thesis",
+            "full project", "entire project", "complete project", "whole project",
+        ]
+    )
+    if explicit_target and has_section_action and not full_doc_request:
+        # Force section-scoped execution — override even if upstream classifier set a bad intent
+        if intent == "write_dissertation":
+            intent = "write_section"
+        if intent in {"write_section", "enhance_section"}:
+            target_section = explicit_target  # always override with the precise target
+
     # 2. Build plan
     if intent == "summarize_document":
         steps = ["Reading current document", "Preparing summary response"]
@@ -2192,6 +2479,32 @@ def _write_section(
 
     if chapter_hint is None and any(k in query_l for k in ["empirical review", "conceptual review", "theoretical framework", "literature review"]):
         chapter_hint = 2
+
+    _CHAPTER1_KEYWORDS = [
+        "research hypothes", "hypothes", "background of the study", "background of study",
+        "statement of the problem", "problem statement", "research objectives", "research questions",
+        "significance of the study", "scope and delimitations", "definition of key terms", "key terms",
+    ]
+    if chapter_hint is None and any(k in query_l for k in _CHAPTER1_KEYWORDS):
+        chapter_hint = 1
+
+    _CHAPTER3_KEYWORDS = [
+        "research design", "target population", "sampling technique", "sample size",
+        "data collection", "data analysis", "reliability and validity", "ethical consideration",
+    ]
+    if chapter_hint is None and any(k in query_l for k in _CHAPTER3_KEYWORDS):
+        chapter_hint = 3
+
+    _CHAPTER4_KEYWORDS = ["discussion of findings", "results and discussion", "data presentation"]
+    if chapter_hint is None and any(k in query_l for k in _CHAPTER4_KEYWORDS):
+        chapter_hint = 4
+
+    _CHAPTER5_KEYWORDS = [
+        "summary of findings", "conclusions", "recommendations", "limitations of the study",
+        "areas for further research", "further research",
+    ]
+    if chapter_hint is None and any(k in query_l for k in _CHAPTER5_KEYWORDS):
+        chapter_hint = 5
 
     # If request maps to a dissertation chapter structure, generate through nested to-do workflow.
     if chapter_hint is not None:
