@@ -32,6 +32,8 @@ Local authorities rely heavily on rates as a basic fiscal tool for service deliv
 const INITIAL_MESSAGES = [];
 const INITIAL_CHAT_ID = 'chat-initial';
 const INITIAL_CHATS = [{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: INITIAL_MESSAGES }];
+const MIN_EDITOR_HEIGHT = 900;
+const PAGE_CYCLE_PX = 1120;
 const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
 const DISSERTATION_TODO_TEMPLATE = [
   {
@@ -529,6 +531,7 @@ export default function DocumentEditorPage({
   const [selectedModel, setSelectedModel] = useState('grok');
   const [activeModel,  setActiveModel]  = useState('Grok');
   const [liveProgressMsgId, setLiveProgressMsgId] = useState(null);
+  const [editorHeight, setEditorHeight] = useState(MIN_EDITOR_HEIGHT);
   const bottomRef    = useRef(null);
   const autoSaveTimer = useRef(null);
   const progressPollRef = useRef(null);
@@ -559,13 +562,19 @@ export default function DocumentEditorPage({
     const clean = plainDocText.replace(/\s+/g, ' ').trim();
     return clean ? clean.split(' ').length : 0;
   }, [plainDocText]);
+  const pageCount = useMemo(
+    () => Math.max(1, Math.ceil(editorHeight / PAGE_CYCLE_PX)),
+    [editorHeight]
+  );
 
   // Auto-resize textarea to content height (no inner scrollbar)
   useEffect(() => {
     const el = editorTextareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = Math.max(el.scrollHeight, 900) + 'px';
+    const nextHeight = Math.max(el.scrollHeight, MIN_EDITOR_HEIGHT);
+    el.style.height = nextHeight + 'px';
+    setEditorHeight(nextHeight);
   }, [plainDocText]);
 
   useEffect(() => {
@@ -920,7 +929,9 @@ export default function DocumentEditorPage({
                     const next = e.target.value;
                     // auto-resize inline
                     e.target.style.height = 'auto';
-                    e.target.style.height = Math.max(e.target.scrollHeight, 900) + 'px';
+                    const nextHeight = Math.max(e.target.scrollHeight, MIN_EDITOR_HEIGHT);
+                    e.target.style.height = nextHeight + 'px';
+                    setEditorHeight(nextHeight);
                     setDraftSections([{ title: '', content: next, blocks: [] }]);
                     setIsDirty(true);
                     setAutoSaved(false);
@@ -930,6 +941,24 @@ export default function DocumentEditorPage({
                     }, 1500);
                   }}
                 />
+                <div className="doc-page-guides" aria-hidden="true">
+                  {Array.from({ length: Math.max(pageCount - 1, 0) }).map((_, i) => (
+                    <div
+                      key={`break-${i + 1}`}
+                      className="doc-page-break-line"
+                      style={{ top: `${(i + 1) * PAGE_CYCLE_PX - 12}px` }}
+                    />
+                  ))}
+                  {Array.from({ length: pageCount }).map((_, i) => (
+                    <span
+                      key={`page-${i + 1}`}
+                      className="doc-page-number-chip"
+                      style={{ top: `${i * PAGE_CYCLE_PX + 10}px` }}
+                    >
+                      Page {i + 1}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           </section>

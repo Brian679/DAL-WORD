@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 from statistics import mean
 from textwrap import fill
@@ -633,6 +634,65 @@ def generate_chart(series: list[float], chart_type: str = "line", title: str = "
     ax.spines["bottom"].set_color("#9d8d7f")
     ax.tick_params(colors="#5a524a")
 
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return f"/media/charts/{file_name}"
+
+
+def save_dataset_json(dataset: dict[str, Any], prefix: str = "dataset") -> str:
+    charts_dir = Path(settings.MEDIA_ROOT) / "charts" / "datasets"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    file_name = f"{prefix}-{uuid4().hex[:10]}.json"
+    output_path = charts_dir / file_name
+    with output_path.open("w", encoding="utf-8") as fp:
+        json.dump(dataset, fp, ensure_ascii=True, indent=2)
+    return f"/media/charts/datasets/{file_name}"
+
+
+def generate_table_chart(headers: list[str], rows: list[list[Any]], title: str = "Generated Table") -> str:
+    charts_dir = Path(settings.MEDIA_ROOT) / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    file_name = f"table-{uuid4().hex[:10]}.png"
+    output_path = charts_dir / file_name
+
+    safe_headers = [str(h) for h in (headers or [])]
+    safe_rows = [[str(cell) for cell in row] for row in (rows or [])]
+    if not safe_headers:
+        safe_headers = ["Column 1", "Column 2"]
+    if not safe_rows:
+        safe_rows = [["N/A", "N/A"]]
+
+    # Size scales with table shape for readability.
+    n_rows = len(safe_rows)
+    n_cols = len(safe_headers)
+    fig_w = min(max(8.5, 1.6 * n_cols + 2.5), 15)
+    fig_h = min(max(3.4, 0.42 * n_rows + 2.2), 14)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=170)
+    fig.patch.set_facecolor("#fffaf5")
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=safe_rows,
+        colLabels=safe_headers,
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1.0, 1.35)
+
+    for (r, c), cell in table.get_celld().items():
+        if r == 0:
+            cell.set_text_props(weight="bold", color="#1f2937")
+            cell.set_facecolor("#e9f0fb")
+        else:
+            cell.set_facecolor("#ffffff" if r % 2 else "#f8fafc")
+        cell.set_edgecolor("#cbd5e1")
+        cell.set_linewidth(0.8)
+
+    ax.set_title(title, fontsize=14, fontweight="bold", color="#334155", pad=12)
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)

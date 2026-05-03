@@ -26,7 +26,9 @@ from .llm import (
 from .tools import (
     find_section,
     generate_chart,
+    generate_table_chart,
     generate_image,
+    save_dataset_json,
     update_section,
 )
 
@@ -218,7 +220,13 @@ def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[d
     if research_design in {"quantitative", "qualitative", "mixed"}:
         demo_children: list[dict[str, Any]] = [
             {
-                "title": "4.2.1 Demographic Distribution of Respondents",
+                "title": "4.2.1 Response Rate",
+                "kind": "table",
+                "children": [],
+                "meta": {"table_type": "response_rate"},
+            },
+            {
+                "title": "4.2.2 Demographic Distribution of Respondents",
                 "kind": "table",
                 "children": [],
                 "meta": {"table_type": "demographics"},
@@ -227,7 +235,7 @@ def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[d
         if research_design in {"quantitative", "mixed"}:
             demo_children.append(
                 {
-                    "title": "4.2.2 Demographic Distribution Chart",
+                    "title": "4.2.3 Demographic Distribution Chart",
                     "kind": "chart",
                     "children": [],
                     "meta": {"chart_type": "demographics"},
@@ -257,15 +265,18 @@ def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[d
                     "kind": "table",
                     "children": [],
                     "meta": {"objective": objective},
-                },
+                }
+            ],
+        }
+        if research_design in {"quantitative", "mixed"}:
+            obj_node["children"].append(
                 {
                     "title": f"4.{sec_num}.2 Data Visualization",
                     "kind": "chart",
                     "children": [],
                     "meta": {"objective": objective},
-                },
-            ],
-        }
+                }
+            )
         nodes.append(obj_node)
 
     last_idx = obj_start + len(objectives)
@@ -322,6 +333,105 @@ def _table_text_for_node(node_title: str, research_design: str, topic: str, obje
         f"| Indicator B | {b} | Stronger outcome where controls were applied |\n"
         f"| Indicator C | {c} | Weakest dimension and major constraint area |"
     )
+
+
+def _infer_sample_size(document: Document) -> int:
+    """Infer respondent/sample size from the current document, defaulting safely."""
+    context = _full_context_for_generation(document)
+    patterns = [
+        r"sample\s+size[^\d]{0,20}(\d{2,4})",
+        r"respondents?[^\d]{0,20}(\d{2,4})",
+        r"participants?[^\d]{0,20}(\d{2,4})",
+        r"n\s*=\s*(\d{2,4})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, context, flags=re.IGNORECASE)
+        if match:
+            try:
+                value = int(match.group(1))
+                if 20 <= value <= 5000:
+                    return value
+            except Exception:
+                continue
+    return 120
+
+
+def _ai_table_dataset(
+    node_title: str,
+    research_design: str,
+    topic: str,
+    objective: str | None,
+    sample_size: int,
+    current_document_context: str,
+) -> dict[str, Any]:
+    """Generate structured table data as JSON for rendering via matplotlib."""
+    prompt = (
+        "Generate realistic table data for a dissertation results section. Return JSON only.\n"
+        f"Node title: {node_title}\n"
+        f"Research design: {research_design}\n"
+        f"Topic: {topic}\n"
+        f"Objective: {objective or 'N/A'}\n"
+        f"Sample size: {sample_size}\n"
+        f"Current document context:\n{current_document_context[-2500:]}\n\n"
+        "JSON schema:\n"
+        "{\"headers\":[\"...\"],\"rows\":[[\"...\"],[\"...\"]]}\n"
+        "Rules:\n"
+        "- If the table is demographics/response-rate, include frequencies and percentages that sum to the sample size.\n"
+        "- Keep 3-7 rows.\n"
+        "- Use academically plausible values, no placeholders.\n"
+        "- Do not return markdown."
+    )
+    try:
+        data = _extract_json_obj(generate_text(prompt))
+        headers = [str(h) for h in (data.get("headers") or []) if str(h).strip()]
+        rows_raw = data.get("rows") or []
+        rows = [[str(cell) for cell in row] for row in rows_raw if isinstance(row, list)]
+        if headers and rows:
+            return {"headers": headers, "rows": rows}
+    except Exception as exc:
+        logger.warning("_ai_table_dataset fallback (%s): %s", node_title[:60], exc)
+
+    # Deterministic fallback aligned to sample size
+    seed = sum(ord(c) for c in f"{node_title}|{topic}|{objective or ''}|{research_design}")
+    if "demographic" in node_title.lower() or "response rate" in node_title.lower():
+        male = max(1, int(round(sample_size * (0.42 + (seed % 12) / 100))))
+        female = max(1, sample_size - male)
+        returned = max(1, int(round(sample_size * (0.80 + (seed % 9) / 100))))
+        not_returned = max(0, sample_size - returned)
+        return {
+            "headers": ["Variable", "Category", "Frequency", "Percentage"],
+            "rows": [
+                ["Response Rate", "Returned Questionnaires", str(returned), f"{(returned / sample_size) * 100:.1f}%"],
+                ["Response Rate", "Not Returned", str(not_returned), f"{(not_returned / sample_size) * 100:.1f}%"],
+                ["Gender", "Male", str(male), f"{(male / sample_size) * 100:.1f}%"],
+                ["Gender", "Female", str(female), f"{(female / sample_size) * 100:.1f}%"],
+            ],
+        }
+
+    if research_design == "qualitative":
+        t1 = 3 + (seed % 5)
+        t2 = 2 + ((seed // 5) % 5)
+        t3 = 2 + ((seed // 9) % 4)
+        return {
+            "headers": ["Theme", "Mentions", "Representative Excerpt", "Interpretation"],
+            "rows": [
+                ["Theme 1", str(t1), f"Participants emphasized {topic[:28]}.", "Shows core experiential pattern"],
+                ["Theme 2", str(t2), "Respondents highlighted implementation constraints.", "Indicates operational barriers"],
+                ["Theme 3", str(t3), "Stakeholders requested stronger governance.", "Supports policy-focused recommendations"],
+            ],
+        }
+
+    a = round(2.7 + (seed % 17) * 0.12, 2)
+    b = round(2.9 + ((seed // 7) % 14) * 0.11, 2)
+    c = round(2.5 + ((seed // 11) % 15) * 0.10, 2)
+    return {
+        "headers": ["Metric", "Value", "Interpretation"],
+        "rows": [
+            [f"Indicator A ({(objective or 'Objective')[:26]})", str(a), "Moderate performance"],
+            ["Indicator B", str(b), "Relatively stronger outcome"],
+            ["Indicator C", str(c), "Priority improvement area"],
+        ],
+    }
 
 
 def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
@@ -594,8 +704,22 @@ def _append_node_plan_steps(plan: list[dict[str, Any]], nodes: list[dict[str, An
         _append_node_plan_steps(plan, node.get("children", []), depth + 1)
 
 
+
+def _strip_leading_heading(body: str, title: str) -> str:
+    """Remove the section title if the LLM echoed it at the start of the body."""
+    stripped = body.lstrip()
+    clean_title = re.sub(r"^#+\s*", "", title).strip().lower()
+    first_line_raw = stripped.split("\n", 1)[0] if stripped else ""
+    first_line = re.sub(r"^#+\s*|\*+|_+", "", first_line_raw).strip().lower()
+    # Match if the first line IS the title (exact or starts with it)
+    if first_line == clean_title or first_line.startswith(clean_title):
+        rest = stripped.split("\n", 1)[1] if "\n" in stripped else ""
+        return rest.lstrip("\n")
+    return body
+
 def _execute_subsection_nodes(
     nodes: list[dict[str, Any]],
+    document: Document,
     section_title: str,
     topic: str,
     research_design: str,
@@ -618,41 +742,93 @@ def _execute_subsection_nodes(
         title = node.get("title", "Untitled subsection")
         kind = node.get("kind", "text")
         meta = node.get("meta", {}) if isinstance(node.get("meta", {}), dict) else {}
+        current_document_context = _full_context_for_generation(document)
 
         if kind == "table":
             objective = str(meta.get("objective") or "") or None
             table_no = table_counter[0]
             table_counter[0] += 1
             table_caption = f"Table {table_no}: {title}"
+            sample_size = _infer_sample_size(document)
+            table_dataset = _ai_table_dataset(
+                node_title=title,
+                research_design=research_design,
+                topic=topic,
+                objective=objective,
+                sample_size=sample_size,
+                current_document_context=current_document_context,
+            )
+            dataset_path = save_dataset_json(table_dataset, prefix="table-data")
+            table_path = generate_table_chart(
+                headers=table_dataset.get("headers", []),
+                rows=table_dataset.get("rows", []),
+                title=table_caption,
+            )
+            block_id = f"tbl-{table_no}-{len(blocks) + 1}"
+            blocks.append({
+                "type": "chart",
+                "src": table_path,
+                "caption": table_caption,
+                "block_id": block_id,
+                "dataset_json": dataset_path,
+            })
             body = (
                 f"{table_caption}\n"
-                f"{_table_text_for_node(title, research_design, topic, objective)}\n\n"
+                f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective)}"
             )
         elif kind == "chart":
             objective = str(meta.get("objective") or "") or None
-            figure_no = figure_counter[0]
-            figure_counter[0] += 1
-            figure_caption = f"Figure {figure_no}: {title}"
-            context_str = title + (f" — {objective}" if objective else "")
-            ai_data = _ai_chart_series(context_str, n_points=8)
-            chart_path = generate_chart(
-                series=ai_data["series"],
-                chart_type=ai_data["chart_type"],
-                title=title,
-            )
-            block_id = f"fig-{figure_no}-{len(blocks) + 1}"
-            blocks.append({
-                "type": "chart",
-                "src": chart_path,
-                "caption": figure_caption,
-                "block_id": block_id,
-            })
-            body = (
-                f"{figure_caption}\n"
-                f"[[BLOCK:{block_id}]]\n"
-                f"{_chart_discussion_text(ai_data['series'], objective)}"
-            )
+            if research_design == "qualitative":
+                body = (
+                    "Qualitative design prioritizes narrative/theme interpretation for this subsection. "
+                    "No quantitative chart was generated for this section.\n"
+                    f"{_table_discussion_text(title, research_design, objective)}"
+                )
+            else:
+                figure_no = figure_counter[0]
+                figure_counter[0] += 1
+                figure_caption = f"Figure {figure_no}: {title}"
+                context_str = title + (f" — {objective}" if objective else "")
+                ai_data = _ai_chart_series(context_str, n_points=8)
+                sample_size = _infer_sample_size(document)
+                if any(k in title.lower() for k in ["demographic", "response rate", "respondent"]):
+                    raw_vals = [max(0.0, float(v)) for v in ai_data.get("series", [])]
+                    if raw_vals:
+                        total = sum(raw_vals)
+                        if total > 0:
+                            ai_data["series"] = [round((v / total) * sample_size, 2) for v in raw_vals]
+                    if ai_data.get("chart_type") not in {"pie", "bar"}:
+                        ai_data["chart_type"] = "pie"
+                dataset_path = save_dataset_json(
+                    {
+                        "title": figure_caption,
+                        "series": ai_data.get("series", []),
+                        "x_labels": ai_data.get("x_labels", []),
+                        "unit": ai_data.get("unit", ""),
+                        "chart_type": ai_data.get("chart_type", "bar"),
+                        "sample_size": sample_size,
+                    },
+                    prefix="chart-data",
+                )
+                chart_path = generate_chart(
+                    series=ai_data["series"],
+                    chart_type=ai_data["chart_type"],
+                    title=title,
+                )
+                block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+                blocks.append({
+                    "type": "chart",
+                    "src": chart_path,
+                    "caption": figure_caption,
+                    "block_id": block_id,
+                    "dataset_json": dataset_path,
+                })
+                body = (
+                    f"{figure_caption}\n"
+                    f"[[BLOCK:{block_id}]]\n"
+                    f"{_chart_discussion_text(ai_data['series'], objective)}"
+                )
         elif kind == "objective_findings":
             objective = str(meta.get("objective") or title)
             try:
@@ -663,7 +839,7 @@ def _execute_subsection_nodes(
                         f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
                         f"Parent chapter: {section_title}\n"
-                        f"Context from previous sections:\n{local_context[-2000:]}\n\n"
+                        f"Current document context:\n{current_document_context[-3000:]}\n\n"
                         "Write 2-3 paragraphs presenting findings specifically for this objective. "
                         "Discuss patterns, trends, and how findings directly address the objective. "
                         "Be specific and academically rigorous."
@@ -681,13 +857,20 @@ def _execute_subsection_nodes(
                 )
                 if is_pointform:
                     try:
-                        body = generate_text(
-                            f"Write the '{title}' subsection for a research paper about: '{topic}'.\n"
-                            f"Research design: {research_design}\n"
-                            "Format as a numbered list ONLY (1. ... 2. ... 3. ...). "
-                            "Write 3-5 clear, specific, measurable points. "
-                            "Each item must be a complete standalone sentence. "
-                            "Do NOT write any prose paragraph. Do NOT add an introductory sentence before the list."
+                        body = generate_section_content(
+                            title=title,
+                            topic=topic,
+                            context=(
+                                f"Parent chapter: {section_title}\n"
+                                f"Research design: {research_design}\n"
+                                f"Current document context:\n{current_document_context[-2500:]}\n\n"
+                                "Format the output as a clean numbered list (1. ... 2. ... 3. ...). "
+                                "Write 3-5 clear, specific, measurable items. "
+                                "Each item must be a complete, standalone academic sentence. "
+                                "Do NOT add an introductory paragraph before the list. "
+                                "Do NOT include the section heading in your response."
+                            ),
+                            word_count=120,
                         )
                     except Exception:
                         body = _fallback_subsection_text(topic, section_title, title)
@@ -699,7 +882,7 @@ def _execute_subsection_nodes(
                             context=(
                                 f"Parent chapter: {section_title}\n"
                                 f"Research design: {research_design}\n"
-                                f"Context from previous sections:\n{local_context[-2200:]}\n\n"
+                                f"Current document context:\n{current_document_context[-3200:]}\n\n"
                                 "Requirements: Write 3-5 full paragraphs (~{wc} words total). "
                                 "Reference 3-5 relevant scholars, studies, or theoretical positions by name and year (e.g., Smith, 2019; Jones & Patel, 2021). "
                                 "Be analytical, not merely descriptive. "
@@ -718,13 +901,17 @@ def _execute_subsection_nodes(
                             context=(
                                 f"Parent chapter: {section_title}\n"
                                 f"Research design: {research_design}\n"
-                                f"Context from previous sections:\n{local_context[-2200:]}"
+                                f"Current document context:\n{current_document_context[-3200:]}\n\n"
+                                "Write in formal academic prose. Be specific, substantive, and analytical. "
+                                "Do NOT include the section heading in your response. "
+                                "Do NOT use filler phrases like 'in today's world', 'it is important to note', or 'this section will discuss'."
                             ),
                             word_count=default_word_count,
                         )
                     except Exception:
                         body = _fallback_subsection_text(topic, section_title, title)
 
+        body = _strip_leading_heading(body, title)
         chunks.append(f"{title}\n{body}")
         local_context = f"{local_context}\n\n{title}\n{body}".strip()
 
@@ -732,6 +919,7 @@ def _execute_subsection_nodes(
         if child_nodes:
             child_text, local_context, child_blocks = _execute_subsection_nodes(
                 child_nodes,
+                document,
                 section_title,
                 topic,
                 research_design,
@@ -883,10 +1071,20 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
 
 
 def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -> str:
+    """Try a simple one-shot prompt; return a placeholder only if that also fails."""
+    try:
+        return generate_text(
+            f"Write a concise academic paragraph for the '{subsection}' subsection "
+            f"of a research paper about '{topic}'. "
+            "Use formal, scholarly language. 120-180 words. "
+            "Do NOT include the subsection heading. Do NOT use phrases like 'in today's world' or 'it is worth noting'."
+        )
+    except Exception:
+        pass
+    clean = subsection.lower().replace("\n", " ").strip()
     return (
-        f"This section discusses {subsection.lower()} in relation to {topic}. "
-        "It provides practical context, highlights key issues, and links the discussion to the overall study objectives. "
-        "The content is structured to maintain logical flow and support evidence-based academic writing."
+        f"This subsection addresses {clean} within the context of {topic}. "
+        "Further analysis will be developed in accordance with the research objectives and empirical findings."
     )
 
 
@@ -1079,6 +1277,105 @@ def _chapter_title_from_number(chapter_number: int) -> str:
     return f"Chapter {chapter_number}"
 
 
+def _is_generic_section_query(query: str | None) -> bool:
+    value = (query or "").strip().lower()
+    return value in {
+        "",
+        "it",
+        "it again",
+        "again",
+        "this section",
+        "that section",
+        "section",
+    }
+
+
+def _leaf_node_count(nodes: list[dict[str, Any]]) -> int:
+    count = 0
+    for node in nodes:
+        children = [_normalize_subsection_node(ch) for ch in node.get("children", [])]
+        if children:
+            count += _leaf_node_count(children)
+        else:
+            count += 1
+    return max(count, 1)
+
+
+def _chapter_default_word_count(chapter_number: int | None) -> int:
+    if chapter_number == 2:
+        return 500
+    if chapter_number == 4:
+        return 280
+    return 220
+
+
+def _requested_page_target(instruction: str) -> int | None:
+    text = (instruction or "").lower()
+    ranged = re.search(r"(\d+)\s*(?:-|to)\s*(\d+)\s*pages?", text)
+    if ranged:
+        return max(int(ranged.group(1)), int(ranged.group(2)))
+    single = re.search(r"(\d+)\s*pages?", text)
+    if single:
+        return int(single.group(1))
+    return None
+
+
+def _chapter_word_count_target(chapter_number: int | None, instruction: str, nodes: list[dict[str, Any]]) -> int:
+    base = _chapter_default_word_count(chapter_number)
+    pages = _requested_page_target(instruction)
+    if not pages:
+        return base
+
+    total_words = pages * 500
+    leaves = _leaf_node_count(nodes)
+    per_leaf = int(round(total_words / max(leaves, 1)))
+    return max(base, per_leaf)
+
+
+def _chapter_nodes_for_generation(
+    chapter_number: int,
+    research_design: str,
+    objectives: list[str],
+) -> list[dict[str, Any]]:
+    chapter_template = next(
+        (
+            item for item in DISSERTATION_TEMPLATE
+            if _chapter_number_from_title(item.get("title", "")) == chapter_number
+        ),
+        None,
+    )
+    if not chapter_template:
+        return [{"title": f"{chapter_number}.1 Overview", "children": []}]
+
+    chapter_title = chapter_template.get("title", "")
+    if "chapter 4" in chapter_title.lower():
+        return _chapter4_subsections(research_design, objectives)
+    return [_normalize_subsection_node(s) for s in chapter_template.get("subsections", [])]
+
+
+def _find_matching_node(nodes: list[dict[str, Any]], query: str) -> dict[str, Any] | None:
+    query_l = (query or "").strip().lower()
+    if not query_l or _is_generic_section_query(query_l):
+        return None
+
+    query_num_match = re.search(r"\b\d+(?:\.\d+)*\b", query_l)
+    query_num = query_num_match.group(0) if query_num_match else None
+
+    for node in nodes:
+        title = str(node.get("title") or "")
+        title_l = title.lower()
+        title_num_match = re.search(r"\b\d+(?:\.\d+)*\b", title_l)
+        title_num = title_num_match.group(0) if title_num_match else None
+        if (query_num and title_num == query_num) or (query_l in title_l):
+            return _normalize_subsection_node(node)
+
+        child_nodes = [_normalize_subsection_node(ch) for ch in node.get("children", [])]
+        child_hit = _find_matching_node(child_nodes, query)
+        if child_hit:
+            return child_hit
+    return None
+
+
 def _step_label(step: str) -> str:
     return (step or "").strip().lstrip("- ").strip()
 
@@ -1137,12 +1434,82 @@ def _find_section_index_by_subsection(document: Document, query: str) -> int | N
     if not query_l:
         return None
 
+    generic_queries = {
+        "it",
+        "it again",
+        "again",
+        "this section",
+        "that section",
+        "section",
+    }
+    if query_l in generic_queries:
+        intro_idx = find_section(document.content, "introduction")
+        if intro_idx is not None:
+            return intro_idx
+        chapter_one_idx = find_section(document.content, "Chapter 1")
+        if chapter_one_idx is not None:
+            return chapter_one_idx
+
     subsection_num = re.search(r"\b(\d+)\.(\d+)(?:\.\d+)*\b", query_l)
     if subsection_num:
         chapter_num = subsection_num.group(1)
         by_chapter = find_section(document.content, f"Chapter {chapter_num}")
         if by_chapter is not None:
             return by_chapter
+
+    chapter_hint_map = {
+        "1": [
+            "background",
+            "statement of the problem",
+            "research objectives",
+            "research questions",
+            "research hypotheses",
+            "significance",
+            "scope",
+            "key terms",
+            "introduction",
+        ],
+        "2": [
+            "literature review",
+            "conceptual review",
+            "theoretical framework",
+            "empirical review",
+            "research gap",
+        ],
+        "3": [
+            "methodology",
+            "research design",
+            "target population",
+            "sampling",
+            "data collection",
+            "data analysis",
+            "reliability",
+            "validity",
+            "ethical considerations",
+        ],
+        "4": [
+            "data presentation",
+            "findings",
+            "discussion",
+            "results",
+        ],
+        "5": [
+            "summary of findings",
+            "conclusions",
+            "recommendations",
+            "limitations",
+            "further research",
+        ],
+        "6": [
+            "references",
+            "appendices",
+        ],
+    }
+    for chapter_num, hints in chapter_hint_map.items():
+        if any(hint in query_l for hint in hints):
+            by_chapter = find_section(document.content, f"Chapter {chapter_num}")
+            if by_chapter is not None:
+                return by_chapter
 
     sections = (document.content or {}).get("sections", [])
     for idx, section in enumerate(sections):
@@ -1172,6 +1539,9 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
     if intent == "write_dissertation":
         return True
 
+    if intent in {"write_section", "enhance_section"}:
+        return True
+
     if intent in {
         "chat",
         "summarize_document",
@@ -1181,8 +1551,6 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
         "write_presentation",
         "write_spreadsheet",
         "enhance_document",
-        "enhance_section",
-        "write_section",
         "add_chart",
         "add_image",
     }:
@@ -1335,14 +1703,15 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     # 3. Execute
     try:
         chapter_numbers = _extract_chapter_numbers(message)
+        chapter_request = "chapter" in lowered_message and len(chapter_numbers) >= 1
 
         if intent == "summarize_document":
             reply, updated = _summarize_document(document, message, plan)
         elif intent == "enhance_document":
             reply, updated = _enhance_document(document, topic, plan)
-        elif intent == "enhance_section" and len(chapter_numbers) > 1:
+        elif intent == "enhance_section" and chapter_request:
             reply, updated = _enhance_chapter_batch(document, chapter_numbers, topic, message, plan)
-        elif intent == "write_section" and len(chapter_numbers) > 1:
+        elif intent == "write_section" and chapter_request:
             reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, message, plan)
         elif intent == "enhance_section":
             reply, updated = _enhance_section(document, target_section, topic, message, plan)
@@ -1445,6 +1814,25 @@ def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, 
     return "No existing content found to enhance. Add text to sections first.", False
 
 
+
+def _personalize_plan_steps(plan: list, section_name: str) -> None:
+    """Replace generic plan step labels with section-specific text."""
+    name = section_name.strip("'").strip()
+    for step in plan:
+        s = step.get("step", "")
+        sl = s.lower()
+        if "locating" in sl:
+            step["step"] = f"Locating the section for '{name}'"
+        elif "analys" in sl and "content" in sl:
+            step["step"] = f"Analysing existing content in '{name}'"
+        elif "rewriting" in sl or ("clarity" in sl and "tone" in sl):
+            step["step"] = f"Rewriting '{name}' with improved clarity and academic tone"
+        elif "saving" in sl and "section" in sl:
+            step["step"] = f"Saving updated section '{name}'"
+        elif "generating" in sl or "inserting" in sl:
+            step["step"] = f"Generating content for '{name}'"
+
+
 def _enhance_section(
     document: Document,
     target: str | None,
@@ -1452,25 +1840,44 @@ def _enhance_section(
     instruction: str,
     plan: list,
 ) -> tuple[str, bool]:
+    query = (target or _extract_subsection_phrase(instruction) or "").strip()
+    if _is_generic_section_query(query):
+        query = "Introduction"
+    _personalize_plan_steps(plan, query)
+
+    chapter_numbers = _extract_chapter_numbers(f"{target or ''} {instruction} {query}")
+    chapter_hint = chapter_numbers[0] if chapter_numbers else None
+    if chapter_hint is None and any(
+        k in query.lower()
+        for k in [
+            "empirical review",
+            "conceptual review",
+            "theoretical framework",
+            "literature review",
+            "introduction",
+            "background of the study",
+        ]
+    ):
+        chapter_hint = 2 if "review" in query.lower() or "framework" in query.lower() else 1
+
+    # For dissertation sections, enhance by rewriting through structured to-do workflow.
+    if chapter_hint is not None:
+        return _write_section(document, query, topic, instruction, plan)
+
     _done(plan, 0)
-    query = target or _extract_subsection_phrase(instruction)
     idx = find_section(document.content, query)
     if idx is None:
         idx = _find_section_index_by_subsection(document, query)
 
-    # Section does not exist — write/generate it instead of erroring
     if idx is None:
         return _write_section(document, query, topic, instruction, plan)
 
     section = document.content["sections"][idx]
     original = (section.get("content") or "").strip()
-
-    # Section exists but is empty — write it fresh
     if not original:
         return _write_section(document, query, topic, instruction, plan)
 
     _done(plan, 1)
-
     enhance_instruction = (
         f"{instruction}\n\n"
         "Improve this section: fix grammar, strengthen academic tone, improve argument clarity "
@@ -1506,8 +1913,112 @@ def _write_section(
     instruction: str,
     plan: list,
 ) -> tuple[str, bool]:
+    query = (target or _extract_subsection_phrase(instruction) or "").strip()
+    query_l = query.lower()
+    _personalize_plan_steps(plan, query or instruction or "section")
+    chapter_numbers = _extract_chapter_numbers(f"{target or ''} {instruction}")
+    chapter_hint = chapter_numbers[0] if chapter_numbers else None
+
+    if chapter_hint is None and any(k in query_l for k in ["empirical review", "conceptual review", "theoretical framework", "literature review"]):
+        chapter_hint = 2
+
+    # If request maps to a dissertation chapter structure, generate through nested to-do workflow.
+    if chapter_hint is not None:
+        design = _research_design(instruction, topic, document)
+        objectives = _extract_objectives(document, topic)
+        chapter_title = _chapter_title_from_number(chapter_hint)
+        chapter_nodes = _chapter_nodes_for_generation(chapter_hint, design, objectives)
+
+        selected_node = _find_matching_node(chapter_nodes, query) if query and not _is_generic_section_query(query) else None
+        nodes_to_write = [selected_node] if selected_node else chapter_nodes
+        section_title = selected_node.get("title", chapter_title) if selected_node else chapter_title
+
+        plan.clear()
+        plan.append({"step": "Creating section to-do list", "status": "pending"})
+        plan.append({"step": f"Writing {section_title}", "status": "pending"})
+        _append_node_plan_steps(plan, nodes_to_write, depth=1)
+        _done(plan, 0)
+        _done(plan, 1)
+
+        sections = document.content.setdefault("sections", [])
+        chapter_idx = find_section(document.content, chapter_title)
+        if chapter_idx is None:
+            chapter_idx = find_section(document.content, f"Chapter {chapter_hint}")
+        if chapter_idx is None:
+            sections.append({"title": chapter_title, "content": ""})
+            chapter_idx = len(sections) - 1
+
+        chapter_payload = sections[chapter_idx]
+        plan_cursor = [2]
+        figure_counter = [_next_caption_number(document, "figure")]
+        table_counter = [_next_caption_number(document, "table")]
+        word_count = _chapter_word_count_target(chapter_hint, instruction, nodes_to_write)
+
+        def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
+            safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
+            if selected_node:
+                updated_content = _replace_subsection_if_present(
+                    chapter_payload.get("content", ""),
+                    subsection_query=selected_node.get("title", query),
+                    new_block=partial_text,
+                )
+                chapter_payload["content"] = updated_content or (
+                    (chapter_payload.get("content") or "").rstrip() + "\n\n" + partial_text
+                ).strip()
+            else:
+                chapter_payload["content"] = partial_text if partial_text.strip() else ""
+
+            if partial_blocks:
+                chapter_payload["blocks"] = partial_blocks
+            elif "blocks" in chapter_payload:
+                chapter_payload.pop("blocks", None)
+
+            document.content["sections"] = sections
+            _save(document, f"write-section:{section_title}:{safe_node}")
+
+        chapter_text, _, chapter_blocks = _execute_subsection_nodes(
+            nodes=nodes_to_write,
+            document=document,
+            section_title=chapter_title,
+            topic=topic,
+            research_design=design,
+            rolling_context=_full_context_for_generation(document),
+            plan=plan,
+            plan_cursor=plan_cursor,
+            figure_counter=figure_counter,
+            table_counter=table_counter,
+            on_node_completed=_persist_subsection_progress,
+            default_word_count=word_count,
+        )
+
+        if selected_node:
+            # chapter_text already starts with the subsection title from _execute_subsection_nodes
+            updated_content = _replace_subsection_if_present(
+                chapter_payload.get("content", ""),
+                subsection_query=selected_node.get("title", query),
+                new_block=chapter_text,
+            )
+            chapter_payload["content"] = updated_content or (
+                (chapter_payload.get("content") or "").rstrip() + "\n\n" + chapter_text
+            ).strip()
+        else:
+            chapter_payload["content"] = chapter_text if chapter_text.strip() else ""
+
+        if chapter_blocks:
+            chapter_payload["blocks"] = chapter_blocks
+        elif "blocks" in chapter_payload:
+            chapter_payload.pop("blocks", None)
+
+        document.content["sections"] = sections
+        _save(document, f"write-section:{section_title}")
+        _all_done(plan)
+        return (
+            f"Written '{section_title}' using dissertation-standard to-do execution and target length controls.",
+            True,
+        )
+
     _done(plan, 0)
-    section_name = target or instruction or "New Section"
+    section_name = query or instruction or "New Section"
     idx = find_section(document.content, section_name)
     _done(plan, 1)
 
@@ -1543,41 +2054,8 @@ def _enhance_chapter_batch(
     instruction: str,
     plan: list,
 ) -> tuple[str, bool]:
-    plan.clear()
-    plan.append({"step": "Preparing chapter correction queue", "status": "pending"})
-    for num in chapter_numbers:
-        plan.append({"step": f"Correcting Chapter {num}", "status": "pending"})
-
-    _done(plan, 0)
-    updated = False
-    touched: list[str] = []
-    sections = (document.content or {}).get("sections", [])
-
-    for idx, chapter_number in enumerate(chapter_numbers, start=1):
-        chapter_query = f"Chapter {chapter_number}"
-        sec_idx = find_section(document.content, chapter_query)
-        if sec_idx is None or sec_idx >= len(sections):
-            plan[idx]["status"] = "error"
-            continue
-
-        original = sections[sec_idx].get("content", "")
-        if not original.strip():
-            original = f"Discuss {chapter_query} for {topic}."
-
-        try:
-            rewritten = enhance_text(original, topic, instruction)
-        except Exception:
-            rewritten = _fallback_subsection_text(topic, chapter_query, chapter_query)
-
-        document.content = update_section(document.content, sec_idx, rewritten)
-        _save(document, f"enhance-section:{chapter_query}")
-        plan[idx]["status"] = "done"
-        updated = True
-        touched.append(chapter_query)
-
-    if touched:
-        return f"Corrected {len(touched)} chapter(s): {', '.join(touched)}.", True
-    return "No target chapters were found to correct.", updated
+    # For chapter-level correction requests, apply full dissertation chapter standards.
+    return _rewrite_chapter_batch(document, chapter_numbers, topic, instruction, plan)
 
 
 def _rewrite_chapter_batch(
@@ -1588,52 +2066,96 @@ def _rewrite_chapter_batch(
     plan: list,
 ) -> tuple[str, bool]:
     plan.clear()
-    plan.append({"step": "Preparing chapter rewrite queue", "status": "pending"})
-    for num in chapter_numbers:
-        plan.append({"step": f"Rewriting Chapter {num}", "status": "pending"})
+    plan.append({"step": "Creating chapter to-do list", "status": "pending"})
+
+    design = _research_design(instruction, topic, document)
+    objectives = _extract_objectives(document, topic)
+
+    chapter_blueprints: list[dict[str, Any]] = []
+    for chapter_number in chapter_numbers:
+        chapter_title = _chapter_title_from_number(chapter_number)
+        nodes = _chapter_nodes_for_generation(chapter_number, design, objectives)
+        chapter_blueprints.append({
+            "number": chapter_number,
+            "title": chapter_title,
+            "nodes": nodes,
+            "word_count": _chapter_word_count_target(chapter_number, instruction, nodes),
+        })
+
+    for chapter in chapter_blueprints:
+        plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
+        _append_node_plan_steps(plan, chapter["nodes"], depth=1)
 
     _done(plan, 0)
     updated = False
     rewritten_titles: list[str] = []
+    plan_cursor = [1]
+    figure_counter = [_next_caption_number(document, "figure")]
+    table_counter = [_next_caption_number(document, "table")]
 
-    for idx, chapter_number in enumerate(chapter_numbers, start=1):
-        chapter_title = _chapter_title_from_number(chapter_number)
-        chapter_template = next(
-            (
-                item for item in DISSERTATION_TEMPLATE
-                if _chapter_number_from_title(item.get("title", "")) == chapter_number
-            ),
-            None,
-        )
-        subsection_titles = (chapter_template or {}).get("subsections") or [f"{chapter_number}.1 Overview"]
-        try:
-            chapter_content = _build_section_content(
-                section_title=chapter_title,
-                subsection_titles=subsection_titles,
-                topic=topic,
-                context=f"User request: {instruction}\n\n{_full_context_for_generation(document)[:1600]}",
-            )
-        except Exception:
-            chapter_content = _fallback_subsection_text(topic, chapter_title, chapter_title)
+    sections = document.content.setdefault("sections", [])
+
+    for chapter in chapter_blueprints:
+        chapter_title = chapter["title"]
+        _done(plan, plan_cursor[0])
+        plan_cursor[0] += 1
 
         sec_idx = find_section(document.content, chapter_title)
         if sec_idx is None:
-            sec_idx = find_section(document.content, f"Chapter {chapter_number}")
+            sec_idx = find_section(document.content, f"Chapter {chapter['number']}")
 
-        if sec_idx is not None:
-            document.content = update_section(document.content, sec_idx, chapter_content)
-        else:
-            document.content.setdefault("sections", []).append(
-                {"title": chapter_title, "content": chapter_content}
-            )
+        if sec_idx is None:
+            sections.append({"title": chapter_title, "content": ""})
+            sec_idx = len(sections) - 1
 
+        section_payload = sections[sec_idx]
+        section_payload["content"] = ""
+        document.content["sections"] = sections
+        _save(document, f"rewrite-section:{chapter_title}:start")
+
+        def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
+            safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
+            content = partial_text if partial_text.strip() else ""
+            section_payload["content"] = content
+            if partial_blocks:
+                section_payload["blocks"] = partial_blocks
+            elif "blocks" in section_payload:
+                section_payload.pop("blocks", None)
+            document.content["sections"] = sections
+            _save(document, f"rewrite-section:{chapter_title}:{safe_node}")
+
+        chapter_text, _, chapter_blocks = _execute_subsection_nodes(
+            nodes=chapter["nodes"],
+            document=document,
+            section_title=chapter_title,
+            topic=topic,
+            research_design=design,
+            rolling_context=_full_context_for_generation(document),
+            plan=plan,
+            plan_cursor=plan_cursor,
+            figure_counter=figure_counter,
+            table_counter=table_counter,
+            on_node_completed=_persist_subsection_progress,
+            default_word_count=chapter["word_count"],
+        )
+
+        section_payload["content"] = chapter_text if chapter_text.strip() else ""
+        if chapter_blocks:
+            section_payload["blocks"] = chapter_blocks
+        elif "blocks" in section_payload:
+            section_payload.pop("blocks", None)
+        document.content["sections"] = sections
         _save(document, f"rewrite-section:{chapter_title}")
-        plan[idx]["status"] = "done"
+
         updated = True
         rewritten_titles.append(chapter_title)
 
     if rewritten_titles:
-        return f"Rewrote {len(rewritten_titles)} chapter(s): {', '.join(rewritten_titles)}.", True
+        return (
+            f"Rewrote {len(rewritten_titles)} chapter(s) using dissertation standards and nested to-do steps: "
+            f"{', '.join(rewritten_titles)}.",
+            True,
+        )
     return "No chapters were rewritten.", updated
 
 
@@ -1685,7 +2207,7 @@ def _write_dissertation(
         plan_cursor[0] += 1
 
         # Add chapter placeholder first so subsection updates are persisted progressively.
-        section_payload: dict[str, Any] = {"title": chapter_title, "content": chapter_title}
+        section_payload: dict[str, Any] = {"title": chapter_title, "content": ""}
         sections.append(section_payload)
         document.content = {
             "topic": topic,
@@ -1697,7 +2219,7 @@ def _write_dissertation(
 
         def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
             safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
-            content = f"{chapter_title}\n\n{partial_text}" if partial_text.strip() else chapter_title
+            content = partial_text if partial_text.strip() else ""
             section_payload["content"] = content
             if partial_blocks:
                 section_payload["blocks"] = partial_blocks
@@ -1716,6 +2238,7 @@ def _write_dissertation(
         ch_word_count = 500 if ch_num == 2 else 220
         chapter_text, _, chapter_blocks = _execute_subsection_nodes(
             nodes=chapter["nodes"],
+            document=document,
             section_title=chapter_title,
             topic=topic,
             research_design=design,
@@ -1728,8 +2251,8 @@ def _write_dissertation(
             default_word_count=ch_word_count,
         )
 
-        # Ensure chapter heading appears before chapter content in the editor body.
-        chapter_content = f"{chapter_title}\n\n{chapter_text}" if chapter_text.strip() else chapter_text
+        # chapter_text already contains subsection headings from _execute_subsection_nodes
+        chapter_content = chapter_text if chapter_text.strip() else ""
         section_payload = {"title": chapter_title, "content": chapter_content}
         if chapter_blocks:
             section_payload["blocks"] = chapter_blocks

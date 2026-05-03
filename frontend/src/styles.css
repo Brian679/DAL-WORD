@@ -1214,9 +1214,40 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 
 .doc-manual-editor--plain {
+  position: relative;
   padding: 0;
   border: none;
   background: transparent;
+}
+
+.doc-page-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.doc-page-break-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  border-top: 1px solid #8d9298;
+  border-bottom: 1px solid #8d9298;
+  background: rgba(176, 179, 184, 0.85);
+}
+
+.doc-page-number-chip {
+  position: absolute;
+  right: 10px;
+  z-index: 1;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #cfd3d8;
+  background: rgba(250, 251, 253, 0.96);
+  color: #59616d;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .doc-paper-editor {
@@ -2058,8 +2089,9 @@ ul { list-style: none; margin: 0; padding: 0; }
   }
 
   .doc-paper {
-    min-height: 0;
-    padding: 32px 24px;
+    width: min(816px, 98%);
+    min-height: auto;
+    padding: 0;
   }
 
   .doc-status-bar {
