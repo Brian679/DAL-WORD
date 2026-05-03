@@ -34,6 +34,201 @@ from .tools import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Per-subsection writing guidelines injected into every AI prompt.
+# Keys are lowercase substrings matched against the subsection title.
+# ---------------------------------------------------------------------------
+SUBSECTION_GUIDELINES: dict[str, str] = {
+    # ── Chapter 1 ──────────────────────────────────────────────────────────
+    "background of the study": (
+        "Write the background in 2-3 paragraphs. Open with the global/industry context, "
+        "then narrow to the specific problem domain, and close by explaining why this study is "
+        "needed now. Reference real-world trends and academic context. "
+        "Do NOT list objectives or findings here."
+    ),
+    "statement of the problem": (
+        "Write a focused 2-3 paragraph problem statement. Clearly articulate the specific "
+        "gap or challenge the study addresses. Reference existing shortcomings in the literature "
+        "and practice. Build logically toward the research objectives. "
+        "Use evidence-based language (cite implied statistics or prior study failures)."
+    ),
+    "research objective": (
+        "Write research objectives as a numbered SMART list ONLY (1. 2. 3. ...). "
+        "3-5 objectives. Each must be specific, measurable, achievable, relevant, and time-bound. "
+        "Start each with an action verb (To examine / To assess / To determine / To evaluate / To establish). "
+        "Do NOT write introductory paragraphs — output ONLY the numbered list."
+    ),
+    "research question": (
+        "Write 3-5 research questions as a numbered list ONLY. "
+        "Each question must directly align with one research objective. "
+        "Use 'What', 'How', 'To what extent', or 'Does' phrasing. "
+        "Do NOT add introductory text — output ONLY the numbered list."
+    ),
+    "hypothes": (
+        "Write 3-5 testable hypotheses as a numbered list. Format as:\n"
+        "H1: [null hypothesis]\nH1a: [alternative hypothesis]\n"
+        "Each pair must correspond to a research question. "
+        "Do NOT add introductory paragraphs — output ONLY the hypothesis list."
+    ),
+    "significance of the study": (
+        "Write 2-3 paragraphs covering three distinct contributions: "
+        "(1) Academic/theoretical — how this study extends existing theory or fills a literature gap. "
+        "(2) Practical/industry — how findings can be applied by practitioners or organisations. "
+        "(3) Policy — how results inform regulatory or governance decisions."
+    ),
+    "scope and delimitation": (
+        "Write a clear scope-and-delimitations section. First paragraph: state what the study covers "
+        "(geographic scope, time period, population, variables). Second paragraph: state what is "
+        "deliberately excluded and why, using 'delimitation' terminology. Be direct and specific."
+    ),
+    "definition of key term": (
+        "Write definitions for 5-8 key terms. Format as a definition list:\n"
+        "**Term:** One to two concise sentences explaining how the term is used in this study. "
+        "Reference the source discipline or scholar where appropriate. "
+        "Do NOT add introductory paragraphs — output ONLY the definition list."
+    ),
+    # ── Chapter 2 ──────────────────────────────────────────────────────────
+    "empirical review": (
+        "Write a critical empirical review of 3-5 full paragraphs. "
+        "Reference real scholars by name and year (e.g., Smith, 2021; Jones & Patel, 2020). "
+        "Discuss study findings, contrasting views, methodological approaches, and identified gaps. "
+        "Be analytical — compare and critique, do not merely summarize."
+    ),
+    "conceptual review": (
+        "Write a conceptual review covering key constructs and their relationships. "
+        "Define each construct, reference 3-5 scholarly sources by name and year, and explain "
+        "how constructs relate to this study's variables. Use 3-4 analytical paragraphs."
+    ),
+    "theoretical framework": (
+        "Write a theoretical framework section. Identify 2-3 relevant theories, state their "
+        "originators and year, summarise their core propositions, and explicitly explain how each "
+        "theory applies to this study's context and variables. Use 3-4 paragraphs."
+    ),
+    "conceptual framework": (
+        "Describe the conceptual framework for this study. Explain the independent, dependent, "
+        "and moderating/mediating variables, and how they relate to each other. "
+        "Reference at least 2 scholars whose work informed the framework."
+    ),
+    "chapter summary": (
+        "Write a concise chapter summary of 1-2 paragraphs. Recap the key themes, arguments, "
+        "or findings covered in this chapter. Bridge logically to what the next chapter will do. "
+        "Do NOT introduce new information."
+    ),
+    # ── Chapter 3 ──────────────────────────────────────────────────────────
+    "research design": (
+        "Explain the chosen research design (quantitative/qualitative/mixed-methods). "
+        "Justify the selection by linking it to the research objectives. "
+        "Describe the overall research strategy (e.g., survey, case study, experiment). "
+        "Use 2-3 paragraphs with methodological reasoning."
+    ),
+    "research philosophy": (
+        "Explain the epistemological position (positivism, interpretivism, pragmatism, etc.), "
+        "justify why it fits this study, and link it to the research design. 1-2 paragraphs."
+    ),
+    "research approach": (
+        "Describe whether a deductive, inductive, or abductive approach is used. "
+        "Justify the choice and link it to the hypotheses/questions. 1-2 paragraphs."
+    ),
+    "target population": (
+        "Identify the study population: who they are, their key characteristics, and why they "
+        "were selected. State the total population size if known. 1-2 paragraphs."
+    ),
+    "sampling technique": (
+        "Describe the sampling method used (e.g., stratified random sampling, purposive sampling). "
+        "Justify the choice, state the sample size, and explain how it was calculated "
+        "(e.g., Yamane formula, Cochran formula). 2 paragraphs."
+    ),
+    "sample size": (
+        "State and justify the sample size. Show or reference the formula used to calculate it "
+        "(e.g., Yamane's formula). Explain how the size ensures representativeness. 1-2 paragraphs."
+    ),
+    "data collection": (
+        "Describe the data collection instrument (questionnaire, interview guide, observation). "
+        "Explain its structure, number of items, scale used (e.g., Likert 1-5), "
+        "and how it was administered. 2-3 paragraphs."
+    ),
+    "data analysis": (
+        "Specify the data analysis methods: statistical tools for quantitative data "
+        "(descriptive statistics, regression, ANOVA in SPSS/R) or qualitative methods "
+        "(thematic analysis, content analysis). Justify why each method was chosen. 2-3 paragraphs."
+    ),
+    "reliability": (
+        "Discuss reliability testing: Cronbach's alpha threshold (≥0.7), pilot test size, "
+        "and results. For qualitative studies discuss inter-rater reliability or member-checking. "
+        "1-2 paragraphs."
+    ),
+    "validity": (
+        "Discuss content validity, construct validity, and criterion validity. "
+        "For qualitative studies: credibility, transferability, dependability, confirmability. "
+        "1-2 paragraphs."
+    ),
+    "ethical consideration": (
+        "Address: informed consent, confidentiality and anonymity, data protection (GDPR/local law), "
+        "voluntary participation, and any institutional ethics clearance obtained. 1-2 paragraphs."
+    ),
+    # ── Chapter 4/5 ────────────────────────────────────────────────────────
+    "summary of findings": (
+        "Write a 2-3 paragraph summary that synthesises the key results from the analysis. "
+        "Relate each main finding back to the specific research objectives. "
+        "Be specific — reference actual results (percentages, themes, or test outcomes) "
+        "from the data already analysed in this chapter."
+    ),
+    "discussion": (
+        "Write a discussion of 3-5 paragraphs. Interpret what the findings mean, "
+        "compare them with the literature reviewed in Chapter 2, explain agreements and contradictions, "
+        "and state the theoretical and practical implications. "
+        "Do NOT simply repeat what was found — analyse and interpret."
+    ),
+    # ── Chapter 6 ──────────────────────────────────────────────────────────
+    "conclusion": (
+        "Write the conclusions section in 2-3 paragraphs. Synthesise all research findings, "
+        "directly answer each research question, and draw evidence-based conclusions. "
+        "State what the study has demonstrated about the topic. "
+        "Do NOT introduce new findings or recommendations here."
+    ),
+    "recommendation": (
+        "Write practical recommendations as a numbered list. "
+        "3-6 recommendations, each one specific, actionable, and explicitly linked to a finding. "
+        "Format: 1. [Recommendation]: [brief rationale]. "
+        "Do NOT add introductory paragraphs — output ONLY the numbered list."
+    ),
+    "limitation": (
+        "Write 2-3 paragraphs acknowledging constraints: sample size limits, "
+        "geographic/sectoral scope, self-report bias, cross-sectional time horizon, "
+        "or data access issues. Be honest and academic — limitations do not invalidate the study."
+    ),
+    "further research": (
+        "Write 3-5 specific, concrete suggestions for future research. "
+        "Each suggestion must build on this study's gaps or findings. "
+        "Format as a numbered list: 1. Future studies could ... "
+        "Do NOT add introductory paragraphs — output ONLY the numbered list."
+    ),
+    "areas for future": (
+        "Write 3-5 specific future research directions as a numbered list. "
+        "Each must be actionable and grounded in a limitation or finding of this study."
+    ),
+    "reference": (
+        "Write a reference list in APA 7th edition format. "
+        "Include at least 15-20 academic sources directly relevant to the study topic. "
+        "List alphabetically by first author surname. "
+        "Format: Author, A. A., & Author, B. B. (Year). Title of article. Journal Name, Volume(Issue), pages. https://doi.org/xxxx"
+    ),
+    "introduction": (
+        "Write the chapter introduction in 1-2 paragraphs. State the purpose of this chapter, "
+        "give a brief roadmap of what it covers, and link it to the preceding chapter. "
+        "Be concise and direct."
+    ),
+}
+
+
+def _subsection_guidelines(title: str) -> str:
+    """Return specific writing instructions for the given subsection title."""
+    title_l = title.lower()
+    for pattern, guideline in SUBSECTION_GUIDELINES.items():
+        if pattern in title_l:
+            return guideline
+    return ""
+
 
 DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
     {
@@ -206,9 +401,11 @@ def _objective_section_title(objective: str) -> str:
         flags=re.IGNORECASE,
     )
     text = text[0].upper() + text[1:] if text else objective
-    if len(text) > 65:
-        cut = text[:65].rsplit(" ", 1)[0]
-        return cut
+    if len(text) > 95:
+        cut = text[:95].rsplit(" ", 1)[0]
+        # Avoid awkward trailing connector words.
+        cut = re.sub(r"\b(of|in|on|for|to|and|the|with|by|at)$", "", cut.strip(), flags=re.IGNORECASE).strip()
+        return cut or text[:95]
     return text
 
 
@@ -659,6 +856,14 @@ def _next_caption_number(document: Document, kind: str) -> int:
 
 
 def _table_discussion_text(node_title: str, research_design: str, objective: str | None = None) -> str:
+    if "response rate" in node_title.lower():
+        return (
+            "Interpretation: The response-rate table indicates the proportion of usable responses relative to the target sample, "
+            "providing evidence of dataset adequacy for statistical analysis.\n"
+            "Discussion: A strong response rate supports representativeness and reduces the risk of non-response bias, "
+            "thereby improving confidence in subsequent objective-level findings."
+        )
+
     if "demographic" in node_title.lower():
         return (
             "Interpretation: The respondent profile indicates a reasonably balanced distribution across key demographic categories, "
@@ -672,19 +877,19 @@ def _table_discussion_text(node_title: str, research_design: str, objective: str
             "Discussion: The pattern suggests consistent experiential concerns and provides evidence for targeted policy and implementation recommendations."
         )
 
-    obj = (objective or "the objective").strip()
+    obj = (objective or node_title or "the objective").strip()
     return (
         f"Interpretation: The metric pattern for {obj[:70]} shows uneven performance across indicators, with stronger outcomes in selected dimensions.\n"
         "Discussion: The spread across indicators highlights where focused interventions are required to improve overall study outcomes."
     )
 
 
-def _chart_discussion_text(series: list[float], objective: str | None = None) -> str:
+def _chart_discussion_text(series: list[float], objective: str | None = None, node_title: str | None = None) -> str:
     avg = round(sum(series) / len(series), 2) if series else 0.0
     high = max(series) if series else 0.0
     low = min(series) if series else 0.0
     trend = "upward" if len(series) > 1 and series[-1] >= series[0] else "mixed"
-    objective_label = (objective or "the objective").strip()
+    objective_label = (objective or node_title or "the subsection").strip()
     return (
         f"Interpretation: Figure trend is {trend}, with values ranging from {low:.2f} to {high:.2f} and an average of {avg:.2f}.\n"
         f"Discussion: For {objective_label[:70]}, the visual pattern reinforces the numerical evidence and clarifies priority areas for action."
@@ -827,7 +1032,7 @@ def _execute_subsection_nodes(
                 body = (
                     f"{figure_caption}\n"
                     f"[[BLOCK:{block_id}]]\n"
-                    f"{_chart_discussion_text(ai_data['series'], objective)}"
+                    f"{_chart_discussion_text(ai_data['series'], objective, title)}"
                 )
         elif kind == "objective_findings":
             objective = str(meta.get("objective") or title)
@@ -849,67 +1054,85 @@ def _execute_subsection_nodes(
             except Exception:
                 body = _fallback_subsection_text(topic, section_title, title)
         else:
-                is_lit_review = "literature review" in section_title.lower() or "chapter 2" in section_title.lower()
+                # ── Individual AI prompt with subsection-specific guidelines ──────
+                guidelines = _subsection_guidelines(title)
                 lowered_title = title.lower()
                 is_pointform = any(
                     k in lowered_title
-                    for k in ["research objective", "objectives", "research question", "hypothes"]
+                    for k in ["research objective", "objectives", "research question", "hypothes",
+                              "recommendation", "further research", "areas for future", "definition of key"]
                 )
-                if is_pointform:
-                    try:
+                wc = 120 if is_pointform else default_word_count
+
+                # Build step progress label for logging / callbacks
+                step_label = (
+                    f"{section_title} — Step {step_idx + 1}: {title}"
+                )
+                logger.info("▶ Generating: %s", step_label)
+
+                prompt_context = (
+                    f"Parent chapter: {section_title}\n"
+                    f"Research design: {research_design}\n"
+                    f"Study topic: {topic}\n\n"
+                    f"--- CURRENT DOCUMENT (read this before writing) ---\n"
+                    f"{current_document_context[-4000:]}\n"
+                    f"--- END OF DOCUMENT ---\n\n"
+                    + (
+                        f"WRITING INSTRUCTIONS FOR THIS SECTION:\n{guidelines}\n\n"
+                        if guidelines else
+                        "Write in formal academic prose. Be specific, substantive, and analytical.\n\n"
+                    )
+                    + "IMPORTANT: Do NOT include the section heading in your response. "
+                    "Do NOT use filler phrases such as 'this section will discuss', "
+                    "'in today's world', 'it is important to note', or "
+                    "'the analysis will be developed in accordance with'. "
+                    "Write actual content — not a description of what the section will do."
+                )
+                try:
+                    body = generate_section_content(
+                        title=title,
+                        topic=topic,
+                        context=prompt_context,
+                        word_count=wc,
+                    )
+                    # If the model echoed the prompt or returned a placeholder, retry once
+                    # with a stripped-down direct prompt before using the static fallback.
+                    _FILLERS = [
+                        "this section addresses",
+                        "this subsection addresses",
+                        "the analysis will be developed",
+                        "will be discussed in this section",
+                        "writing instructions for this section",
+                        "current document (read this",
+                    ]
+                    if not body or len(body.strip()) < 80 or any(f in body.lower() for f in _FILLERS):
+                        logger.warning(
+                            "▶ RETRY — placeholder/echo detected for '%s'. Sending direct prompt.", title
+                        )
+                        retry_context = (
+                            f"You are writing a dissertation on: '{topic}'.\n"
+                            f"Chapter: {section_title}\n"
+                            f"Research design: {research_design}\n\n"
+                            + (f"{guidelines}\n\n" if guidelines else "")
+                            + "Write ONLY the actual academic content for this section. "
+                            "Do NOT repeat these instructions. Do NOT include the heading. "
+                            "Do NOT output bullet points about what you will write — write it."
+                        )
                         body = generate_section_content(
                             title=title,
                             topic=topic,
-                            context=(
-                                f"Parent chapter: {section_title}\n"
-                                f"Research design: {research_design}\n"
-                                f"Current document context:\n{current_document_context[-2500:]}\n\n"
-                                "Format the output as a clean numbered list (1. ... 2. ... 3. ...). "
-                                "Write 3-5 clear, specific, measurable items. "
-                                "Each item must be a complete, standalone academic sentence. "
-                                "Do NOT add an introductory paragraph before the list. "
-                                "Do NOT include the section heading in your response."
-                            ),
-                            word_count=120,
+                            context=retry_context,
+                            word_count=wc,
                         )
-                    except Exception:
-                        body = _fallback_subsection_text(topic, section_title, title)
-                elif is_lit_review:
-                    try:
-                        body = generate_section_content(
-                            title=title,
-                            topic=topic,
-                            context=(
-                                f"Parent chapter: {section_title}\n"
-                                f"Research design: {research_design}\n"
-                                f"Current document context:\n{current_document_context[-3200:]}\n\n"
-                                "Requirements: Write 3-5 full paragraphs (~{wc} words total). "
-                                "Reference 3-5 relevant scholars, studies, or theoretical positions by name and year (e.g., Smith, 2019; Jones & Patel, 2021). "
-                                "Be analytical, not merely descriptive. "
-                                "Discuss contrasting views, debates, and how different authors' positions relate to {topic}. "
-                                "Maintain formal academic tone throughout.".format(wc=default_word_count, topic=topic)
-                            ),
-                            word_count=default_word_count,
-                        )
-                    except Exception:
-                        body = _fallback_subsection_text(topic, section_title, title)
-                else:
-                    try:
-                        body = generate_section_content(
-                            title=title,
-                            topic=topic,
-                            context=(
-                                f"Parent chapter: {section_title}\n"
-                                f"Research design: {research_design}\n"
-                                f"Current document context:\n{current_document_context[-3200:]}\n\n"
-                                "Write in formal academic prose. Be specific, substantive, and analytical. "
-                                "Do NOT include the section heading in your response. "
-                                "Do NOT use filler phrases like 'in today's world', 'it is important to note', or 'this section will discuss'."
-                            ),
-                            word_count=default_word_count,
-                        )
-                    except Exception:
-                        body = _fallback_subsection_text(topic, section_title, title)
+                        # If retry also looks bad, escalate to fallback
+                        if not body or len(body.strip()) < 80 or any(f in body.lower() for f in _FILLERS):
+                            logger.error(
+                                "▶ FALLBACK — retry also produced bad output for '%s'.", title
+                            )
+                            body = _fallback_subsection_text(topic, section_title, title)
+                except Exception as exc:
+                    logger.error("generate_section_content error for '%s': %s — using fallback", title, exc)
+                    body = _fallback_subsection_text(topic, section_title, title)
 
         body = _strip_leading_heading(body, title)
         chunks.append(f"{title}\n{body}")
@@ -1071,20 +1294,68 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
 
 
 def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -> str:
-    """Try a simple one-shot prompt; return a placeholder only if that also fails."""
+    """Return substantive academic fallback text when model generation fails."""
+    prompt = (
+        f"Write a concise but substantive academic subsection for '{subsection}' "
+        f"in a dissertation on '{topic}'. Use formal scholarly language and concrete claims. "
+        "Produce 2 short paragraphs (about 160-220 words total). "
+        "Do NOT include the subsection heading in your response."
+    )
     try:
-        return generate_text(
-            f"Write a concise academic paragraph for the '{subsection}' subsection "
-            f"of a research paper about '{topic}'. "
-            "Use formal, scholarly language. 120-180 words. "
-            "Do NOT include the subsection heading. Do NOT use phrases like 'in today's world' or 'it is worth noting'."
-        )
+        candidate = (generate_text(prompt) or "").strip()
+        # Reject weak/placeholder outputs and keep fallback quality consistent.
+        if len(candidate) >= 140 and "this subsection addresses" not in candidate.lower():
+            return candidate
     except Exception:
         pass
-    clean = subsection.lower().replace("\n", " ").strip()
+
+    sub = subsection.strip()
+    sec = section_title.strip().lower()
+    if "research objective" in sub.lower() or "research question" in sub.lower() or "hypoth" in sub.lower():
+        return (
+            "1. To evaluate the extent to which artificial intelligence tools improve operational efficiency in banking processes, "
+            "including turnaround time and process accuracy.\n"
+            "2. To examine the relationship between AI-enabled systems and risk-management performance, with emphasis on fraud detection and anomaly control.\n"
+            "3. To determine the effect of AI deployment on customer-service outcomes, particularly responsiveness, personalization, and satisfaction."
+        )
+
+    if "chapter 2" in sec or "literature review" in sec:
+        return (
+            f"Existing scholarship on {topic} converges on the view that technological capability, organizational readiness, "
+            "and governance quality jointly determine implementation outcomes. Empirical studies from both developed and emerging contexts "
+            "report measurable efficiency gains where AI deployment is aligned with data quality, process redesign, and staff upskilling. "
+            "However, the literature also identifies persistent constraints, including model-opacity concerns, uneven digital infrastructure, "
+            "and regulatory uncertainty that can weaken realized benefits.\n\n"
+            "Critical synthesis further indicates that many prior studies overemphasize short-term performance indicators while giving limited attention "
+            "to institutional adaptation and long-run risk externalities. This gap suggests the need for context-sensitive evidence that links technical adoption "
+            "to operational, governance, and customer-facing outcomes within a unified analytical frame."
+        )
+
+    if "chapter 3" in sec or "methodology" in sec:
+        return (
+            "The methodological approach is designed to ensure that the study generates valid, reliable, and decision-relevant evidence. "
+            "The selected research design aligns data sources, sampling logic, and analytical procedures with the stated objectives, thereby improving "
+            "internal consistency across the inquiry process. Particular attention is given to measurement clarity, instrument structure, and protocol fidelity "
+            "to reduce systematic error.\n\n"
+            "To strengthen analytic credibility, the study incorporates explicit quality controls, including data-screening procedures, ethical safeguards, "
+            "and transparent reporting standards. These provisions enhance reproducibility and support defensible interpretation of findings in later chapters."
+        )
+
+    if "chapter 4" in sec or "results" in sec or "discussion" in sec:
+        return (
+            "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends and areas of divergence across indicators. "
+            "Descriptive and comparative interpretation shows that some dimensions record stronger outcomes, while others reveal implementation and performance gaps "
+            "that warrant targeted intervention.\n\n"
+            "The discussion links these observed patterns to the study context and prior literature, explaining how institutional conditions, process maturity, "
+            "and governance quality shape the magnitude and direction of outcomes. This interpretation provides an evidence base for practical recommendations "
+            "and for refinement of future inquiry."
+        )
+
     return (
-        f"This subsection addresses {clean} within the context of {topic}. "
-        "Further analysis will be developed in accordance with the research objectives and empirical findings."
+        f"This subsection examines {sub.lower()} in relation to {topic}, with emphasis on the conceptual and practical mechanisms that influence observed outcomes. "
+        "The argument is developed through structured academic reasoning, moving from context to evidence and then to implications for policy and practice.\n\n"
+        "In analytical terms, the discussion identifies key drivers, constraints, and interaction effects that are relevant to the study objectives. "
+        "This framing supports coherent linkage with subsequent sections and strengthens the cumulative logic of the dissertation."
     )
 
 

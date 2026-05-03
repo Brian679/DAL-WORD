@@ -217,7 +217,7 @@ def generate_section_content(
     prompt = (
         f"Write a detailed academic section (~{word_count} words) titled '{title}' "
         f"for a research paper about: '{topic}'.\n"
-        f"{'Additional context: ' + context[:2000] if context else ''}\n"
+        f"{'Additional context:\n' + context[:5000] if context else ''}\n"
         "Use clear, formal academic language. Be specific, substantive, and analytical. "
         "Write with natural human flow: varied sentence lengths, precise claims, and grounded examples. "
         "Avoid filler, repeated sentence templates, and AI-sounding phrases such as 'in today's world', "
