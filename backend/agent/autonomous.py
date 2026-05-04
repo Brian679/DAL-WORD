@@ -1345,6 +1345,10 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     target = _extract_target()
     topic = None
 
+    # Single-word/copilot-like commands should map cleanly.
+    if text in {"analyze", "analyse", "summarize", "summarise", "summary"}:
+        return {"intent": "summarize_document", "target_section": None, "topic": None}
+
     if any(
         phrase in text
         for phrase in [
@@ -1359,13 +1363,61 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
             "analyze the document",
             "analyse this document",
             "analyze this document",
+            "look at the document",
+            "look at this document",
+            "look through the document",
+            "look over the document",
+            "check the document",
+            "assess the document",
+            "evaluate the document",
             "review the document",
             "examine the document",
             "analyse document",
             "analyze document",
+            "look at document",
+            "check document",
+            "evaluate document",
+            "assess document",
         ]
     ):
         return {"intent": "summarize_document", "target_section": None, "topic": None}
+
+    # Flexible catch-all for document-analysis requests phrased in many natural ways.
+    if (
+        "document" in text
+        and any(k in text for k in ["analys", "analyz", "review", "examine", "assess", "evaluate", "look at", "look over", "look through", "check"])
+        and not _has_explicit_edit_instruction(text)
+    ):
+        return {"intent": "summarize_document", "target_section": None, "topic": None}
+
+    if _is_document_take_request(text):
+        return {"intent": "summarize_document", "target_section": None, "topic": None}
+
+    if _is_improvement_review_request(text):
+        return {"intent": "summarize_document", "target_section": None, "topic": None}
+
+    if any(
+        phrase in text
+        for phrase in [
+            "enhance document",
+            "improve document",
+            "correct document",
+            "fix document",
+            "edit document",
+            "revise document",
+            "polish document",
+            "enhance the document",
+            "improve the document",
+            "correct the document",
+            "fix the document",
+            "edit the document",
+            "revise the document",
+            "polish the document",
+            "improve all sections",
+            "enhance all sections",
+        ]
+    ):
+        return {"intent": "enhance_document", "target_section": None, "topic": None}
 
     dissertation_triggers = [
         "full dissertation",
@@ -1443,6 +1495,8 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "write it again", "write it back", "write again",
         "generate the", "regenerate the",
     ]):
+        if any(k in text for k in ["document", "whole document", "entire document", "full document", "all sections"]):
+            return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
     # ── Section-keyword detection ────────────────────────────────────────────
@@ -1454,7 +1508,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         (["statement of the problem", "problem statement"], "Statement of the Problem"),
         (["research objectives", "research objective"], "Research Objectives"),
         (["research questions", "research question"], "Research Questions"),
-        (["significance of the study", "significance of study"], "Significance of the Study"),
+        (["significance of the study", "significance of study", "signifance of the study", "signifance"], "Significance of the Study"),
         (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
         (["definition of key terms", "key terms"], "Definition of Key Terms"),
         (["conceptual review", "conceptual framework"], "Conceptual Review"),
@@ -1498,6 +1552,259 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     return {"intent": "chat", "target_section": None, "topic": None}
 
 
+def _is_pure_chat_question(message: str) -> bool:
+    """Return True when the message is obviously a conversational question or explanation
+    request that should NEVER trigger document writes — regardless of what the LLM thinks."""
+    text = (message or "").strip().lower()
+
+    # Hard-fail if any write-action verb is present — these are document commands
+    write_verbs = [
+        "write", "redo", "rewrite", "generate", "create", "add", "insert",
+        "update", "replace", "improve", "enhance", "fix", "correct", "draft",
+        "produce", "build",
+    ]
+    if any(v in text for v in write_verbs):
+        return False
+
+    # Explicit question/explanation prefixes → always chat
+    chat_prefixes = [
+        "explain ", "what is ", "what are ", "what does ", "what do ",
+        "how does ", "how do ", "how is ", "how are ", "how can ",
+        "describe ", "tell me about ", "tell me what ", "tell me how ",
+        "can you explain ", "can you describe ", "could you explain ",
+        "why is ", "why are ", "why does ", "why do ",
+        "when is ", "when are ", "when was ", "when were ",
+        "who is ", "who are ", "who was ",
+        "is it ", "is there ", "are there ",
+        "define ", "meaning of ", "definition of ",
+        "give me an overview", "give me a summary", "summarize ",
+        "summarise ", "overview of ",
+    ]
+    if any(text.startswith(p) for p in chat_prefixes):
+        return True
+
+    # Pure question ending in "?"
+    if text.endswith("?"):
+        return True
+
+    return False
+
+
+def _is_improvement_review_request(message: str) -> bool:
+    """
+    Return True for review-only requests that ask to identify weaknesses/gaps
+    without applying edits, e.g. "look for areas of improvement".
+    """
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+
+    review_signals = [
+        "areas of improvement",
+        "area of improvement",
+        "improvement areas",
+        "areas that need improvement",
+        "what needs improvement",
+        "where can this be improved",
+        "where can i improve",
+        "look for areas of improvement",
+        "identify weaknesses",
+        "identify gaps",
+        "find gaps",
+        "find weaknesses",
+        "find issues",
+        "spot issues",
+        "check weaknesses",
+        "check for gaps",
+        "quality review",
+        "review for improvement",
+        "review and suggest improvements",
+        "suggest improvements",
+        "suggest areas for improvement",
+        "critique the document",
+        "feedback on the document",
+        "assess this document",
+        "evaluate this document",
+        "audit this document",
+    ]
+
+    # Commands that explicitly request edits should not be treated as review-only.
+    explicit_edit_signals = [
+        "rewrite",
+        "redo",
+        "write",
+        "regenerate",
+        "replace",
+        "update",
+        "apply changes",
+        "make changes",
+        "edit section",
+        "improve the document",
+        "enhance the document",
+        "fix the document",
+        "correct the document",
+    ]
+
+    if any(s in text for s in explicit_edit_signals):
+        return False
+
+    if any(s in text for s in review_signals):
+        return True
+
+    # Catch short variants like "look for improvements" / "areas to improve"
+    return (
+        ("look for" in text or "identify" in text or "find" in text or "review" in text)
+        and ("improv" in text or "weakness" in text or "gap" in text or "issue" in text)
+    )
+
+
+def _is_document_take_request(message: str) -> bool:
+    """
+    Return True for conversational document-opinion requests such as:
+    "what's your take on the document?" / "what do you think about it?"
+    """
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+
+    strong_signals = [
+        "what's your take",
+        "what is your take",
+        "your take on",
+        "what do you think about",
+        "what do you think of",
+        "what are your thoughts",
+        "your thoughts on",
+        "give me your take",
+        "give me your thoughts",
+        "what's your opinion",
+        "what is your opinion",
+        "your opinion on",
+        "how does this look",
+        "how good is this",
+        "is this good",
+        "is this okay",
+        "does this read well",
+    ]
+
+    doc_ref = any(k in text for k in ["document", "proposal", "draft", "chapter", "thesis", "it"])
+    take_or_opinion = any(k in text for k in ["take", "opinion", "thought", "think", "feedback", "assessment"])
+    ask_shape = text.endswith("?") or text.startswith(("what", "how", "do you", "can you", "could you"))
+
+    if any(s in text for s in strong_signals):
+        return True
+
+    return doc_ref and take_or_opinion and ask_shape
+
+
+def _has_explicit_edit_instruction(message: str) -> bool:
+    """Return True when the user explicitly asks the agent to modify document content."""
+    text = (message or "").strip().lower()
+    edit_signals = [
+        "rewrite",
+        "redo",
+        "write",
+        "regenerate",
+        "replace",
+        "update",
+        "apply changes",
+        "make changes",
+        "edit",
+        "enhance",
+        "fix",
+        "correct",
+        "insert",
+        "add section",
+        "change the",
+    ]
+    return any(s in text for s in edit_signals)
+
+
+def _is_document_grounded_chat_request(message: str) -> bool:
+    """
+    Return True for broad conversational requests that should still be answered
+    with reference to the current document content.
+    """
+    text = (message or "").strip().lower()
+    if not text:
+        return False
+
+    if _has_explicit_edit_instruction(text):
+        return False
+
+    document_refs = [
+        "document",
+        "this",
+        "it",
+        "proposal",
+        "draft",
+        "chapter",
+        "thesis",
+        "paper",
+    ]
+    analysis_refs = [
+        "take",
+        "think",
+        "opinion",
+        "thought",
+        "gap",
+        "issue",
+        "weakness",
+        "strength",
+        "feedback",
+        "assessment",
+        "review",
+        "evaluate",
+        "what do you see",
+        "what do you notice",
+        "what stands out",
+    ]
+
+    has_doc_ref = any(k in text for k in document_refs)
+    has_analysis_ref = any(k in text for k in analysis_refs)
+    conversational_shape = text.endswith("?") or text.startswith(
+        ("what", "how", "why", "can you", "could you", "do you", "tell me")
+    )
+
+    return has_doc_ref and (has_analysis_ref or conversational_shape)
+
+
+def _document_grounded_chat_response(message: str, doc_context: str) -> str:
+    """Generate a flexible, conversational reply grounded in the actual document."""
+    msg_lower = (message or "").strip().lower()
+    # Detect hint/tip/clue/next-step type requests
+    hint_mode = any(w in msg_lower for w in [
+        "hint", "tip", "clue", "nudge", "suggestion", "suggest", "next step",
+        "what should i do", "what do i do", "help me", "not sure", "stuck",
+        "direction", "guide me", "point me",
+    ])
+    if hint_mode:
+        instruction = (
+            "The user wants a hint or nudge. Look at the document and identify the "
+            "single most impactful area that needs work (e.g., a weak section, a missing element, "
+            "a gap in argumentation). Give ONE specific, actionable hint referencing the actual "
+            "content. Be direct and concrete — name the section/chapter and say exactly what to do. "
+            "Do NOT list multiple things. Do NOT say 'I can help with that'. "
+            "Start with 'Here\'s a hint:' or 'One thing to focus on:'. Keep it to 3-5 sentences."
+        )
+    else:
+        instruction = (
+            "Answer the user conversationally, but stay grounded in the document content below. "
+            "If the user asks generally, give: (1) what you notice, (2) key strengths/weaknesses, "
+            "and (3) practical next steps. "
+            "Reference actual section/chapter titles when available. "
+            "Do NOT output workflow/planning text. Do NOT ask for more information. "
+            "Keep it concise and useful (about 5-9 sentences)."
+        )
+    prompt = (
+        f"You are a helpful, human-sounding academic assistant.\n"
+        f"{instruction}\n\n"
+        f"User message: {message}\n\n"
+        f"Document:\n{doc_context[:15000]}"
+    )
+    return chat_with_document(prompt, doc_context)
+
+
 def _explicit_section_target_from_message(message: str) -> str | None:
     """Return a concrete section target when the user clearly names one."""
     text = (message or "").strip().lower()
@@ -1515,7 +1822,7 @@ def _explicit_section_target_from_message(message: str) -> str | None:
         (["statement of the problem", "problem statement"], "Statement of the Problem"),
         (["research objective", "research objectives"], "Research Objectives"),
         (["research question", "research questions"], "Research Questions"),
-        (["significance of the study", "significance of study"], "Significance of the Study"),
+        (["significance of the study", "significance of study", "signifance of the study", "signifance"], "Significance of the Study"),
         (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
         (["definition of key terms", "key terms"], "Definition of Key Terms"),
         (["conceptual review", "conceptual framework"], "Conceptual Review"),
@@ -1712,6 +2019,36 @@ def _replace_subsection_if_present(section_text: str, subsection_query: str, new
     return section_text[:start] + new_block.strip() + "\n\n" + section_text[end:]
 
 
+def _extract_subsection_block_if_present(section_text: str, subsection_query: str) -> tuple[str, str] | None:
+    """Return (heading, body) for a matched subsection inside a larger section."""
+    positions = _heading_positions(section_text)
+    if not positions:
+        return None
+
+    query = (subsection_query or "").lower().strip()
+    query_num_match = re.search(r"\b\d+(?:\.\d+)*\b", query)
+    query_num = query_num_match.group(0) if query_num_match else None
+
+    hit_index = None
+    for idx, (_, end_pos, heading) in enumerate(positions):
+        heading_l = heading.lower()
+        heading_num_match = re.search(r"\b\d+(?:\.\d+)*\b", heading_l)
+        heading_num = heading_num_match.group(0) if heading_num_match else None
+        if (query_num and heading_num == query_num) or (query and query in heading_l):
+            hit_index = idx
+            break
+
+    if hit_index is None:
+        return None
+
+    start = positions[hit_index][0]
+    heading_end = positions[hit_index][1]
+    end = positions[hit_index + 1][0] if hit_index + 1 < len(positions) else len(section_text)
+    heading = section_text[start:heading_end].strip()
+    body = section_text[heading_end:end].strip()
+    return heading, body
+
+
 def _extract_subsection_phrase(instruction: str) -> str:
     text = (instruction or "").lower()
     subsection_num = re.search(r"\b\d+\.\d+(?:\.\d+)*\b", text)
@@ -1726,7 +2063,7 @@ def _extract_subsection_phrase(instruction: str) -> str:
         (("research objectives", "research objective"), "Research Objectives"),
         (("research questions", "research question"), "Research Questions"),
         (("research hypotheses", "hypotheses", "hypothesis", "null hypothesis", "alternative hypothesis", "h0", "h1"), "Research Hypotheses"),
-        (("significance of the study", "significance of study"), "Significance of the Study"),
+        (("significance of the study", "significance of study", "signifance of the study", "signifance"), "Significance of the Study"),
         (("scope and delimitations", "scope of the study", "delimitations"), "Scope and Delimitations"),
         (("definition of key terms", "key terms"), "Definition of Key Terms"),
         (("conceptual review", "conceptual framework"), "Conceptual Review"),
@@ -1999,6 +2336,7 @@ def _find_section_index_by_subsection(document: Document, query: str) -> int | N
             "research questions",
             "research hypotheses",
             "significance",
+            "signifance",
             "scope",
             "key terms",
             "introduction",
@@ -2120,39 +2458,336 @@ def _compact_doc_summary(document: Document) -> str:
     return "\n".join(lines)
 
 
+def _sanitize_chat_reply(text: str) -> str:
+    """Remove prompt-echo artifacts and repetitive boilerplate from model output."""
+    if not text:
+        return ""
+
+    lines = (text or "").splitlines()
+    cleaned: list[str] = []
+    seen: dict[str, int] = {}
+    blank_run = 0
+
+    blocked_prefixes = (
+        "user:",
+        "assistant:",
+        "user request:",
+        "i. introduction",
+        "ii. introduction",
+        "here is a detailed response",
+        "here is the reorganized",
+        "here is the revised",
+        "here is the rewritten",
+        "here is the completed",
+        "here is the updated",
+        "here is the restructured",
+        "here is a reorganized",
+        "the completed document now",
+        "the reorganized document",
+        "please provide a detailed",
+        "please provide an in-depth",
+        "please provide a thorough",
+        "please provide a comprehensive",
+        "please provide a brief",
+        "please provide the following",
+        "please give me a detailed",
+        "please reorganize",
+        "please restructure",
+        "please rewrite",
+        "please revise",
+        "please review",
+        "please complete these",
+        "please go ahead",
+        "please do not remove",
+        "i would like you to provide",
+        "i need you to provide",
+        "i need you to reorganize",
+        "i need you to restructure",
+        "i want you to provide",
+        "could you please provide",
+        "can you please provide",
+        "provide a detailed analysis",
+        "provide a thorough analysis",
+        "however, i noticed",
+        "however, there are still",
+        "to fix this issue",
+        "to be inserted",
+        "note: please",
+    )
+
+    # Hard-cut at ANY instruction-injection pattern mid-text
+    _injection_pattern = re.compile(
+        r"(?:^|\n)("
+        r"i\.\s*introduction|ii\.\s*introduction|"
+        r"##\s*step\s*\d+|"
+        r"please provide|please reorganize|please restructure|please complete|"
+        r"please rewrite|please revise|please review|"
+        r"please go ahead|please do not|"
+        r"could you please|can you please|"
+        r"i would like you to|i need you to|i want you to|"
+        r"here is the reorganized|here is the revised|here is the rewritten|here is the completed|"
+        r"here is the updated|here is the restructured|"
+        r"project objectives|expected outcomes|timeline|resources|"
+        r"the completed document now|however, i noticed|however, there are still|"
+        r"to fix this issue|note: please"
+        r")",
+        re.IGNORECASE,
+    )
+    injection_match = _injection_pattern.search(text)
+    if injection_match:
+        text = text[: injection_match.start()].rstrip()
+        if not text:
+            return ""
+
+    lines = text.splitlines()
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        normalized = re.sub(r"\s+", " ", line.strip().lower())
+
+        if not normalized:
+            blank_run += 1
+            if blank_run <= 1:
+                cleaned.append("")
+            continue
+
+        blank_run = 0
+
+        if any(normalized.startswith(prefix) for prefix in blocked_prefixes):
+            continue
+
+        # Keep at most 2 occurrences of an identical non-empty line.
+        count = seen.get(normalized, 0) + 1
+        seen[normalized] = count
+        if count > 2:
+            continue
+
+        cleaned.append(line)
+
+    # Trim excessive trailing repetition if the answer collapsed into loops.
+    non_empty = [ln for ln in cleaned if ln.strip()]
+    if len(non_empty) >= 18:
+        unique_ratio = len({re.sub(r"\s+", " ", ln.strip().lower()) for ln in non_empty}) / len(non_empty)
+        if unique_ratio < 0.45:
+            deduped: list[str] = []
+            local_seen: set[str] = set()
+            for ln in non_empty:
+                key = re.sub(r"\s+", " ", ln.strip().lower())
+                if key in local_seen:
+                    continue
+                local_seen.add(key)
+                deduped.append(ln)
+                if len(deduped) >= 28:
+                    break
+            return "\n".join(deduped).strip()
+
+    # Guard against repetitive coaching loops like
+    # "What should I do next? / You should now ..."
+    low = "\n".join(cleaned).lower()
+    coaching_hits = re.findall(
+        r"what should i do next|you should now|i have (?:reviewed|proofread|formatted|submitted|received|revised|finalized|completed)",
+        low,
+    )
+    if len(coaching_hits) >= 3:
+        cut = re.search(r"(?:^|\n)(what should i do next|you should now)", low)
+        if cut:
+            trimmed = "\n".join(cleaned)
+            trimmed = trimmed[: cut.start()].strip()
+            if trimmed:
+                return trimmed
+            return ""
+
+    return "\n".join(cleaned).strip()
+
+
+def _looks_like_workflow_or_prompt_echo(text: str) -> bool:
+    """Detect non-answer artifacts (workflow templates, rewrite prompts, coaching loops)."""
+    low = (text or "").lower()
+    if not low.strip():
+        return True
+
+    artifact_patterns = [
+        r"\b##\s*step\s*\d+\b",
+        r"\bstep\s*\d+\s*:\s*",
+        r"\bproject objectives\b",
+        r"\bexpected outcomes\b",
+        r"\btimeline\b",
+        r"\bresources\b",
+        r"\bplease\s+(rewrite|revise|review|provide)\b",
+        r"\bhere is the rewritten\b",
+        r"\bi\.\s*introduction\b",
+        r"\bwhat should i do next\b",
+        r"\byou should now\b",
+    ]
+    hits = sum(1 for pat in artifact_patterns if re.search(pat, low, flags=re.IGNORECASE))
+
+    # Too many imperative/procedural lines indicates the model is continuing an old workflow.
+    imperative_lines = 0
+    for ln in low.splitlines():
+        s = ln.strip()
+        if s.startswith(("please ", "rewrite ", "review ", "revise ", "step ")):
+            imperative_lines += 1
+
+    return hits >= 2 or imperative_lines >= 3
+
+
+def _rule_based_document_feedback(document: Document, mode: str) -> str:
+    """
+    Deterministic fallback for summary/review/take modes when model output is noisy.
+    mode: 'analysis' | 'improvement' | 'take'
+    """
+    sections = (document.content or {}).get("sections", [])
+    title = (document.title or "This document").strip()
+    topic = ((document.content or {}).get("topic") or title).strip()
+
+    if not sections:
+        if mode == "improvement":
+            return "- The document has no sections yet, so there is no structure to evaluate.\n- Add core sections first (Introduction, Methodology, Findings, Conclusion) before quality review."
+        return (
+            f"The document titled '{title}' is currently empty. "
+            "There is no section content to assess yet. "
+            "Start by adding an introduction, core body sections, and a conclusion."
+        )
+
+    titles = [str(s.get("title") or "Untitled section") for s in sections]
+    non_empty = [s for s in sections if (s.get("content") or "").strip()]
+    empty_titles = [str(s.get("title") or "Untitled section") for s in sections if not (s.get("content") or "").strip()]
+
+    has_intro = any("introduction" in t.lower() for t in titles)
+    has_method = any("method" in t.lower() or "research design" in t.lower() for t in titles)
+    has_conclusion = any("conclusion" in t.lower() for t in titles)
+    has_refs = any("reference" in t.lower() for t in titles)
+
+    if mode == "improvement":
+        points: list[str] = []
+        if empty_titles:
+            points.append(f"- Empty or underdeveloped sections: {', '.join(empty_titles[:4])}.")
+        if not has_intro:
+            points.append("- Missing a clear Introduction section to frame purpose, scope, and context.")
+        if not has_method:
+            points.append("- Methodology/Research Design is unclear or missing, which weakens credibility.")
+        if not has_conclusion:
+            points.append("- No explicit Conclusion section that synthesizes findings and implications.")
+        if not has_refs:
+            points.append("- References section is missing, which affects academic completeness.")
+        if len(non_empty) < max(2, len(sections) // 2):
+            points.append("- Content depth is uneven across sections; several parts need fuller development.")
+        if not points:
+            points.append("- Overall structure is present, but argument flow between sections can be tightened.")
+            points.append("- Strengthen evidence support in major claims and improve transitions between sections.")
+        return "\n".join(points[:8])
+
+    sections_preview = ", ".join(titles[:6]) + ("..." if len(titles) > 6 else "")
+    strengths: list[str] = []
+    if has_intro:
+        strengths.append("the document has a recognizable opening structure")
+    if has_method:
+        strengths.append("it includes methodological framing")
+    if len(non_empty) >= 3:
+        strengths.append("several sections already contain substantive content")
+
+    gaps: list[str] = []
+    if empty_titles:
+        gaps.append(f"some sections are still thin or empty, especially {', '.join(empty_titles[:2])}")
+    if not has_conclusion:
+        gaps.append("there is no clear conclusion that closes the argument")
+    if not has_refs:
+        gaps.append("references are not clearly documented")
+    if not gaps:
+        gaps.append("the strongest opportunity is improving flow and precision across sections")
+
+    if mode == "take":
+        return (
+            f"My take on your document about {topic}: it has a workable foundation. "
+            f"I can see these sections already in place: {sections_preview}. "
+            f"What is working is that {('; '.join(strengths) if strengths else 'the core topic is identifiable')}. "
+            f"The main gap is that {gaps[0]}. "
+            "Next, tighten section-to-section transitions so the narrative reads as one argument. "
+            "Then expand weak sections with concrete evidence, not placeholders. "
+            "Finally, end with a direct conclusion plus references so the document feels academically complete."
+        )
+
+    return (
+        f"This document focuses on {topic} and currently has {len(sections)} section(s). "
+        f"The visible structure includes: {sections_preview}. "
+        f"A key strength is that {('; '.join(strengths) if strengths else 'the topic direction is clear')}. "
+        f"The main weakness is that {gaps[0]}. "
+        "To improve quality, strengthen evidence-backed argumentation in weaker sections. "
+        "Also improve coherence by making transitions explicit and aligning each section to the overall objective."
+    )
+
+
 def _summarize_document(document: Document, user_message: str, plan: list) -> tuple[str, bool]:
     if plan:
         _done(plan, 0)
     doc_context = _flatten_doc(document, truncate=False)
     msg_lower = user_message.lower()
-    if any(w in msg_lower for w in ["analys", "analyze", "review", "examine"]):
-        task_instruction = (
-            "Provide a thorough academic analysis of this document. Cover:\n"
-            "1. Overview of the topic and main argument\n"
-            "2. Structure and organisation (chapters/sections present, logical flow)\n"
-            "3. Strength of content in each chapter\n"
-            "4. Gaps, weaknesses, or areas needing improvement\n"
-            "5. Language and academic writing quality\n"
-            "6. Overall assessment and specific recommendations\n"
-            "Be specific — reference actual section titles and content from the document."
+    is_analysis = any(w in msg_lower for w in ["analys", "analyze", "review", "examine"])
+    is_improvement_review = _is_improvement_review_request(user_message)
+    is_take_request = _is_document_take_request(user_message)
+
+    if is_improvement_review:
+        summary_prompt = (
+            "Review this academic document and list ONLY the areas that need improvement. "
+            "Return 4-8 concise bullet points. "
+            "Each bullet should name the weak section and the specific issue. "
+            "Reference actual section titles when available. "
+            "Do NOT rewrite the document. Do NOT ask for more information. "
+            "Do NOT include workflow or planning text."
+        )
+    elif is_take_request:
+        summary_prompt = (
+            "Give your take on this academic document in a human, conversational tone. "
+            "Write 6-9 sentences total. "
+            "Include: what is working well (1-2 points), the main gaps you notice (2-3 points), "
+            "and concrete next improvements the user should do now (2-3 actions). "
+            "Reference section/chapter titles where possible. "
+            "Do NOT rewrite the document. Do NOT ask for more information. "
+            "Do NOT output workflow or planning text."
+        )
+    elif is_analysis:
+        summary_prompt = (
+            "Analyse this academic document briefly in 4-7 sentences maximum. Cover:\n"
+            "• What is in the document (topic + key sections/chapters)\n"
+            "• 1-2 strengths\n"
+            "• 2-3 concrete areas for improvement\n"
+            "• One immediate next action\n"
+            "Reference actual section titles. Be direct and concise. "
+            "Do NOT ask for more information. Do NOT repeat this prompt. Write the analysis now."
         )
     else:
-        task_instruction = (
-            "Write a clear, concise summary of this document. Include:\n"
-            "1. The main topic and purpose\n"
-            "2. Key points covered in each chapter or section\n"
-            "3. Main findings or conclusions\n"
-            "Be specific — reference actual section titles and content from the document."
+        summary_prompt = (
+            "Summarise this academic document in 4-6 sentences. Include the main topic, "
+            "the chapters/sections covered, and the key conclusions. "
+            "Reference actual section titles. Be direct and concise. "
+            "Do NOT ask for more information. Write the summary now."
         )
-    summary_prompt = (
-        f"{task_instruction}\n\n"
-        f"User request: \"{user_message}\"\n"
-        "Do NOT modify the document. Respond in plain prose."
-    )
+
     try:
         reply = chat_with_document(summary_prompt, doc_context)
     except Exception:
-        reply = _compact_doc_summary(document)
+        mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+        reply = _rule_based_document_feedback(document, mode)
+
+    reply = _sanitize_chat_reply(reply)
+    if not reply:
+        mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+        reply = _rule_based_document_feedback(document, mode)
+    else:
+        if _looks_like_workflow_or_prompt_echo(reply):
+            mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+            reply = _rule_based_document_feedback(document, mode)
+
+        # Final safety net: if output still looks like repetitive coaching chain, replace it.
+        low = reply.lower()
+        loop_hits = re.findall(
+            r"what should i do next|you should now|i have (?:reviewed|proofread|formatted|submitted|received|revised|finalized|completed)",
+            low,
+        )
+        if len(loop_hits) >= 3:
+            mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+            reply = _rule_based_document_feedback(document, mode)
+
     if plan:
         _all_done(plan)
     return reply, False
@@ -2160,12 +2795,31 @@ def _summarize_document(document: Document, user_message: str, plan: list) -> tu
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _strip_injected_instructions(text: str) -> str:
+    """Remove lines that are injected prompt instructions rather than document content."""
+    _re = re.compile(
+        r"^\s*("
+        r"please\s+(provide|reorganize|restructure|complete|go ahead|do not)|"
+        r"i\s+(need|want|would like)\s+you\s+to|"
+        r"could you please|can you please|"
+        r"here is (the|a) (reorganized|revised|completed|updated|restructured)|"
+        r"the completed document now|"
+        r"however,?\s+(i noticed|there are still)|"
+        r"to fix this issue|note:\s*please|"
+        r"to be inserted"
+        r")",
+        re.IGNORECASE,
+    )
+    lines = [ln for ln in text.splitlines() if not _re.match(ln)]
+    return "\n".join(lines).strip()
+
+
 def _flatten_doc(document: Document, truncate: bool = False) -> str:
     content = document.content or {}
     parts = [f"Title: {document.title}"]
     for section in content.get("sections", []):
         title = section.get("title", "")
-        body = section.get("content", "")
+        body = _strip_injected_instructions(section.get("content", ""))
         if title:
             parts.append(f"\n## {title}")
         if body:
@@ -2208,9 +2862,12 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
 
     # 1. Classify intent
     intent_data = _heuristic_intent(message)
-    if intent_data.get("intent") == "chat":
+    # Only call the LLM classifier if heuristic returned chat AND the message is NOT
+    # a pure question/explanation (those must stay as chat — the LLM sometimes
+    # misclassifies "explain X" or "what is X" as write_section).
+    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(message):
         intent_data = classify_intent(message, doc_context)
-    if intent_data.get("intent") == "chat":
+    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(message):
         heur = _heuristic_intent(message)
         if heur.get("intent") != "chat":
             intent_data = heur
@@ -2223,8 +2880,23 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     )
     topic = re.sub(r"^on\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
 
-    # Safety guard: explicit section-target edit requests must remain section-scoped.
+    # Force review-only phrasing to analysis mode (no edits, no Copilot edit workflow).
+    if _is_improvement_review_request(message):
+        intent = "summarize_document"
+        target_section = None
+
+    # Force conversational document-opinion phrasing to feedback mode.
+    if _is_document_take_request(message):
+        intent = "summarize_document"
+        target_section = None
+
+    # Flexible fallback: for broad/out-of-pattern queries, answer from the document in chat mode.
+    if _is_document_grounded_chat_request(message):
+        intent = "chat"
+        target_section = None
+
     explicit_target = _explicit_section_target_from_message(message)
+    derived_target = _extract_subsection_phrase(message)
     has_section_action = any(
         k in lowered_message
         for k in [
@@ -2232,6 +2904,43 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
             "update", "replace", "regenerate", "generate", "write",
         ]
     )
+    is_section_command = has_section_action and (
+        bool(explicit_target)
+        or (derived_target and not _is_generic_section_query(derived_target))
+    )
+
+    # ── Topic relevance guard ────────────────────────────────────────────────
+    # If the agent is about to write something, make sure the topic being requested
+    # is actually related to this document. If the message asks to write about
+    # a topic that has ZERO overlap with the document's own subject, redirect to chat.
+    if intent in {"write_section", "write_dissertation", "enhance_section"} and topic and not is_section_command:
+        doc_topic = ((document.content or {}).get("topic") or document.title or "").lower()
+        message_words = set(re.findall(r"\b[a-z]{4,}\b", lowered_message))
+        doc_words = set(re.findall(r"\b[a-z]{4,}\b", doc_topic))
+        # Extract topic from the message (words NOT in common stop-list)
+        _STOP = {"write", "redo", "rewrite", "section", "chapter", "dissertation",
+                 "thesis", "please", "just", "this", "that", "with", "from", "into",
+                 "about", "what", "your", "have", "will", "some", "more", "also"}
+        msg_topic_words = {w for w in message_words if w not in _STOP and len(w) > 3}
+        # If the document has an established topic AND the message topic words share
+        # NOTHING with the document topic, and the document already has sections written,
+        # redirect to chat so we don't write alien content into the user's document.
+        doc_has_content = bool((document.content or {}).get("sections"))
+        if (
+            doc_topic
+            and doc_has_content
+            and msg_topic_words
+            and not msg_topic_words.intersection(doc_words)
+        ):
+            # One final check: if ANY word in the message overlaps the doc topic, allow it
+            all_doc_words = set(re.findall(r"\b[a-z]{4,}\b", doc_context.lower()))
+            if not msg_topic_words.intersection(all_doc_words):
+                intent = "chat"
+                logger.info(
+                    "Topic mismatch guard: message topic '%s' unrelated to document topic '%s'. "
+                    "Redirecting to chat.",
+                    msg_topic_words, doc_topic,
+                )
     full_doc_request = any(
         k in lowered_message
         for k in [
@@ -2272,7 +2981,17 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
         elif intent == "write_section" and chapter_request:
             reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, message, plan)
         elif intent == "enhance_section":
-            reply, updated = _enhance_section(document, target_section, topic, message, plan)
+            # Use Copilot-style agentic loop: read → identify → edit → save
+            copilot_steps = [
+                "Reading document structure",
+                "Identifying relevant sections",
+                "Reading target section",
+                "Editing target section",
+                "Saving changes",
+            ]
+            plan.clear()
+            plan.extend([{"step": s, "status": "pending"} for s in copilot_steps])
+            reply, updated = _run_copilot_loop(document, message, plan, target_section, topic)
         elif intent == "write_section":
             reply, updated = _write_section(document, target_section, topic, message, plan)
         elif intent == "write_dissertation":
@@ -2293,7 +3012,12 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
             reply, updated = _add_image(document, target_section, message, plan)
         else:
             try:
-                reply = chat_with_document(message, doc_context)
+                # Always ground unknown/vague prompts in the document rather than
+                # returning a generic "Yes, I can help" style reply.
+                reply = _document_grounded_chat_response(message, doc_context)
+                reply = _sanitize_chat_reply(reply)
+                if not reply:
+                    reply = "I reviewed the document and can provide a concise analysis or section-specific improvement."
             except Exception as exc:
                 had_error = True
                 error_detail = str(exc)
@@ -2387,8 +3111,122 @@ def _personalize_plan_steps(plan: list, section_name: str) -> None:
             step["step"] = f"Rewriting '{name}' with improved clarity and academic tone"
         elif "saving" in sl and "section" in sl:
             step["step"] = f"Saving updated section '{name}'"
-        elif "generating" in sl or "inserting" in sl:
+        elif "inserting" in sl:
+            step["step"] = f"Inserting '{name}' into document"
+        elif "generating" in sl:
             step["step"] = f"Generating content for '{name}'"
+
+
+def _run_copilot_loop(
+    document: Document,
+    message: str,
+    plan: list,
+    target: str | None,
+    topic: str,
+) -> tuple[str, bool]:
+    """
+    GitHub Copilot-style agentic loop:
+    1. list_sections  → get document outline  (plan step 0)
+    2. identify sections relevant to the request  (plan step 1)
+    3. read → edit for each relevant section  (plan steps 2+)
+    4. save and return a reply summary
+    """
+    from .tools import doc_list_sections, doc_read_section, doc_edit_section, find_section
+
+    # Step 0: read document structure
+    if plan:
+        plan[0]["status"] = "done"
+    sections_info = doc_list_sections(document)
+    if not sections_info:
+        _all_done(plan)
+        return "The document has no sections yet.", False
+
+    outline = "\n".join(
+        f"[{s['index']}] {s['title']} ({s['word_count']} words)"
+        for s in sections_info
+    )
+
+    # Step 1: identify relevant sections
+    if len(plan) > 1:
+        plan[1]["status"] = "done"
+
+    relevant_indices: list[int] = []
+
+    if target:
+        idx = find_section(document.content, target)
+        if idx is not None:
+            relevant_indices = [idx]
+
+    if not relevant_indices:
+        section_prompt = (
+            f"User request: {message}\n\n"
+            f"Document outline:\n{outline}\n\n"
+            "Which section indices (integers) are most relevant to this request? "
+            "Return a JSON array of at most 3 indices, e.g. [2, 3]. "
+            "Return ONLY the JSON array."
+        )
+        try:
+            raw = generate_text(section_prompt)
+            m = re.search(r"\[[\d,\s]+\]", raw)
+            if m:
+                parsed = json.loads(m.group(0))
+                relevant_indices = [i for i in parsed if 0 <= i < len(sections_info)][:3]
+        except Exception:
+            relevant_indices = []
+
+    if not relevant_indices:
+        _all_done(plan)
+        return "Could not identify a relevant section to edit.", False
+
+    # Steps 2+: read → edit for each relevant section
+    edit_summaries: list[str] = []
+    plan_cursor = 2
+
+    for idx in relevant_indices:
+        sec_info = sections_info[idx]
+        sec_title = sec_info["title"]
+
+        if plan_cursor < len(plan):
+            plan[plan_cursor]["status"] = "done"
+        plan_cursor += 1
+
+        sec = doc_read_section(document, sec_title)
+        if not sec:
+            continue
+        current_content = sec["content"]
+
+        if plan_cursor < len(plan):
+            plan[plan_cursor]["status"] = "done"
+        plan_cursor += 1
+
+        edit_prompt = (
+            f"You are editing a section of an academic dissertation.\n\n"
+            f"User request: {message}\n\n"
+            f"Document topic: {topic}\n\n"
+            f"Section: {sec_title}\n\n"
+            f"Current content:\n{current_content[:4000]}\n\n"
+            "Write the improved version of this section. Be specific to the document topic. "
+            "Do NOT include the section heading. Return ONLY the improved content."
+        )
+        try:
+            new_content = generate_text(edit_prompt).strip()
+            if new_content and len(new_content) > 50:
+                doc_edit_section(document, sec_title, new_content)
+                edit_summaries.append(sec_title)
+        except Exception:
+            pass
+
+    updated = bool(edit_summaries)
+    if updated:
+        _save(document, f"copilot:{message[:60]}")
+
+    _all_done(plan)
+
+    if edit_summaries:
+        reply = f"Updated {len(edit_summaries)} section(s): {', '.join(edit_summaries)}."
+    else:
+        reply = "No changes were applied. The sections may already be well-written or no matching section was found."
+    return reply, updated
 
 
 def _enhance_section(
@@ -2435,6 +3273,12 @@ def _enhance_section(
     if not original:
         return _write_section(document, query, topic, instruction, plan)
 
+    subsection_block = None
+    section_title_l = (section.get("title") or "").lower()
+    query_l = query.lower()
+    if query_l and query_l not in section_title_l:
+        subsection_block = _extract_subsection_block_if_present(original, query)
+
     _done(plan, 1)
     enhance_instruction = (
         f"{instruction}\n\n"
@@ -2442,17 +3286,30 @@ def _enhance_section(
         "and structure. Preserve all factual claims and headings. "
         "Return ONLY the improved text with no meta-commentary."
     )
+
+    source_text = subsection_block[1] if subsection_block and subsection_block[1] else original
     try:
-        enhanced = enhance_text(original, topic, enhance_instruction)
+        enhanced = enhance_text(source_text, topic, enhance_instruction)
     except Exception:
         enhanced = _fallback_subsection_text(topic, section.get("title", query), query)
 
-    subsection_block = _replace_subsection_if_present(
-        original,
-        subsection_query=query,
-        new_block=f"{query}\n{enhanced}",
-    )
-    final_content = subsection_block if subsection_block else enhanced
+    if subsection_block:
+        heading = subsection_block[0]
+        enhanced_body = _strip_leading_heading(enhanced, heading).strip()
+        replacement_block = f"{heading}\n{enhanced_body}".strip()
+        replaced_text = _replace_subsection_if_present(
+            original,
+            subsection_query=query,
+            new_block=replacement_block,
+        )
+        final_content = replaced_text if replaced_text else original
+    else:
+        replaced_text = _replace_subsection_if_present(
+            original,
+            subsection_query=query,
+            new_block=f"{query}\n{enhanced}",
+        )
+        final_content = replaced_text if replaced_text else enhanced
 
     document.content = update_section(document.content, idx, final_content)
     _save(document, f"enhance-section:{query}")

@@ -1,3 +1,4 @@
+﻿import io
 import logging
 
 from rest_framework import status
@@ -38,12 +39,52 @@ class AgentActionView(APIView):
         return Response(DocumentSerializer(updated).data)
 
 
+def _extract_file_text(uploaded_file) -> str:
+    """Extract plain text from an uploaded PDF or DOCX file."""
+    name = (uploaded_file.name or "").lower()
+    raw = uploaded_file.read()
+    try:
+        if name.endswith(".pdf"):
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(io.BytesIO(raw))
+                return "\n".join(page.extract_text() or "" for page in reader.pages)
+            except ImportError:
+                pass
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(io.BytesIO(raw))
+                return "\n".join(page.extract_text() or "" for page in reader.pages)
+            except ImportError:
+                pass
+        elif name.endswith(".docx"):
+            try:
+                import docx
+                doc = docx.Document(io.BytesIO(raw))
+                return "\n".join(p.text for p in doc.paragraphs)
+            except ImportError:
+                pass
+        elif name.endswith(".txt"):
+            return raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("File text extraction failed: %s", exc)
+    return ""
+
+
 class ChatView(APIView):
     def post(self, request, document_id: int):
-        message = request.data.get("message", "").strip()
-        model_choice = request.data.get("model", "grok")
+        # Support both JSON and multipart (file upload)
+        message = (request.data.get("message") or request.POST.get("message", "")).strip()
+        model_choice = request.data.get("model") or request.POST.get("model", "grok")
         if not message:
             return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Optional file attachment — extract its text and append as context
+        uploaded_file = request.FILES.get("file")
+        if uploaded_file:
+            file_text = _extract_file_text(uploaded_file)
+            if file_text:
+                message = f"{message}\n\n[Attached file: {uploaded_file.name}]\n{file_text[:8000]}"
 
         try:
             document = Document.objects.get(pk=document_id)

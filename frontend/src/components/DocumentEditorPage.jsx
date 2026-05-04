@@ -22,6 +22,8 @@ import {
   Copy,
   ThumbsDown,
   Send,
+  Paperclip,
+  X,
 } from 'lucide-react';
 import { chatWithDocument, getDocument } from '../api/client';
 
@@ -381,6 +383,20 @@ function buildSummaryFromResult(result = {}) {
   };
 }
 
+function toChatReply(result = {}) {
+  const raw = typeof result?.reply === 'string' ? result.reply.trim() : '';
+  if (!raw) {
+    return result?.document_updated
+      ? 'Update complete. The content has been written to the document.'
+      : 'Done.';
+  }
+  // For document updates, keep chat output concise and avoid dumping long write payloads.
+  if (result?.document_updated && raw.length > 1200) {
+    return 'Update complete. The content has been written to the document.';
+  }
+  return raw;
+}
+
 function flattenSections(content) {
   if (!content?.sections?.length) return sampleParagraph;
   return content.sections
@@ -514,6 +530,16 @@ function PlanNode({ node, depth }) {
   const isChapter = depth === 0 && /^writing chapter/i.test(node.label);
   const hasChildren = node.children.length > 0;
 
+  // Step-type icon for Copilot-style steps
+  const stepIcon = (() => {
+    const lbl = node.label.toLowerCase();
+    if (lbl.startsWith('reading')) return '📄 ';
+    if (lbl.startsWith('editing')) return '✏️ ';
+    if (lbl.startsWith('saving')) return '💾 ';
+    if (lbl.startsWith('identifying')) return '🔍 ';
+    return '';
+  })();
+
   return (
     <div className={`pnode pnode--d${depth}`}>
       <div
@@ -525,7 +551,7 @@ function PlanNode({ node, depth }) {
         {hasChildren && (
           <span className="pnode-arrow">{open ? '▾' : '▸'}</span>
         )}
-        <span className="pnode-label">{node.label}</span>
+        <span className="pnode-label">{stepIcon}{node.label}</span>
         {hasChildren && (
           <span className="pnode-count">
             {node.children.filter((c) => c.status === 'done').length}/{node.children.length}
@@ -560,6 +586,8 @@ export default function DocumentEditorPage({
   const [activeChatId, setActiveChatId] = useState(INITIAL_CHAT_ID);
   const [showChatList, setShowChatList] = useState(false);
   const [inputValue,   setInputValue]   = useState('');
+  const [attachedFile, setAttachedFile] = useState(null);
+  const fileInputRef = useRef(null);
   const [isThinking,   setIsThinking]   = useState(false);
   const [isSavingManual, setIsSavingManual] = useState(false);
   const [isDirty,      setIsDirty]      = useState(false);
@@ -882,7 +910,8 @@ export default function DocumentEditorPage({
     }
 
     try {
-      const result = await chatWithDocument(document?.id, userText, selectedModel);
+      const result = await chatWithDocument(document?.id, userText, selectedModel, attachedFile);
+      setAttachedFile(null);
       if (result?.model) {
         setActiveModel(result.model);
       }
@@ -902,7 +931,7 @@ export default function DocumentEditorPage({
                     {
                       id: assistantMsgId,
                       role: 'assistant',
-                      text: result.reply,
+                      text: toChatReply(result),
                       summary: buildSummaryFromResult(result),
                       plan: Array.isArray(result.plan) ? result.plan : [],
                     },
@@ -1185,6 +1214,31 @@ export default function DocumentEditorPage({
           {/* ── Composer ── */}
           {!showChatList && (
             <div className="dap-composer">
+              {attachedFile && (
+                <div className="dap-attachment-chip">
+                  <Paperclip size={11} />
+                  <span className="dap-attachment-name">{attachedFile.name}</span>
+                  <button
+                    type="button"
+                    className="dap-attachment-remove"
+                    onClick={() => setAttachedFile(null)}
+                    title="Remove attachment"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.docx,.txt"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) setAttachedFile(f);
+                  e.target.value = '';
+                }}
+              />
               <textarea
                 className="dap-composer-input"
                 placeholder="Ask anything about this document…"
@@ -1206,7 +1260,17 @@ export default function DocumentEditorPage({
                 </select>
               </div>
               <div className="dap-composer-footer">
-                <div className="dap-composer-left" />
+                <div className="dap-composer-left">
+                  <button
+                    type="button"
+                    className="dap-attach-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Attach file (PDF, DOCX, TXT)"
+                    disabled={isThinking}
+                  >
+                    <Paperclip size={14} />
+                  </button>
+                </div>
                 <button
                   className="dap-send-btn"
                   onClick={() => sendMessage(inputValue)}

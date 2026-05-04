@@ -88,6 +88,9 @@ Guidance:
 - If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.
 - If user asks to generate substantial new document content, do NOT return chat.
 - If user asks for a full/complete/entire project or long-form deliverable, do NOT return chat; choose the closest write_* intent.
+- IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as write_section or any write intent even if X sounds like a topic.
+- IMPORTANT: Any message that ends with "?" is a question and should be classified as chat.
+- IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document (e.g., "write the background section", "add a conclusion", "redo the methodology").
 
 Return JSON exactly:
 {{"intent": "<intent>", "target_section": "<section name or null>", "topic": "<main topic or null>"}}"""
@@ -189,8 +192,14 @@ def chat_with_document(message: str, doc_context: str) -> str:
     prompt = (
         "You are an expert academic writing assistant embedded in a word processor.\n"
         f"Document:\n{doc_context[:15000]}\n\n"
-        f"User: {message}\n\n"
-        "Give a helpful, direct response. Be concise and professional."
+        f"Request: {message}\n\n"
+        "Instructions:\n"
+        "- Give a direct, concise response (no more than 10 sentences).\n"
+        "- Do NOT ask for more information or say 'please provide'.\n"
+        "- Do NOT repeat or echo the request text.\n"
+        "- Do NOT include labels like 'User:' or 'Assistant:'.\n"
+        "- Do NOT output prompt templates unless the user explicitly asked for one.\n"
+        "- Write the answer immediately, starting with the actual content."
     )
     return generate_text(prompt)
 

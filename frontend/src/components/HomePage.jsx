@@ -3,6 +3,7 @@ import {
   Clock, Star, Share2, Inbox, Cloud, Triangle, Box, Monitor, Clipboard,
   Home, Plus, ChevronDown, RefreshCw, MoreHorizontal, Image as ImageIcon, FileText, X
 } from 'lucide-react';
+import { extractFileText } from '../api/client';
 
 /* ─── File Type Icon ─────────────────────────────────────────── */
 function FileTypeIcon({ type = 'docx', large = false }) {
@@ -68,12 +69,39 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
     fileInputRef.current?.click();
   }
 
-  function handleFileChange(e) {
+  async function handleFileChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
     const name = file.name.replace(/\.[^.]+$/, '');
     const ext  = file.name.split('.').pop().toLowerCase();
+    
+    // For DOCX and PDF, send to backend for server-side extraction
+    if (ext === 'docx' || ext === 'pdf') {
+      try {
+        const res = await extractFileText(file);
+        if (res.text) {
+          const chunks = res.text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+          let sections = chunks.map((chunk, i) => {
+            const lines = chunk.split('\n');
+            const title = lines.length > 1 && lines[0].length < 80 ? lines.shift() : (i === 0 ? name : `Section ${i + 1}`);
+            return { title, content: lines.join('\n').trim() || chunk };
+          });
+          if (!sections.length) sections = [{ title: name, content: res.text }];
+          onImportFile?.({ title: name, sections });
+        } else {
+          console.warn("Backend returned empty text for", file.name);
+          onImportFile?.({ title: name, sections: [{ title: name, content: "" }] });
+        }
+      } catch (err) {
+        console.error("Error extracting file server-side", err);
+        // Create an empty doc so user can at least start
+        onImportFile?.({ title: name, sections: [{ title: name, content: "Error loading file content." }] });
+      }
+      return;
+    }
+
+    // For local text/json reading
     const reader = new FileReader();
     reader.onload = (ev) => {
       const raw = ev.target.result;
@@ -132,7 +160,7 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
       <input
         ref={fileInputRef}
         type="file"
-        accept=".txt,.json,.docx,.doc,.md"
+        accept=".txt,.json,.docx,.doc,.md,.pdf"
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />

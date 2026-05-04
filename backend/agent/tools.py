@@ -750,3 +750,86 @@ def _generate_pie(values: list[float], title: str, output_path: "Path") -> None:
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
+
+
+# ── Agent document tools (Copilot-style) ──────────────────────────────────────
+
+def doc_list_sections(document) -> list[dict[str, Any]]:
+    """Return document outline: [{index, title, word_count, has_content}]."""
+    sections = (document.content or {}).get("sections", [])
+    return [
+        {
+            "index": i,
+            "title": s.get("title", f"Section {i}"),
+            "word_count": len((s.get("content") or "").split()),
+            "has_content": bool((s.get("content") or "").strip()),
+        }
+        for i, s in enumerate(sections)
+    ]
+
+
+def doc_read_section(document, query: str) -> dict[str, Any] | None:
+    """Read a specific section by title match. Returns {index, title, content}."""
+    idx = find_section(document.content, query)
+    if idx is None:
+        return None
+    sections = (document.content or {}).get("sections", [])
+    section = sections[idx]
+    return {
+        "index": idx,
+        "title": section.get("title", ""),
+        "content": section.get("content", ""),
+    }
+
+
+def doc_search(document, query: str) -> list[dict[str, Any]]:
+    """Search for text across all sections. Returns [{index, title, snippet}]."""
+    results = []
+    query_lower = query.lower()
+    for i, section in enumerate((document.content or {}).get("sections", [])):
+        content = section.get("content") or ""
+        if query_lower in content.lower():
+            pos = content.lower().find(query_lower)
+            start = max(0, pos - 100)
+            end = min(len(content), pos + 200)
+            results.append({
+                "index": i,
+                "title": section.get("title", ""),
+                "snippet": content[start:end],
+            })
+    return results
+
+
+def doc_edit_section(document, query: str, new_content: str) -> bool:
+    """Replace a section's content in-place. Returns True on success."""
+    idx = find_section(document.content, query)
+    if idx is None:
+        return False
+    sections = (document.content or {}).get("sections", [])
+    sections[idx]["content"] = new_content
+    return True
+
+
+def doc_insert_in_section(
+    document, query: str, after_text: str, new_paragraph: str
+) -> bool:
+    """
+    Insert new_paragraph after after_text within a section.
+    Appends at end if after_text is not found.
+    """
+    idx = find_section(document.content, query)
+    if idx is None:
+        return False
+    sections = (document.content or {}).get("sections", [])
+    content = sections[idx].get("content") or ""
+    pos = content.lower().find(after_text.lower())
+    if pos == -1:
+        sections[idx]["content"] = content.rstrip() + "\n\n" + new_paragraph
+    else:
+        end_pos = content.find("\n\n", pos)
+        if end_pos == -1:
+            end_pos = len(content)
+        sections[idx]["content"] = (
+            content[:end_pos] + "\n\n" + new_paragraph + content[end_pos:]
+        )
+    return True
