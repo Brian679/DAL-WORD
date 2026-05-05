@@ -2722,3 +2722,415 @@ ul {
     border-color: var(--border);
     background: #f8fafc;
 }
+/* ============================================================
+   WPS-Style Ribbon — New Classes
+   ============================================================ */
+
+/* Tab bar row */
+.doc-ribbon-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 8px;
+    background: #fff;
+    border-bottom: 1px solid #e2e8f0;
+    height: 34px;
+    flex-shrink: 0;
+}
+
+.doc-ribbon-tab-btn {
+    padding: 0 10px;
+    height: 34px;
+    border: none;
+    background: none;
+    font-size: 12px;
+    color: #374151;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.doc-ribbon-tab-btn:hover {
+    color: #1a56db;
+}
+
+.doc-ribbon-tab-btn--active {
+    color: #1a56db;
+    border-bottom: 2px solid #1a56db;
+    font-weight: 600;
+}
+
+/* Tools row */
+.doc-ribbon-toolbar {
+    display: flex;
+    align-items: stretch;
+    padding: 2px 4px;
+    background: #fff;
+    border-bottom: 1px solid #e2e8f0;
+    min-height: 66px;
+    flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.doc-ribbon-toolbar--placeholder {
+    align-items: center;
+    min-height: 40px;
+}
+
+/* Group */
+.doc-tool-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2px 6px;
+    border-right: 1px solid #e2e8f0;
+    min-width: fit-content;
+    flex-shrink: 0;
+}
+
+.doc-tool-group:last-child {
+    border-right: none;
+}
+
+.doc-tool-group-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+
+.doc-tool-group-row {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+}
+
+.doc-tool-group-label {
+    font-size: 10px;
+    color: #9aa0a6;
+    margin-top: 2px;
+    text-align: center;
+    white-space: nowrap;
+    width: 100%;
+}
+
+.doc-tool-col {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+/* Buttons */
+.doc-tool-btn {
+    width: 28px;
+    height: 26px;
+    border: 1px solid transparent;
+    background: transparent;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #374151;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.doc-tool-btn:hover {
+    background: #e8f0fe;
+    border-color: #c5d8f8;
+}
+
+.doc-tool-btn--tall {
+    width: 34px;
+    height: 56px;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+}
+
+.doc-tool-btn--wide {
+    width: 52px;
+    flex-direction: row;
+    gap: 2px;
+    padding: 0 4px;
+}
+
+.doc-tool-btn--fmt {
+    width: 26px;
+    height: 24px;
+}
+
+.doc-tool-btn--active {
+    background: #dbeafe;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+}
+
+.doc-tool-btn--labeled {
+    width: auto;
+    padding: 0 6px;
+    gap: 3px;
+    font-size: 11px;
+}
+
+.doc-tool-btn--color {
+    width: 26px;
+    height: 24px;
+}
+
+/* Font selects */
+.doc-font-select {
+    height: 24px;
+    border: 1px solid #d1d5db;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 12px;
+    color: #374151;
+    padding: 0 2px;
+    cursor: pointer;
+    outline: none;
+}
+
+.doc-font-select:focus {
+    border-color: #1a56db;
+}
+
+.doc-font-select--family {
+    width: 130px;
+}
+
+.doc-font-select--size {
+    width: 44px;
+}
+
+/* Styles gallery */
+.doc-style-gallery {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+}
+
+.doc-style-chip {
+    padding: 2px 8px;
+    height: 26px;
+    border: 1px solid #d1d5db;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 12px;
+    color: #374151;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.doc-style-chip:hover {
+    background: #e8f0fe;
+    border-color: #93c5fd;
+}
+
+/* Rich contenteditable editor */
+.doc-paper-zone {
+    flex: 1;
+    overflow-y: auto;
+    background: #f0f2f5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 0;
+}
+
+.doc-paper-scroll {
+    width: 816px;
+    max-width: 100%;
+    background: #fff;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.12);
+    border-radius: 2px;
+    min-height: 1056px;
+    padding: 96px 96px 80px 96px;
+    box-sizing: border-box;
+}
+
+.doc-rich-editor {
+    outline: none;
+    min-height: 800px;
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 12pt;
+    line-height: 1.6;
+    color: #1a1a1a;
+    caret-color: #1a56db;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+.doc-rich-editor:empty::before {
+    content: 'Start typing your document here...';
+    color: #aab0b8;
+    pointer-events: none;
+}
+
+.doc-rich-editor h1 {
+    font-size: 20pt;
+    font-weight: bold;
+    margin: 16px 0 8px;
+}
+
+.doc-rich-editor h2 {
+    font-size: 16pt;
+    font-weight: bold;
+    margin: 14px 0 6px;
+}
+
+.doc-rich-editor h3 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 12px 0 4px;
+}
+
+.doc-rich-editor p {
+    margin: 0 0 6px;
+}
+
+/* Back / title pill */
+.doc-ribbon-back {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 0 6px;
+    height: 34px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 12px;
+    color: #374151;
+    border-right: 1px solid #e2e8f0;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
+.doc-ribbon-back:hover {
+    background: #f1f5f9;
+}
+
+.doc-ribbon-title-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    background: #f1f5f9;
+    border-radius: 12px;
+    font-size: 12px;
+    color: #374151;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+/* ── AI panel close button ── */
+.dap-close-btn {
+    margin-left: 4px;
+    color: #9aa0a6;
+}
+
+.dap-close-btn:hover {
+    color: #ef4444;
+    background: #fee2e2 !important;
+}
+
+/* ── Floating chat FAB ── */
+.doc-chat-fab {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #1a56db;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(26,86,219,0.45);
+    z-index: 1000;
+    transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.doc-chat-fab:hover {
+    background: #1345b5;
+    transform: scale(1.08);
+    box-shadow: 0 6px 20px rgba(26,86,219,0.55);
+}
+
+/* ── AI panel close button ── */
+.dap-close-btn {
+    margin-left: 4px;
+    color: #9aa0a6;
+}
+
+.dap-close-btn:hover {
+    color: #ef4444;
+    background: #fee2e2 !important;
+}
+
+/* ── Floating chat FAB ── */
+.doc-chat-fab {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #1a56db;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(26,86,219,0.45);
+    z-index: 1000;
+    transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.doc-chat-fab:hover {
+    background: #1345b5;
+    transform: scale(1.08);
+    box-shadow: 0 6px 20px rgba(26,86,219,0.55);
+}
+
+/* Header / footer bands */
+.doc-header-band, .doc-footer-band {
+    font-size: 10pt;
+    color: #6b7280;
+    text-align: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e2e8f0;
+    margin-bottom: 12px;
+}
+.doc-footer-band {
+    border-bottom: none;
+    border-top: 1px solid #e2e8f0;
+    margin-bottom: 0;
+    margin-top: 12px;
+}
+
+/* doc-tool-btn--labeled needs gap */
+.doc-tool-btn--labeled {
+    width: auto;
+    min-width: 52px;
+    padding: 0 5px;
+    gap: 3px;
+    font-size: 11px;
+    flex-direction: column;
+    height: 52px;
+    border: 1px solid transparent;
+}

@@ -206,13 +206,16 @@ def chat_with_document(message: str, doc_context: str) -> str:
 
 def enhance_text(text: str, topic: str, instruction: str = "") -> str:
     prompt = (
-        f"Improve this academic text about '{topic}'.\n"
-        f"{'Instruction: ' + instruction + chr(10) if instruction else ''}"
-        "Requirements: clearer sentences, better structure, professional tone, "
-        "no jargon, keep original meaning. Avoid generic AI disclaimers and robotic phrasing. "
-        "Use varied sentence rhythm and specific details where appropriate.\n\n"
+        "SYSTEM INSTRUCTION for ENHANCEMENT:\n"
+        "You are a flexible document editing agent.\n"
+        "1. Adapt to the user's instructions creatively.\n"
+        "2. Improve clarity, flow, and professional academic tone.\n"
+        "3. Preserve the core meaning, but feel free to expand or refine as requested.\n\n"
+        f"Context topic: '{topic}'\n"
+        f"{'User instruction: ' + instruction + chr(10) if instruction else ''}\n"
+        "Improve this text based on the guidelines above. Maintain a clear and engaging sentence flow.\n\n"
         f"TEXT:\n{text[:3000]}\n\n"
-        "Return ONLY the improved text, nothing else."
+        "Return ONLY the improved text, nothing else, no markdown formatting."
     )
     return generate_text(prompt)
 
@@ -287,3 +290,36 @@ Discussion, Conclusion, References, Appendices."""
         "Appendices",
     ]
     return [{"title": title, "subsections": []} for title in defaults]
+
+
+def extract_formal_objectives(full_document_text: str, topic: str) -> list[str]:
+    """Analyze the full document context to extract or synthesize clear, professional research objectives."""
+    prompt = f"""Read the full research document text provided below and determine the core research objectives.
+Topic: {topic}
+
+Task:
+1. Analyze the whole document text.
+2. Understand the core requirements and research trajectory.
+3. Write the key research objectives in clear point form.
+4. Use standard, highly professional academic phrasing. Do not write rubbish or vague filler; rely on precise academic verbs (e.g., 'To examine...', 'To evaluate...', 'To determine...').
+
+Document Text Snippet (first 40000 chars for context):
+{full_document_text[:40000]}
+
+Return exactly a JSON array of strings, where each string is a single professional objective.
+Example output format:
+["To evaluate the impact of X on Y.", "To assess the factors influencing Z.", "To determine the relationship between A and B."]"""
+    try:
+        result = _json_response(prompt)
+        if isinstance(result, list) and all(isinstance(x, str) for x in result) and result:
+            return result
+    except Exception as exc:
+        logger.warning(f"extract_formal_objectives failed: {exc}")
+
+    # Fallback if prediction fails
+    short_topic = (topic or "the study topic").strip()
+    return [
+        f"To determine the current state of {short_topic}",
+        f"To evaluate key drivers and constraints affecting {short_topic}",
+        f"To propose evidence-based recommendations for improving outcomes in {short_topic}",
+    ]

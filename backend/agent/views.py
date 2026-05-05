@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from documents.models import Document
+from documents.models import Document, ChatMessage
 from documents.serializers import DocumentSerializer
 from tasks.dissertation_tasks import generate_dissertation_sections
 
@@ -91,11 +91,16 @@ class ChatView(APIView):
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        ChatMessage.objects.create(document=document, role="user", content=message)
+
         try:
             result = run_agent(document, message, model_choice=model_choice)
         except Exception as exc:
             logger.error("Agent error for doc %d: %s", document_id, exc, exc_info=True)
+            ChatMessage.objects.create(document=document, role="assistant", content=f"Error: {exc}")
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        ChatMessage.objects.create(document=document, role="assistant", content=result["reply"])
 
         response_data = {
             "reply": result["reply"],

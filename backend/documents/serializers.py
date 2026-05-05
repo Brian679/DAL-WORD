@@ -1,6 +1,12 @@
 from rest_framework import serializers
 
-from .models import Document, DocumentVersion
+from .models import Document, DocumentVersion, ChatMessage
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = ["id", "role", "content", "created_at"]
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
@@ -11,6 +17,7 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
 
 class DocumentSerializer(serializers.ModelSerializer):
     versions = DocumentVersionSerializer(many=True, read_only=True)
+    chat_messages = ChatMessageSerializer(many=True, read_only=True)
 
     class Meta:
         model = Document
@@ -21,4 +28,5 @@ class DocumentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "versions",
+            "chat_messages",
         ]

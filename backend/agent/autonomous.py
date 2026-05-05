@@ -38,266 +38,15 @@ logger = logging.getLogger(__name__)
 # Per-subsection writing guidelines injected into every AI prompt.
 # Keys are lowercase substrings matched against the subsection title.
 # ---------------------------------------------------------------------------
-SUBSECTION_GUIDELINES: dict[str, str] = {
-    # ── Chapter 1 ──────────────────────────────────────────────────────────
-    "background of the study": (
-        "Write the background in 3 paragraphs, grounded in the specific research topic. "
-        "Paragraph 1: open with the global/industry context directly relevant to this study's topic — "
-        "cite real-world trends, statistics, and developments in the specific field. "
-        "Paragraph 2: narrow to the specific problem domain and geographic or sectoral context of this study. "
-        "Paragraph 3: explain why this specific study is needed now, referencing existing gaps. "
-        "Name the industry, technology, phenomenon, or population that this study is about. "
-        "Do NOT list objectives or findings here. Do NOT write about a different topic."
-    ),
-    "statement of the problem": (
-        "Write a focused 2-3 paragraph problem statement for this specific study. "
-        "Clearly articulate the specific gap or challenge that THIS study addresses — name the "
-        "phenomenon, industry, population, or technology that is the focus. "
-        "Reference existing shortcomings in practice or literature relating to this exact topic. "
-        "Build logically toward the research objectives of this study. "
-        "Use evidence-based language: cite implied statistics, trends, or documented failures "
-        "specific to this topic. Do NOT write a generic problem statement."
-    ),
-    "research objective": (
-        "Write research objectives as a numbered SMART list ONLY (1. 2. 3. ...). "
-        "3-5 objectives. Each must be specific, measurable, achievable, relevant, and time-bound. "
-        "Start each with an action verb (To examine / To assess / To determine / To evaluate / To establish). "
-        "Do NOT write introductory paragraphs — output ONLY the numbered list."
-    ),
-    "research question": (
-        "Write 3-5 research questions as a numbered list ONLY. "
-        "Each question must directly align with one research objective. "
-        "Use 'What', 'How', 'To what extent', or 'Does' phrasing. "
-        "Do NOT add introductory text — output ONLY the numbered list."
-    ),
-    "hypothes": (
-        "Write hypotheses in point form ONLY as null and alternative pairs. "
-        "Use exactly this format:\n"
-        "1. H0: [null hypothesis statement]\n"
-        "   H1: [alternative hypothesis statement]\n"
-        "2. H0: ...\n"
-        "   H1: ...\n"
-        "Provide 3-5 pairs. Each pair must align with a research question/objective and be testable. "
-        "Do NOT write paragraphs, explanations, or introductory text — output ONLY the list."
-    ),
-    "significance of the study": (
-        "Write 2-3 paragraphs covering three distinct contributions: "
-        "(1) Academic/theoretical — how this study extends existing theory or fills a literature gap. "
-        "(2) Practical/industry — how findings can be applied by practitioners or organisations. "
-        "(3) Policy — how results inform regulatory or governance decisions."
-    ),
-    "scope and delimitation": (
-        "Write a clear scope-and-delimitations section. First paragraph: state what the study covers "
-        "(geographic scope, time period, population, variables). Second paragraph: state what is "
-        "deliberately excluded and why, using 'delimitation' terminology. Be direct and specific."
-    ),
-    "definition of key term": (
-        "Write definitions for 5-8 key terms. Format as a definition list:\n"
-        "**Term:** One to two concise sentences explaining how the term is used in this study. "
-        "Reference the source discipline or scholar where appropriate. "
-        "Do NOT add introductory paragraphs — output ONLY the definition list."
-    ),
-    # ── Chapter 2 ──────────────────────────────────────────────────────────
-    "empirical review": (
-        "Write a critical empirical review of 4-5 full paragraphs, focused entirely on "
-        "prior empirical studies that investigated this study's exact topic or closely related constructs. "
-        "Name specific scholars and years (e.g., Smith, 2021; Jones & Patel, 2020) who conducted "
-        "studies relevant to this research topic. "
-        "For each study cited: state what was investigated, what was found, what methodology was used, "
-        "and what limitation or gap it left. "
-        "Compare contrasting findings. Conclude by identifying the gap that this current study fills. "
-        "Be analytical — compare and critique. Do NOT review studies on unrelated topics."
-    ),
-    "conceptual review": (
-        "Write a conceptual review of 3-4 analytical paragraphs covering the key constructs "
-        "central to this specific study. "
-        "Identify and define 3-5 constructs that are directly relevant to this study's topic and variables. "
-        "For each construct: provide a scholarly definition (cite author and year), explain the construct's "
-        "significance in the context of this study's research problem, and describe its relationship "
-        "to the other constructs. "
-        "Reference 4-6 scholars by name and year who have theorised or measured these constructs. "
-        "Do NOT discuss constructs unrelated to this study's topic."
-    ),
-    "theoretical framework": (
-        "Write a theoretical framework section of 3-4 paragraphs, identifying 2-3 theories "
-        "that are directly applicable to this study's topic and variables. "
-        "For each theory: name the theory and its originator(s) and year, summarise its core propositions, "
-        "and — most importantly — explicitly explain how this theory applies to THIS specific study: "
-        "which variables does it explain, how does it predict the relationships being studied, "
-        "and why is it appropriate for this study's methodology and context. "
-        "Choose theories that scholars have used to study the same phenomenon or topic as this research. "
-        "Do NOT include theories that are unrelated to this study's specific topic."
-    ),
-    "conceptual framework": (
-        "Describe the conceptual framework for this specific study in 2-3 paragraphs. "
-        "Name the independent variable(s), dependent variable(s), and any moderating or mediating "
-        "variables — use the actual constructs relevant to this study's topic. "
-        "Explain the hypothesised relationships between these variables. "
-        "Reference at least 2-3 scholars whose empirical or theoretical work informed this framework. "
-        "Explain how the framework guides this study's data collection and analysis. "
-        "Do NOT describe a generic framework — name the specific variables of THIS study."
-    ),
-    "chapter summary": (
-        "Write a concise chapter summary of 1-2 paragraphs. Recap the key themes, arguments, "
-        "or findings covered in this chapter. Bridge logically to what the next chapter will do. "
-        "Do NOT introduce new information."
-    ),
-    # ── Chapter 3 ──────────────────────────────────────────────────────────
-    "research design": (
-        "Write 2-3 paragraphs explaining the research design adopted for this specific study. "
-        "Paragraph 1: State the research design (quantitative/qualitative/mixed-methods) and the "
-        "research strategy (survey, case study, experiment, etc.) — explain that this specific design "
-        "was chosen because it is appropriate for investigating this study's research objectives and topic. "
-        "Paragraph 2: Justify the design by linking it explicitly to the research objectives — "
-        "explain what this design allows the researcher to do in the context of this study's topic. "
-        "Paragraph 3 (optional): Contrast with alternatives and explain why they were not adopted "
-        "for this particular study. "
-        "Use the actual research design determined for this study — do NOT guess a different design."
-    ),
-    "research philosophy": (
-        "Explain the epistemological position (positivism, interpretivism, pragmatism, etc.), "
-        "justify why it fits this study, and link it to the research design. 1-2 paragraphs."
-    ),
-    "research approach": (
-        "Describe whether a deductive, inductive, or abductive approach is used. "
-        "Justify the choice and link it to the hypotheses/questions. 1-2 paragraphs."
-    ),
-    "target population": (
-        "Write 1-2 paragraphs identifying the study population for this specific study. "
-        "State exactly who the target population is — the specific group of people, organisations, "
-        "or entities relevant to this study's topic and context. "
-        "Describe their key characteristics (role, industry, location, or other defining features) "
-        "and explain why this population was appropriate for studying this specific research problem. "
-        "State the total accessible population size if it can be inferred from the document. "
-        "Do NOT name a population that is unrelated to this study's topic."
-    ),
-    "sampling technique": (
-        "Write 2 paragraphs describing the sampling technique for this study. "
-        "Paragraph 1: State the sampling method (e.g., stratified random sampling, purposive sampling, "
-        "simple random sampling) — explain why this method was appropriate for this study's population "
-        "and research objectives. "
-        "Paragraph 2: State the sample size, show or reference the formula used to calculate it "
-        "(e.g., Yamane's formula: n = N / (1 + N*e²)), plug in the relevant numbers, "
-        "and explain how the resulting sample size ensures adequate representativeness "
-        "for this particular study. Use numbers consistent with the document if available."
-    ),
-    "sample size": (
-        "State and justify the sample size. Show or reference the formula used to calculate it "
-        "(e.g., Yamane's formula). Explain how the size ensures representativeness. 1-2 paragraphs."
-    ),
-    "data collection": (
-        "Write 2-3 paragraphs describing the data collection method for this specific study. "
-        "Paragraph 1: Identify the primary instrument (e.g., structured questionnaire, "
-        "semi-structured interview guide, observation checklist) — match this to the research design "
-        "and explain why it is appropriate for collecting data on this study's topic and objectives. "
-        "Paragraph 2: Describe the instrument's structure in detail — number of sections, "
-        "total number of items/questions, scale used (e.g., 5-point Likert scale), "
-        "and how each section aligns with a specific research objective. "
-        "Paragraph 3: Explain the administration process — how, where, and to whom the instrument "
-        "was administered, and how ethical procedures (consent, confidentiality) were observed during collection."
-    ),
-    "data analysis": (
-        "Write 2-3 paragraphs specifying the data analysis approach for this specific study. "
-        "Paragraph 1: State the overall analytical strategy — for quantitative studies: "
-        "descriptive statistics (frequencies, means, standard deviations) followed by "
-        "inferential tests (correlation, regression, ANOVA) using SPSS, R, or Stata; "
-        "for qualitative: thematic analysis or content analysis using NVivo or manual coding. "
-        "Paragraph 2: Justify each specific technique by linking it to a research objective — "
-        "explain what each technique will reveal about the study's specific variables and relationships. "
-        "Paragraph 3: Mention any reliability/validity checks applied during analysis "
-        "(e.g., Cronbach's alpha for internal consistency, member-checking for qualitative credibility)."
-    ),
-    "reliability": (
-        "Discuss reliability testing: Cronbach's alpha threshold (≥0.7), pilot test size, "
-        "and results. For qualitative studies discuss inter-rater reliability or member-checking. "
-        "1-2 paragraphs."
-    ),
-    "validity": (
-        "Discuss content validity, construct validity, and criterion validity. "
-        "For qualitative studies: credibility, transferability, dependability, confirmability. "
-        "1-2 paragraphs."
-    ),
-    "ethical consideration": (
-        "Address: informed consent, confidentiality and anonymity, data protection (GDPR/local law), "
-        "voluntary participation, and any institutional ethics clearance obtained. 1-2 paragraphs."
-    ),
-    # ── Chapter 4/5 ────────────────────────────────────────────────────────
-    "summary of findings": (
-        "Write a 2-3 paragraph summary synthesising the key results of this specific study. "
-        "Each paragraph should address one or two of the study's research objectives directly. "
-        "Be specific — reference actual or plausible results: cite percentages, means, correlations, "
-        "or thematic patterns that align with this study's topic and variables. "
-        "Do NOT repeat the analysis verbatim — synthesise and connect findings across objectives. "
-        "Every result must relate to THIS study's topic and variables, not a generic study."
-    ),
-    "discussion": (
-        "Write a discussion of 3-5 paragraphs interpreting the findings of this specific study. "
-        "Paragraph 1: Interpret the primary finding in relation to this study's main research question — "
-        "explain what the results mean in the context of this study's topic and setting. "
-        "Paragraphs 2-3: Compare findings with specific empirical studies reviewed in Chapter 2 — "
-        "name scholars and years, explain where this study's findings agree or contradict prior research, "
-        "and offer a reasoned explanation for any divergence. "
-        "Paragraph 4: State the theoretical implications — which theoretical framework is supported "
-        "or challenged by these findings, and why. "
-        "Paragraph 5 (optional): Practical implications for the specific industry, population, "
-        "or context that this study focused on. "
-        "Do NOT merely summarise the findings — analyse, interpret, and debate."
-    ),
-    # ── Chapter 6 ──────────────────────────────────────────────────────────
-    "conclusion": (
-        "Write the conclusions section in 2-3 paragraphs, tying everything back to this specific study. "
-        "Paragraph 1: Restate what this study set out to do and the core finding — "
-        "state specifically what was demonstrated about this study's topic (name the topic, population, "
-        "and key relationships investigated). "
-        "Paragraph 2: Directly and concisely answer each research question, referencing the specific "
-        "evidence and findings from the analysis chapters. "
-        "Paragraph 3: State the theoretical and practical contributions of this specific study. "
-        "Do NOT introduce new findings or recommendations. "
-        "Do NOT write a generic conclusion that could apply to any study — "
-        "name the specific topic and findings of THIS research."
-    ),
-    "recommendation": (
-        "Write practical recommendations as a numbered list. "
-        "3-6 recommendations, each one specific, actionable, and explicitly linked to a finding. "
-        "Format: 1. [Recommendation]: [brief rationale]. "
-        "Do NOT add introductory paragraphs — output ONLY the numbered list."
-    ),
-    "limitation": (
-        "Write 2-3 paragraphs acknowledging constraints: sample size limits, "
-        "geographic/sectoral scope, self-report bias, cross-sectional time horizon, "
-        "or data access issues. Be honest and academic — limitations do not invalidate the study."
-    ),
-    "further research": (
-        "Write 3-5 specific, concrete suggestions for future research. "
-        "Each suggestion must build on this study's gaps or findings. "
-        "Format as a numbered list: 1. Future studies could ... "
-        "Do NOT add introductory paragraphs — output ONLY the numbered list."
-    ),
-    "areas for future": (
-        "Write 3-5 specific future research directions as a numbered list. "
-        "Each must be actionable and grounded in a limitation or finding of this study."
-    ),
-    "reference": (
-        "Write a reference list in APA 7th edition format. "
-        "Include at least 15-20 academic sources directly relevant to the study topic. "
-        "List alphabetically by first author surname. "
-        "Format: Author, A. A., & Author, B. B. (Year). Title of article. Journal Name, Volume(Issue), pages. https://doi.org/xxxx"
-    ),
-    "introduction": (
-        "Write the chapter introduction in 1-2 paragraphs. State the purpose of this chapter, "
-        "give a brief roadmap of what it covers, and link it to the preceding chapter. "
-        "Be concise and direct."
-    ),
-}
 
 
-def _subsection_guidelines(title: str) -> str:
-    """Return specific writing instructions for the given subsection title."""
-    title_l = title.lower()
-    for pattern, guideline in SUBSECTION_GUIDELINES.items():
-        if pattern in title_l:
-            return guideline
-    return ""
+
+def _subsection_guidelines(title: str, topic: str = "") -> str:
+    """Generate dynamic writing instructions for the given subsection title."""
+    return (
+        f"Adapt your writing style naturally and intelligently to fit the purpose of the '{title}' section. "
+        "Do not rigidly follow a fixed, hardcoded template. Write comprehensively and organically."
+    )
 
 
 DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
@@ -436,27 +185,31 @@ def _research_design(message: str, topic: str, document: Document) -> str:
 
 
 def _extract_objectives(document: Document, topic: str) -> list[str]:
+    """Dynamically analyze the whole document and extract objectives using the LLM."""
+    from agent.gemini import extract_formal_objectives
+
+    # Gather full document text to give the LLM wide context
+    full_text_blocks = []
     sections = (document.content or {}).get("sections", [])
-    chapter_1_idx = find_section(document.content, "Chapter 1")
-    chapter_1 = sections[chapter_1_idx] if chapter_1_idx is not None and chapter_1_idx < len(sections) else {}
-    chapter_1_text = (chapter_1.get("content") or "").strip()
+    for sec in sections:
+        full_text_blocks.append(f"### {sec.get('title', '')}")
+        full_text_blocks.append(sec.get("content", ""))
+    
+    full_text = "\n\n".join(full_text_blocks).strip()
+    if not full_text:
+        # Fallback if doc is empty
+        short_topic = (topic or "the study topic").strip()
+        return [
+            f"To determine the current state of {short_topic}",
+            f"To evaluate key drivers and constraints affecting {short_topic}",
+            f"To propose evidence-based recommendations for improving outcomes in {short_topic}",
+        ]
 
-    lines = [ln.strip(" -\t") for ln in chapter_1_text.splitlines() if ln.strip()]
-    hits: list[str] = []
-    for line in lines:
-        if len(hits) >= 5:
-            break
-        if re.search(r"\bobjective\b", line.lower()) and len(line) > 24:
-            hits.append(line[:140])
-
-    if hits:
-        return hits
-
-    short_topic = (topic or "the study topic").strip()
-    return [
-        f"Determine the current state of {short_topic}",
-        f"Evaluate key drivers and constraints affecting {short_topic}",
-        f"Propose evidence-based recommendations for improving outcomes in {short_topic}",
+    # Use the LLM to professionally extract and write the objectives
+    llm_objectives = extract_formal_objectives(full_text, topic)
+    return llm_objectives or [
+        f"To determine the current state of {topic}",
+        f"To evaluate key drivers and constraints affecting {topic}"
     ]
 
 
@@ -1175,7 +928,7 @@ def _execute_subsection_nodes(
                 body = _fallback_subsection_text(topic, section_title, title)
         else:
                 # ── Individual AI prompt with subsection-specific guidelines ──────
-                guidelines = _subsection_guidelines(title)
+                guidelines = _subsection_guidelines(title, topic)
                 lowered_title = title.lower()
                 is_pointform = any(
                     k in lowered_title
@@ -1489,7 +1242,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         return {"intent": "write_spreadsheet", "target_section": None, "topic": None}
 
     if any(k in text for k in [
-        "correct", "improve", "enhance", "fix",
+        "correct", "improve", "enhance", "fix", "expand", "add to",
         "put it again", "add it again", "add it back",
         "put back", "put the", "include the",
         "write it again", "write it back", "write again",
@@ -1789,12 +1542,29 @@ def _document_grounded_chat_response(message: str, doc_context: str) -> str:
         )
     else:
         instruction = (
-            "Answer the user conversationally, but stay grounded in the document content below. "
-            "If the user asks generally, give: (1) what you notice, (2) key strengths/weaknesses, "
-            "and (3) practical next steps. "
-            "Reference actual section/chapter titles when available. "
-            "Do NOT output workflow/planning text. Do NOT ask for more information. "
-            "Keep it concise and useful (about 5-9 sentences)."
+            "You are a document editing agent operating within a structured document environment.\n"
+            "You must:\n"
+            "1. Read and understand the entire document before performing any action.\n"
+            "2. Identify document structure, including sections and subsections.\n"
+            "3. Strictly follow user instructions.\n\n"
+            "Scope Rules:\n"
+            "- If a user specifies a section (e.g., “Introduction”, “Section 2.2”), you must ONLY modify that section.\n"
+            "- Do NOT modify any other section.\n"
+            "- Do NOT infer additional edits beyond the requested scope.\n"
+            "- If the section is unclear or missing, ask for clarification.\n\n"
+            "Editing Behavior:\n"
+            "- Preserve meaning unless explicitly asked to change it.\n"
+            "- Maintain consistency with the rest of the document.\n"
+            "- Keep formatting and structure intact.\n\n"
+            "Modes of Operation:\n"
+            "- Refinement: improve clarity and grammar\n"
+            "- Enhancement: expand content meaningfully\n"
+            "- Analysis: summarize or evaluate\n"
+            "- Rewrite: rephrase content\n\n"
+            "Output Rules:\n"
+            "- Return only the modified section content unless instructed otherwise.\n"
+            "If the user is asking a general question, give: (1) what you notice, (2) key strengths/weaknesses, "
+            "and (3) practical next steps based on the document context."
         )
     prompt = (
         f"You are a helpful, human-sounding academic assistant.\n"
@@ -3159,24 +2929,28 @@ def _run_copilot_loop(
 
     if not relevant_indices:
         section_prompt = (
-            f"User request: {message}\n\n"
+            f"User request: '{message}'\n\n"
             f"Document outline:\n{outline}\n\n"
-            "Which section indices (integers) are most relevant to this request? "
-            "Return a JSON array of at most 3 indices, e.g. [2, 3]. "
-            "Return ONLY the JSON array."
+            "Task: Identify the exact section(s) the user wants to update or modify based on their request.\n"
+            "Constraints:\n"
+            "- If the user names a specific section (e.g., 'Introduction', 'Methodology'), return the index for that section.\n"
+            "- If the user refers to a concept (e.g., 'objectives', 'background', 'limitations'), identify the section index that conventionally contains it (e.g., 'objectives' are typically in the 'Introduction').\n"
+            "- Do not infer or include other sections unless explicitly implied by the user.\n"
+            "- Return a JSON array of integers for the matching section indices, e.g., [0]. \n"
+            "Return ONLY the JSON array and nothing else."
         )
         try:
             raw = generate_text(section_prompt)
-            m = re.search(r"\[[\d,\s]+\]", raw)
+            m = re.search(r"\[[\d,\s]*\]", raw)
             if m:
                 parsed = json.loads(m.group(0))
-                relevant_indices = [i for i in parsed if 0 <= i < len(sections_info)][:3]
+                relevant_indices = [i for i in parsed if 0 <= i < len(sections_info)]
         except Exception:
             relevant_indices = []
 
     if not relevant_indices:
         _all_done(plan)
-        return "Could not identify a relevant section to edit.", False
+        return "I could not find the specified section in the document to modify. Could you clarify which section you mean?", False
 
     # Steps 2+: read → edit for each relevant section
     edit_summaries: list[str] = []
@@ -3200,13 +2974,23 @@ def _run_copilot_loop(
         plan_cursor += 1
 
         edit_prompt = (
-            f"You are editing a section of an academic dissertation.\n\n"
+            "SYSTEM INSTRUCTION:\n"
+            "You are a flexible, intelligent document editing agent operating within a structured environment.\n"
+            "You must:\n"
+            "1. Understand the document context and adapt to the user's specific needs.\n"
+            "2. Follow user instructions creatively while maintaining professional quality.\n\n"
+            "Scope Guidelines:\n"
+            "- Address the user's target section, but adapt your approach if broader changes fulfill the request.\n"
+            "- Adapt your editing style to match the user's intent (e.g., expansion, refinement, complete rewrite).\n\n"
+            "Editing Behavior:\n"
+            "- Enhance clarity, flow, and academic tone.\n"
+            "- Expand content meaningfully when asked, using context to generate relevant additions.\n\n"
             f"User request: {message}\n\n"
             f"Document topic: {topic}\n\n"
             f"Section: {sec_title}\n\n"
-            f"Current content:\n{current_content[:4000]}\n\n"
-            "Write the improved version of this section. Be specific to the document topic. "
-            "Do NOT include the section heading. Return ONLY the improved content."
+            f"Current content:\n{current_content}\n\n"
+            "Write the improved version of this section based on the user request. Make sure not to lose any important information that was not meant to be modified. Be specific to the document topic. "
+            "Do NOT include the section heading in the output. Return ONLY the improved content in its entirety."
         )
         try:
             new_content = generate_text(edit_prompt).strip()

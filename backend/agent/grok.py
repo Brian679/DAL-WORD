@@ -50,7 +50,7 @@ def _request_text(prompt: str) -> str:
     payload = {
         "model": MODEL_NAME,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
+        "temperature": 0.8,
     }
     response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
     response.raise_for_status()
