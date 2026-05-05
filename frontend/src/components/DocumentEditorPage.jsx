@@ -284,6 +284,73 @@ function buildWorkflowFromPlan(plan = [], previous = null) {
   };
 }
 
+/* ── Inline markdown renderer ────────────────────────────────── */
+function renderInline(text) {
+  const parts = text.split(/(\*\*[\s\S]+?\*\*|\*[\s\S]+?\*|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**'))
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('*') && part.endsWith('*'))
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    if (part.startsWith('`') && part.endsWith('`'))
+      return <code key={i} className="dap-inline-code">{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
+
+function MdText({ text }) {
+  if (!text) return null;
+  const segments = text.split(/(```[\s\S]*?```)/g);
+  return (
+    <>
+      {segments.map((seg, si) => {
+        if (seg.startsWith('```')) {
+          const code = seg.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+          return (
+            <div key={si} className="dap-code-block">
+              <pre><code>{code}</code></pre>
+            </div>
+          );
+        }
+        const lines = seg.split('\n');
+        const elements = [];
+        let listBuf = [];
+        let olBuf = [];
+        const flushUl = () => {
+          if (listBuf.length) { elements.push(<ul key={`ul${elements.length}`}>{listBuf}</ul>); listBuf = []; }
+        };
+        const flushOl = () => {
+          if (olBuf.length) { elements.push(<ol key={`ol${elements.length}`}>{olBuf}</ol>); olBuf = []; }
+        };
+        lines.forEach((line, li) => {
+          const hm = line.match(/^(#{1,4})\s+(.*)/);
+          if (hm) {
+            flushUl(); flushOl();
+            const lvl = hm[1].length;
+            const Tag = lvl <= 2 ? 'h3' : 'h4';
+            elements.push(<Tag key={li} className="dap-md-heading">{renderInline(hm[2])}</Tag>);
+          } else if (line.match(/^[-*]\s+/)) {
+            flushOl();
+            listBuf.push(<li key={li}>{renderInline(line.replace(/^[-*]\s+/, ''))}</li>);
+          } else if (line.match(/^\d+\.\s+/)) {
+            flushUl();
+            olBuf.push(<li key={li}>{renderInline(line.replace(/^\d+\.\s+/, ''))}</li>);
+          } else if (!line.trim()) {
+            flushUl(); flushOl();
+            if (elements.length && elements[elements.length - 1]?.type !== 'br')
+              elements.push(<br key={`br${li}`} />);
+          } else {
+            flushUl(); flushOl();
+            elements.push(<p key={li}>{renderInline(line)}</p>);
+          }
+        });
+        flushUl(); flushOl();
+        return <span key={si}>{elements}</span>;
+      })}
+    </>
+  );
+}
+
 function CopilotWorkflowCard({ summary, planItems, msgId, workflow }) {
   const pct = summary?.completion_percent ?? 0;
   const done = summary?.tasks_completed ?? 0;
@@ -854,7 +921,7 @@ export default function DocumentEditorPage({
   }
 
   function applyPageMargins(top, right, bottom, left) {
-    const paper = richEditorRef.current?.closest('.doc-paper-scroll');
+    const paper = richEditorRef.current?.closest('.doc-page-body-zone');
     if (!paper) return;
     paper.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
   }
@@ -907,6 +974,40 @@ export default function DocumentEditorPage({
     if (!editor) return;
     editor.innerHTML = sectionsToHtml(draftSections);
   }, [draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ghost-highlight updated sections inline in the editor
+  useEffect(() => {
+    const editor = richEditorRef.current;
+    if (!editor || !highlightedSections.length) {
+      // Clear any existing highlights when list is empty
+      editor?.querySelectorAll('[data-ghost-highlight]').forEach((el) => {
+        el.removeAttribute('data-ghost-highlight');
+      });
+      return;
+    }
+    // Remove stale highlights first
+    editor.querySelectorAll('[data-ghost-highlight]').forEach((el) => {
+      el.removeAttribute('data-ghost-highlight');
+    });
+    const headings = editor.querySelectorAll('h1,h2,h3');
+    headings.forEach((heading) => {
+      const titleText = heading.textContent.trim().toLowerCase();
+      const matched = highlightedSections.some(
+        (t) => titleText.includes(t.trim().toLowerCase()) || t.trim().toLowerCase().includes(titleText)
+      );
+      if (!matched) return;
+      heading.setAttribute('data-ghost-highlight', 'true');
+      // Also mark sibling paragraphs that follow this heading (until next heading)
+      let sib = heading.nextElementSibling;
+      while (sib && !['H1', 'H2', 'H3'].includes(sib.tagName)) {
+        sib.setAttribute('data-ghost-highlight', 'content');
+        sib = sib.nextElementSibling;
+      }
+    });
+    // Auto-clear after 6 seconds
+    const timer = setTimeout(() => setHighlightedSections([]), 6000);
+    return () => clearTimeout(timer);
+  }, [highlightedSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const sections = Array.isArray(document?.content?.sections) ? document.content.sections : [];
@@ -1591,79 +1692,204 @@ export default function DocumentEditorPage({
             {/* ── PAGE LAYOUT tab ── */}
             {activeRibbonTab === 'Page Layout' && (
               <div className="doc-ribbon-toolbar">
-                {/* Margins */}
+                {/* Page Setup */}
                 <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows">
-                    <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Normal margins (1 inch)" onClick={() => applyPageMargins(96, 96, 80, 96)}><LayoutTemplate size={13}/><span>Normal</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Narrow margins (0.5 inch)" onClick={() => applyPageMargins(48, 48, 48, 48)}><LayoutTemplate size={13}/><span>Narrow</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Wide margins (2 inch)" onClick={() => applyPageMargins(96, 192, 96, 192)}><LayoutTemplate size={13}/><span>Wide</span></button>
-                    </div>
-                  </div>
-                  <span className="doc-tool-group-label">Margins</span>
-                </div>
-                {/* Orientation */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows">
-                    <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Portrait orientation" onClick={() => {
-                        const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                        if (scroll) { scroll.style.width = '816px'; scroll.style.minHeight = '1056px'; }
-                      }}><FileText size={13}/><span>Portrait</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Landscape orientation" onClick={() => {
-                        const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                        if (scroll) { scroll.style.width = '1056px'; scroll.style.minHeight = '816px'; }
-                      }}><FileText size={13} style={{transform:'rotate(90deg)'}}/><span>Landscape</span></button>
-                    </div>
-                  </div>
-                  <span className="doc-tool-group-label">Orientation</span>
-                </div>
-                {/* Columns */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows">
-                    <div className="doc-tool-group-row">
-                      {[1,2,3].map(n => (
-                        <button key={n} className="doc-tool-btn doc-tool-btn--labeled" title={`${n} column${n>1?'s':''}`} onClick={() => applyColumnLayout(n)}>
-                          <Columns size={13}/><span>{n} Col</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <span className="doc-tool-group-label">Columns</span>
-                </div>
-                {/* Line Spacing */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows">
-                    <div className="doc-tool-group-row">
-                      <select className="doc-font-select" style={{width:'72px'}} value={lineSpacing} onChange={(e) => applyLineSpacing(e.target.value)} title="Line Spacing">
-                        {['1','1.15','1.5','2','2.5','3'].map(v => <option key={v} value={v}>{v}</option>)}
+                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
+                    <div style={{ position: 'relative' }}>
+                      <button className="doc-tool-btn doc-tool-btn--tall" title="Margins" style={{ width: '46px' }}>
+                        <LayoutTemplate size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Margins <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                      </button>
+                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === 'normal') applyPageMargins(96, 120, 96, 120);
+                        if (val === 'narrow') applyPageMargins(48, 48, 48, 48);
+                        if (val === 'moderate') applyPageMargins(96, 72, 96, 72);
+                        if (val === 'wide') applyPageMargins(96, 192, 96, 192);
+                        e.target.value = "";
+                      }} title="Margins Menu">
+                        <option value="" disabled>Margins</option>
+                        <option value="normal">Normal</option>
+                        <option value="narrow">Narrow</option>
+                        <option value="moderate">Moderate</option>
+                        <option value="wide">Wide</option>
                       </select>
                     </div>
-                    <div className="doc-tool-group-row">
-                      <label style={{fontSize:'10px',color:'#6b7280'}}>Spacing</label>
+
+                    <div style={{ position: 'relative' }}>
+                      <button className="doc-tool-btn doc-tool-btn--tall" title="Orientation" style={{ width: '60px' }}>
+                        <FileText size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Orientation <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                      </button>
+                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
+                        const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+                        if (!scroll) return;
+                        if (e.target.value === 'portrait') { scroll.style.width = '816px'; scroll.style.minHeight = '1056px'; }
+                        if (e.target.value === 'landscape') { scroll.style.width = '1056px'; scroll.style.minHeight = '816px'; }
+                        e.target.value = "";
+                      }} title="Orientation Menu">
+                        <option value="" disabled>Orientation</option>
+                        <option value="portrait">Portrait</option>
+                        <option value="landscape">Landscape</option>
+                      </select>
+                    </div>
+
+                    <div style={{ position: 'relative' }}>
+                      <button className="doc-tool-btn doc-tool-btn--tall" title="Size" style={{ width: '38px' }}>
+                        <Ruler size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Size <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                      </button>
+                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
+                        const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+                        if (!scroll) return;
+                        if (e.target.value === 'letter') { scroll.style.width = '816px'; scroll.style.minHeight = '1056px'; }
+                        if (e.target.value === 'a4') { scroll.style.width = '794px'; scroll.style.minHeight = '1123px'; }
+                        if (e.target.value === 'legal') { scroll.style.width = '816px'; scroll.style.minHeight = '1344px'; }
+                        e.target.value = "";
+                      }} title="Size Menu">
+                        <option value="" disabled>Size</option>
+                        <option value="letter">Letter</option>
+                        <option value="a4">A4</option>
+                        <option value="legal">Legal</option>
+                      </select>
+                    </div>
+
+                    <div style={{ position: 'relative', marginRight: '6px' }}>
+                      <button className="doc-tool-btn doc-tool-btn--tall" title="Columns" style={{ width: '50px' }}>
+                        <Columns size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Columns <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                      </button>
+                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => { applyColumnLayout(parseInt(e.target.value)); e.target.value = ""; }} title="Columns Menu">
+                        <option value="" disabled>Columns</option>
+                        <option value="1">One</option>
+                        <option value="2">Two</option>
+                        <option value="3">Three</option>
+                      </select>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', justifyContent: 'center' }}>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Breaks">
+                        <FileText size={14} color="#2b579a"/><span>Breaks</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
+                      </button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Line Numbers">
+                        <ListOrdered size={14} color="#2b579a"/><span>Line Numbers</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
+                      </button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Hyphenation">
+                        <Minus size={14} color="#2b579a"/><span>Hyphenation</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
+                      </button>
                     </div>
                   </div>
-                  <span className="doc-tool-group-label">Paragraph</span>
+                  <span className="doc-tool-group-label">Page Setup</span>
                 </div>
+
                 {/* Page Background */}
                 <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows">
-                    <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Set page background color" onClick={() => {
+                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
+                    <button className="doc-tool-btn doc-tool-btn--tall" title="Watermark" style={{ width: '62px' }}>
+                      <Image size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px', opacity: 0.6 }}/>
+                      <span style={{ display: 'flex', alignItems: 'center' }}>Watermark <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    </button>
+                    <button className="doc-tool-btn doc-tool-btn--tall" title="Page Color" style={{ width: '60px' }} onClick={() => {
                         const el = window.document.createElement('input'); el.type = 'color'; el.value = '#ffffff';
                         el.onchange = (ev) => {
                           const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                          if (scroll) scroll.style.background = ev.target.value;
+                          if (scroll) scroll.style.backgroundColor = ev.target.value;
                         };
                         el.click();
-                      }}><Palette size={13}/><span>Page Color</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Add page border" onClick={() => {
+                      }}>
+                      <Palette size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                      <span style={{ display: 'flex', alignItems: 'center' }}>Page Color <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    </button>
+                    <button className="doc-tool-btn doc-tool-btn--tall" title="Page Borders" style={{ width: '68px' }} onClick={() => {
                         const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                        if (scroll) scroll.style.border = scroll.style.border ? '' : '2px solid #1a56db';
-                      }}><LayoutTemplate size={13}/><span>Page Border</span></button>
-                    </div>
+                        if (!scroll) return;
+                        scroll.style.border = scroll.style.border ? '' : '1px solid #1a1a1a';
+                      }}>
+                      <LayoutTemplate size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                      <span style={{ display: 'flex', alignItems: 'center' }}>Page Borders <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    </button>
                   </div>
                   <span className="doc-tool-group-label">Page Background</span>
+                </div>
+
+                {/* Paragraph */}
+                <div className="doc-tool-group">
+                  <div className="doc-tool-group-rows" style={{ gap: '16px', alignItems: 'center', height: '100%' }}>
+                    <div className="doc-tool-group-col" style={{ gap: '4px' }}>
+                      <div style={{ fontSize: '11px', color: '#4d5566', marginBottom: '1px' }}>Indent</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#4d5566', width: '32px' }}>Left:</span>
+                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
+                          <input type="text" defaultValue="0&quot;" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }} onClick={() => execFmt('outdent')}>▲</button>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }} onClick={() => execFmt('indent')}>▼</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#4d5566', width: '32px' }}>Right:</span>
+                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
+                          <input type="text" defaultValue="0&quot;" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="doc-tool-group-col" style={{ gap: '4px' }}>
+                      <div style={{ fontSize: '11px', color: '#4d5566', marginBottom: '1px' }}>Spacing</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#4d5566', width: '38px' }}>Before:</span>
+                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
+                          <input type="text" defaultValue="0 pt" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: '#4d5566', width: '38px' }}>After:</span>
+                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
+                          <input type="text" defaultValue="8 pt" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
+                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <span className="doc-tool-group-label" style={{ display: 'flex', alignItems: 'center', gap: '2px', cursor: 'pointer' }} onClick={() => {}}>Paragraph <ChevronDown size={10} style={{ opacity: 0.7 }}/></span>
+                </div>
+
+                {/* Arrange */}
+                <div className="doc-tool-group" style={{ opacity: 0.5, pointerEvents: 'none' }}>
+                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
+                    <button className="doc-tool-btn doc-tool-btn--tall" title="Position" style={{ width: '48px' }}>
+                      <Image size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                      <span style={{ display: 'flex', alignItems: 'center' }}>Position <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    </button>
+                    <button className="doc-tool-btn doc-tool-btn--tall" title="Wrap Text" style={{ width: '56px' }}>
+                      <FileText size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
+                      <span style={{ display: 'flex', alignItems: 'center' }}>Wrap Text <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', justifyContent: 'center', marginLeft: '6px' }}>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Bring Forward">
+                        <ChevronRight size={14} color="#2b579a" style={{ transform: 'rotate(-90deg)' }}/><span>Bring Forward</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
+                      </button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Send Backward">
+                        <ChevronRight size={14} color="#2b579a" style={{ transform: 'rotate(90deg)' }}/><span>Send Backward</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
+                      </button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Selection Pane">
+                        <List size={14} color="#2b579a"/><span>Selection Pane</span>
+                      </button>
+                    </div>
+                  </div>
+                  <span className="doc-tool-group-label" style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>Arrange</span>
                 </div>
               </div>
             )}
@@ -1871,10 +2097,8 @@ export default function DocumentEditorPage({
                     <div className="doc-tool-group-row">
                       {['75%','100%','125%','150%'].map(z => (
                         <button key={z} className="doc-tool-btn doc-tool-btn--labeled" title={`Zoom to ${z}`} onClick={() => {
-                          const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                          if (scroll) scroll.style.transform = `scale(${parseInt(z)/100})`;
-                          const zone = richEditorRef.current?.closest('.doc-paper-zone');
-                          if (zone) zone.style.transformOrigin = 'top center';
+                          const canvas = richEditorRef.current?.closest('.doc-page-canvas');
+                          if (canvas) { canvas.style.transform = `scale(${parseInt(z)/100})`; canvas.style.transformOrigin = 'top center'; }
                         }}><span style={{fontSize:'11px'}}>{z}</span></button>
                       ))}
                     </div>
@@ -2085,27 +2309,31 @@ export default function DocumentEditorPage({
 
           {/* Paper */}
           <section className="doc-paper-zone">
-            <div className="doc-paper-scroll">
-              {!!manualError && <p className="doc-manual-error">{manualError}</p>}
-              {!!highlightedSections.length && (
-                <div className="doc-change-highlight-strip" role="status" aria-live="polite">
-                  <span className="doc-change-highlight-label">Agent updated:</span>
-                  {highlightedSections.map((title, idx) => (
-                    <span className="doc-change-highlight-chip" key={`${title}-${idx}`}>{title}</span>
-                  ))}
+            <div className="doc-page-canvas">
+              <div className="doc-paper-scroll">
+                <div className="doc-page-body-zone">
+                  {!!manualError && <p className="doc-manual-error">{manualError}</p>}
+                  {!!highlightedSections.length && (
+                    <div className="doc-change-highlight-strip" role="status" aria-live="polite">
+                      <span className="doc-change-highlight-label">Agent updated:</span>
+                      {highlightedSections.map((title, idx) => (
+                        <span className="doc-change-highlight-chip" key={`${title}-${idx}`}>{title}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div
+                    ref={richEditorRef}
+                    className="doc-rich-editor"
+                    contentEditable
+                    suppressContentEditableWarning
+                    spellCheck
+                    onInput={handleEditorInput}
+                    onKeyDown={handleEditorKeyDown}
+                    onMouseUp={updateActiveFormats}
+                    onKeyUp={updateActiveFormats}
+                  />
                 </div>
-              )}
-              <div
-                ref={richEditorRef}
-                className="doc-rich-editor"
-                contentEditable
-                suppressContentEditableWarning
-                spellCheck
-                onInput={handleEditorInput}
-                onKeyDown={handleEditorKeyDown}
-                onMouseUp={updateActiveFormats}
-                onKeyUp={updateActiveFormats}
-              />
+              </div>
             </div>
           </section>
         </div>
@@ -2116,40 +2344,35 @@ export default function DocumentEditorPage({
           {/* ── Panel header ── */}
           <div className="dap-header">
             <div className="dap-header-left">
-              <button type="button" className="dap-head-icon-btn" onClick={createNewChat} title="New Chat">
-                <Plus size={16} className="dap-icon-btn" />
-              </button>
-              <span className="dap-title">CHAT</span>
+              <div className="dap-header-logo">
+                <Wand2 size={14} />
+              </div>
+              <span className="dap-title">Copilot</span>
             </div>
             <div className="dap-header-right">
-              <Settings2 size={15} className="dap-icon-btn" />
-              <span className="dap-icon-btn dap-dots">···</span>
-              <span className="dap-icon-btn">⤢</span>
+              <button type="button" className="dap-head-icon-btn" onClick={createNewChat} title="New Chat">
+                <Plus size={15} className="dap-icon-btn" />
+              </button>
+              <button type="button" className="dap-head-icon-btn" title="Chat history" onClick={() => setShowChatList((prev) => !prev)}>
+                <RotateCcw size={13} className="dap-icon-btn" />
+              </button>
               <button
                 type="button"
                 className="dap-head-icon-btn dap-close-btn"
                 onClick={() => setAiPanelOpen(false)}
-                title="Close chat"
+                title="Close"
               >
                 <X size={14} />
               </button>
             </div>
           </div>
 
-          {/* ── Back row ── */}
-          <div className="dap-back-row">
-            <button className="dap-back-btn" onClick={() => setShowChatList((prev) => !prev)}>
-              <ArrowLeft size={14} />
-              <span className="dap-back-label">
-                {showChatList ? 'Chats' : (activeChat?.name || 'New Chat')}
-              </span>
-            </button>
-          </div>
-
           {/* ── Messages area ── */}
           <div className="dap-messages">
             {showChatList ? (
+              /* Chat history list */
               <div className="dap-chat-list">
+                <p className="dap-chat-list-label">Recent chats</p>
                 {chats.map((chat) => (
                   <button
                     key={chat.id}
@@ -2160,72 +2383,79 @@ export default function DocumentEditorPage({
                       setShowChatList(false);
                     }}
                   >
+                    <MessageSquare size={13} className="dap-chat-item-icon" />
                     <span className="dap-chat-name">{chat.name}</span>
-                    <span className="dap-chat-meta">{chat.messages.length} message{chat.messages.length === 1 ? '' : 's'}</span>
+                    <span className="dap-chat-meta">{chat.messages.length}</span>
                   </button>
                 ))}
               </div>
+            ) : messages.length === 0 && !isThinking ? (
+              /* Empty / welcome state */
+              <div className="dap-empty-state">
+                <div className="dap-empty-icon-wrap">
+                  <Wand2 size={28} />
+                </div>
+                <h3 className="dap-empty-title">How can I help?</h3>
+                <p className="dap-empty-sub">Ask anything about your document</p>
+                <div className="dap-suggestion-chips">
+                  {['Summarise this document', 'Improve the writing', 'Check grammar & style', 'Continue writing'].map((prompt) => (
+                    <button
+                      key={prompt}
+                      className="dap-suggestion-chip"
+                      onClick={() => sendMessage(prompt)}
+                      disabled={isThinking}
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : (
+              /* Message thread */
               messages.map((msg) =>
                 msg.role === 'assistant' ? (
                   <div key={msg.id} className="dap-msg dap-msg--ai">
-                    <div className="dap-msg-body">
-                      {msg.summary ? (
-                        <CopilotWorkflowCard
-                          summary={msg.summary}
-                          planItems={msg.plan || []}
-                          msgId={msg.id}
-                          workflow={msg.workflow || null}
-                        />
-                      ) : (
-                        msg.text.split('\n').map((line, li) =>
-                          line.startsWith('•') ? (
-                            <div key={li} className="dap-bullet">{line}</div>
-                          ) : line.trim() ? (
-                            <p key={li}>{line}</p>
-                          ) : (
-                            <br key={li} />
-                          )
-                        )
+                    <div className="dap-ai-avatar">
+                      <Wand2 size={11} />
+                    </div>
+                    <div className="dap-msg-content">
+                      <div className="dap-msg-body">
+                        {msg.summary ? (
+                          <CopilotWorkflowCard
+                            summary={msg.summary}
+                            planItems={msg.plan || []}
+                            msgId={msg.id}
+                            workflow={msg.workflow || null}
+                          />
+                        ) : (
+                          <MdText text={msg.text} />
+                        )}
+                      </div>
+                      {!!msg?.changeSet?.editedSections?.length && (
+                        <div className="dap-change-summary">
+                          <span className="dap-change-summary-label">Updated sections:</span>
+                          {msg.changeSet.editedSections.map((title, idx) => (
+                            <span className="dap-change-chip" key={`${msg.id}-${idx}`}>{title}</span>
+                          ))}
+                        </div>
                       )}
-                    </div>
-                    {!!msg?.changeSet?.editedSections?.length && (
-                      <div className="dap-change-summary">
-                        <span className="dap-change-summary-label">Updated sections:</span>
-                        {msg.changeSet.editedSections.map((title, idx) => (
-                          <span className="dap-change-chip" key={`${msg.id}-${idx}`}>{title}</span>
-                        ))}
+                      {!!msg?.changeSet?.pending && (
+                        <div className="dap-task-actions">
+                          <button type="button" className="dap-keep-btn" onClick={() => keepAgentChanges(activeChatId, msg.id)}>Keep</button>
+                          <button type="button" className="dap-undo-btn" onClick={() => undoAgentChanges(activeChatId, msg.id, msg.changeSet.beforeSections || [])} disabled={isSavingManual}>Undo</button>
+                        </div>
+                      )}
+                      <div className="dap-msg-actions">
+                        <button className="dap-msg-act-btn" title="Retry"><RotateCcw size={11} /></button>
+                        <button className="dap-msg-act-btn" title="Copy" onClick={() => navigator.clipboard?.writeText(msg.text)}><Copy size={11} /></button>
+                        <button className="dap-msg-act-btn" title="Dislike"><ThumbsDown size={11} /></button>
+                        <span className="dap-model-tag">{activeModel}</span>
                       </div>
-                    )}
-                    {!!msg?.changeSet?.pending && (
-                      <div className="dap-task-actions">
-                        <button
-                          type="button"
-                          className="dap-keep-btn"
-                          onClick={() => keepAgentChanges(activeChatId, msg.id)}
-                        >
-                          Keep
-                        </button>
-                        <button
-                          type="button"
-                          className="dap-undo-btn"
-                          onClick={() => undoAgentChanges(activeChatId, msg.id, msg.changeSet.beforeSections || [])}
-                          disabled={isSavingManual}
-                        >
-                          Undo
-                        </button>
-                      </div>
-                    )}
-                    <div className="dap-msg-actions">
-                      <button className="dap-msg-act-btn"><RotateCcw size={12} /></button>
-                      <button className="dap-msg-act-btn"><Copy size={12} /></button>
-                      <button className="dap-msg-act-btn"><ThumbsDown size={12} /></button>
                     </div>
-                    <div className="dap-model-tag">{activeModel} · 1×</div>
                   </div>
                 ) : (
                   <div key={msg.id} className="dap-msg dap-msg--user">
-                    {msg.text}
+                    <div className="dap-user-bubble">{msg.text}</div>
                   </div>
                 )
               )
@@ -2233,34 +2463,24 @@ export default function DocumentEditorPage({
 
             {!showChatList && (
               <>
-                <div ref={bottomRef} />
                 {isThinking && !liveProgressMsgId && (
-                  <div className="dap-msg dap-msg--ai dap-thinking">
-                    <div className="dap-msg-body"><p>Thinking…</p></div>
+                  <div className="dap-msg dap-msg--ai">
+                    <div className="dap-ai-avatar"><Wand2 size={11} /></div>
+                    <div className="dap-msg-content">
+                      <div className="dap-typing-dots">
+                        <span /><span /><span />
+                      </div>
+                    </div>
                   </div>
                 )}
+                <div ref={bottomRef} />
               </>
             )}
-
           </div>
 
           {/* ── Composer ── */}
           {!showChatList && (
             <div className="dap-composer">
-              {attachedFile && (
-                <div className="dap-attachment-chip">
-                  <Paperclip size={11} />
-                  <span className="dap-attachment-name">{attachedFile.name}</span>
-                  <button
-                    type="button"
-                    className="dap-attachment-remove"
-                    onClick={() => setAttachedFile(null)}
-                    title="Remove attachment"
-                  >
-                    <X size={11} />
-                  </button>
-                </div>
-              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -2272,46 +2492,51 @@ export default function DocumentEditorPage({
                   e.target.value = '';
                 }}
               />
-              <textarea
-                className="dap-composer-input"
-                placeholder="Ask anything about this document…"
-                rows={2}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKey}
-              />
-              <div className="dap-model-row">
-                <span className="dap-model-label">Model</span>
-                <select
-                  className="dap-model-select"
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  disabled={isThinking}
-                >
-                  <option value="gemini">Gemini</option>
-                  <option value="grok">Grok</option>
-                </select>
-              </div>
-              <div className="dap-composer-footer">
-                <div className="dap-composer-left">
-                  <button
-                    type="button"
-                    className="dap-attach-btn"
-                    onClick={() => fileInputRef.current?.click()}
-                    title="Attach file (PDF, DOCX, TXT)"
+              {attachedFile && (
+                <div className="dap-attachment-chip">
+                  <Paperclip size={11} />
+                  <span className="dap-attachment-name">{attachedFile.name}</span>
+                  <button type="button" className="dap-attachment-remove" onClick={() => setAttachedFile(null)} title="Remove"><X size={11} /></button>
+                </div>
+              )}
+              <div className="dap-composer-box">
+                <textarea
+                  className="dap-composer-input"
+                  placeholder="Ask Copilot…"
+                  rows={1}
+                  value={inputValue}
+                  onChange={(e) => {
+                    setInputValue(e.target.value);
+                    e.target.style.height = 'auto';
+                    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+                  }}
+                  onKeyDown={handleKey}
+                />
+                <div className="dap-composer-actions">
+                  <button type="button" className="dap-attach-btn" onClick={() => fileInputRef.current?.click()} title="Attach file" disabled={isThinking}>
+                    <Paperclip size={13} />
+                  </button>
+                  <select
+                    className="dap-model-pill"
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
                     disabled={isThinking}
+                    title="Select model"
                   >
-                    <Paperclip size={14} />
+                    <option value="gemini">Gemini</option>
+                    <option value="grok">Grok</option>
+                  </select>
+                  <button
+                    className="dap-send-btn"
+                    onClick={() => sendMessage(inputValue)}
+                    disabled={!inputValue.trim() || isThinking}
+                    title="Send (Enter)"
+                  >
+                    <Send size={13} />
                   </button>
                 </div>
-                <button
-                  className="dap-send-btn"
-                  onClick={() => sendMessage(inputValue)}
-                  disabled={!inputValue.trim() || isThinking}
-                >
-                  <Send size={14} />
-                </button>
               </div>
+              <p className="dap-composer-hint">Enter to send · Shift+Enter for new line</p>
             </div>
           )}
         </aside>}
