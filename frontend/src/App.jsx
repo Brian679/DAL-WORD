@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import HomePage from './components/HomePage';
 import DocumentEditorPage from './components/DocumentEditorPage';
-import { createDocument, listDocuments, runAgentAction, updateDocument } from './api/client';
+import { createDocument, getDocument, listDocuments, runAgentAction, updateDocument } from './api/client';
 import './styles.css';
 
 function getRouteFromPath(pathname) {
@@ -17,6 +17,7 @@ export default function App() {
   const [message,     setMessage]     = useState('');
   const [route,       setRoute]       = useState(() => getRouteFromPath(window.location.pathname));
   const [chatHint,    setChatHint]    = useState(null);
+  const [activeDoc,   setActiveDoc]   = useState(null);
 
   async function refreshDocuments() {
     try {
@@ -49,20 +50,50 @@ export default function App() {
       const doc = await createDocument({ title: 'Untitled Document', content: { sections: [] } });
       await refreshDocuments();
       openDocument(doc);
-    } catch {
-      setMessage('Could not reach backend');
+    } catch (e) {
+      setMessage(e?.message || 'Could not create new document');
     }
   }
 
   function openDocument(doc, hint) {
     setChatHint(hint || null);
+    setActiveDoc(doc || null);
     navigate(`/document/${encodeURIComponent(doc.id)}`);
   }
 
   const currentDoc = useMemo(
-    () => documents.find((doc) => String(doc.id) === String(route.docId)) ?? null,
-    [documents, route.docId]
+    () => {
+      if (route.name !== 'document') return null;
+      if (activeDoc && String(activeDoc.id) === String(route.docId)) {
+        return activeDoc;
+      }
+      return documents.find((doc) => String(doc.id) === String(route.docId)) ?? null;
+    },
+    [activeDoc, documents, route.docId, route.name]
   );
+
+  useEffect(() => {
+    if (route.name !== 'document' || !route.docId) return;
+    if (currentDoc && String(currentDoc.id) === String(route.docId)) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const doc = await getDocument(route.docId);
+        if (!cancelled) {
+          setActiveDoc(doc);
+        }
+      } catch {
+        if (!cancelled) {
+          setMessage('Could not open document');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [route.name, route.docId, currentDoc]);
 
   async function runAction(action, payload) {
     if (!currentDoc) return;
@@ -127,8 +158,8 @@ export default function App() {
               const doc = await createDocument({ title, content: { sections } });
               await refreshDocuments();
               openDocument(doc);
-            } catch {
-              setMessage('Could not import file');
+            } catch (e) {
+              setMessage(e?.message || 'Could not import file');
             }
           }}
           onNewFromTemplate={async (tpl) => {
@@ -136,8 +167,8 @@ export default function App() {
               const doc = await createDocument({ title: tpl.label, content: { sections: [] } });
               await refreshDocuments();
               openDocument(doc);
-            } catch {
-              setMessage('Could not create document');
+            } catch (e) {
+              setMessage(e?.message || 'Could not create document');
             }
           }}
         />

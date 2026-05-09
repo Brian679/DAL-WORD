@@ -2364,6 +2364,31 @@ ul {
 .dap-msg-body p { margin: 0 0 5px; }
 .dap-msg-body p:last-child { margin-bottom: 0; }
 .dap-md-heading { margin: 6px 0 3px; font-size: 13px; font-weight: 600; color: #1a1a1a; }
+.dap-research-badge {
+    margin-top: 8px;
+    border: 1px solid #c5d8fb;
+    border-radius: 8px;
+    background: #f4f8ff;
+    padding: 4px 8px;
+}
+.dap-research-badge summary {
+    cursor: pointer;
+    color: #1a73e8;
+    font-size: 11px;
+    font-weight: 600;
+    list-style: none;
+}
+.dap-research-badge summary::-webkit-details-marker {
+    display: none;
+}
+.dap-research-badge ul {
+    margin: 6px 0 2px 16px;
+}
+.dap-research-badge li {
+    font-size: 11px;
+    color: #2a2f3a;
+    margin-bottom: 3px;
+}
 .dap-msg-body ul,
 .dap-msg-body ol,
 .dap-msg-content ul,
@@ -2603,6 +2628,42 @@ ul {
 }
 .dap-attach-btn:hover { color: #1a1a1a; border-color: #9aa0a6; }
 .dap-attach-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Research Mode button */
+.dap-research-btn {
+    background: none;
+    border: 1px solid #d8dce4;
+    border-radius: 6px;
+    color: #5f6368;
+    padding: 4px 7px;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.dap-research-btn:hover { color: #1a73e8; border-color: #1a73e8; }
+.dap-research-btn.active { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; }
+.dap-research-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Research Mode active banner */
+.dap-research-banner {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #e8f0fe;
+    border: 1px solid #c5d8fb;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #1a73e8;
+    margin-bottom: 4px;
+}
+.dap-research-banner span { flex: 1; }
+.dap-research-banner button {
+    background: none; border: none; cursor: pointer;
+    color: #1a73e8; display: inline-flex; align-items: center; padding: 0;
+}
+.dap-research-banner button:hover { color: #0b5ed7; }
 
 .dap-model-pill {
     flex: 1;

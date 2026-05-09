@@ -314,7 +314,13 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
               <div
                 key={doc.id}
                 className={`file-row${selectedDoc?.id === doc.id ? ' file-row--selected' : ''}`}
-                onClick={() => setSelectedDoc(doc)}
+                onClick={() => {
+                  if (selectedDoc?.id === doc.id) {
+                    onOpenDocument(doc);
+                    return;
+                  }
+                  setSelectedDoc(doc);
+                }}
                 onDoubleClick={() => onOpenDocument(doc)}
               >
                 <span className="fcol-check">
@@ -353,6 +359,14 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
           </div>
 
           <div className="info-filename">{selectedDoc.title}.docx</div>
+
+          <button
+            className="empty-new-btn"
+            style={{ width: '100%', marginBottom: 10 }}
+            onClick={() => onOpenDocument(selectedDoc)}
+          >
+            Open Document
+          </button>
 
           <div className="info-block">
             <div className="info-block-title">Sharing settings</div>

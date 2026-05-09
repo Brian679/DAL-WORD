@@ -10,6 +10,8 @@ from documents.serializers import DocumentSerializer
 from tasks.dissertation_tasks import generate_dissertation_sections
 
 from .autonomous import run_agent, generate_dissertation_plan_llm, llm_chapters_to_flat_steps, _research_design
+from .agents_v2 import run_multi_agent_supervision
+from .academic_runtime import ClaimGraphBuilder, CoherenceChecker, EvaluationEngine, WorkflowEngine
 from .executor import run_action
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,12 @@ class ChatView(APIView):
         # Used by the frontend to show the user a confirmation card before the agent acts.
         preview_only_raw = request.data.get("preview_only") or request.POST.get("preview_only", "")
         preview_only = str(preview_only_raw).lower() in {"true", "1", "yes"}
+        grounded_research_raw = request.data.get("grounded_research") or request.POST.get("grounded_research", "")
+        verify_citations_raw = request.data.get("verify_citations") or request.POST.get("verify_citations", "")
+        synthetic_mode_raw = request.data.get("synthetic_mode") or request.POST.get("synthetic_mode", "")
+        grounded_research = str(grounded_research_raw).lower() in {"true", "1", "yes"}
+        verify_citations = str(verify_citations_raw).lower() in {"true", "1", "yes"}
+        synthetic_mode = str(synthetic_mode_raw).lower() in {"true", "1", "yes"}
         if not message:
             return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -133,6 +141,9 @@ class ChatView(APIView):
                 recent_history=recent_history,
                 attachment_text=attachment_text,
                 preview_only=preview_only,
+                grounded_research=grounded_research,
+                verify_citations=verify_citations,
+                synthetic_mode=synthetic_mode,
             )
         except Exception as exc:
             logger.error("Agent error for doc %d: %s", document_id, exc, exc_info=True)
@@ -164,6 +175,8 @@ class ChatView(APIView):
             "model": result.get("model", "Unknown Model"),
             "awaiting_confirmation": awaiting_confirmation,
             "confirmation": result.get("confirmation"),
+            "research": result.get("research", {}),
+            "citation_verification": result.get("citation_verification"),
         }
         if result["document_updated"]:
             document.refresh_from_db()
@@ -177,6 +190,59 @@ class GenerateDissertationView(APIView):
         topic = request.data.get("topic", "Untitled Topic")
         task = generate_dissertation_sections.delay(document_id=document_id, topic=topic)
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
+
+
+class ResearchWorkflowView(APIView):
+    """Run retrieval + specialist-agent supervision for research-grounded writing."""
+
+    def post(self, request, document_id: int):
+        message = (request.data.get("message") or "").strip()
+        topic = (request.data.get("topic") or message or "").strip()
+        if not topic:
+            return Response({"error": "topic or message required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            document = Document.objects.get(pk=document_id)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        supervision = run_multi_agent_supervision(topic=topic, instruction=message or topic, document_id=document.id)
+        checker = CoherenceChecker()
+        evaluator = EvaluationEngine()
+        workflow = WorkflowEngine()
+
+        doc_text = _doc_context(document)
+        coherence = checker.check(doc_text)
+        metrics = evaluator.score(doc_text)
+        claim_graph = ClaimGraphBuilder().build(
+            text=doc_text,
+            citations=[c for c in supervision.get("retrieval", {}).get("top_papers", []) if isinstance(c, str)],
+        )
+
+        return Response(
+            {
+                "phase": workflow.choose_phase(message or topic),
+                "supervision": supervision,
+                "coherence": coherence,
+                "metrics": {
+                    "citation_density": metrics.citation_density,
+                    "coherence_score": metrics.coherence_score,
+                    "redundancy_score": metrics.redundancy_score,
+                    "argument_consistency": metrics.argument_consistency,
+                    "methodology_alignment": metrics.methodology_alignment,
+                },
+                "claim_graph": [
+                    {
+                        "claim": n.claim,
+                        "citation": n.citation,
+                        "confidence": n.confidence,
+                        "source_passage": n.source_passage,
+                        "source_location": n.source_location,
+                    }
+                    for n in claim_graph[:80]
+                ],
+            }
+        )
 
 
 class DissertationPlanView(APIView):

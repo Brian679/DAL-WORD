@@ -3418,6 +3418,9 @@ def run_agent(
     recent_history: list[dict[str, Any]] | None = None,
     attachment_text: str | None = None,
     preview_only: bool = False,
+    grounded_research: bool = False,
+    verify_citations: bool = False,
+    synthetic_mode: bool = False,
 ) -> dict[str, Any]:
     """
     Returns:
@@ -3475,6 +3478,44 @@ def run_agent(
         or document.title
     )
     topic = re.sub(r"^on\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
+
+    research_result = None
+    research_brief = ""
+    citation_context = ""
+    research_error = ""
+    research_mode = grounded_research or any(
+        kw in lowered_message
+        for kw in [
+            "literature review",
+            "grounded in real papers",
+            "sources",
+            "citations",
+            "academic references",
+            "evidence",
+        ]
+    )
+    if research_mode:
+        try:
+            from .research_layer import (
+                retrieval_pipeline,
+                build_research_brief,
+                build_citation_context,
+            )
+
+            research_result = retrieval_pipeline(
+                topic=topic or effective_message,
+                query=effective_message,
+                document_id=document.id,
+            )
+            research_brief = build_research_brief(research_result)
+            citation_context = build_citation_context(research_result.top_papers, max_items=12)
+            if research_brief:
+                doc_context = f"{doc_context}\n\n{research_brief}"
+            if citation_context:
+                doc_context = f"{doc_context}\n\n{citation_context}"
+        except Exception as exc:
+            research_error = str(exc)
+            logger.warning("Research retrieval pipeline failed: %s", exc)
 
     # Force review-only phrasing to analysis mode (no edits, no Copilot edit workflow).
     if _is_improvement_review_request(effective_message):
@@ -3591,6 +3632,56 @@ def run_agent(
 
     had_error = False
     error_detail = ""
+    generation_message = effective_message
+    if research_mode and (research_brief or citation_context):
+        generation_message = (
+            f"{effective_message}\n\n"
+            "Grounding requirements:\n"
+            "- Use only verifiable claims from the retrieved papers.\n"
+            "- Prefer DOI-backed citations.\n"
+            "- If evidence is weak, say so explicitly.\n\n"
+            f"{research_brief}\n\n"
+            f"{citation_context}"
+        )
+    if synthetic_mode:
+        generation_message = (
+            f"{generation_message}\n\n"
+            "Synthetic data mode is ON. Any synthetic numbers, charts, or evidence must be explicitly labeled as synthetic."
+        )
+
+    # ── Multi-agent supervisor enrichment ──────────────────────────────────
+    # For dissertation writes or research-mode generation, run the full agent
+    # pipeline BEFORE the main LLM call so its synthesised brief enriches generation.
+    agent_supervisor_result: dict[str, Any] | None = None
+    if research_mode and intent in {
+        "write_dissertation", "write_section", "write_report", "enhance_document"
+    }:
+        try:
+            from .agents_v2 import AgentContext, SupervisorAgent
+
+            supervisor = SupervisorAgent()
+            agent_ctx = AgentContext(
+                topic=topic or effective_message,
+                instruction=effective_message,
+                document_id=document.id,
+                retrieval=research_result,
+            )
+            agent_supervisor_result = supervisor.run(agent_ctx)
+            # If retrieval wasn't done yet, grab it from agent result
+            if research_result is None and agent_ctx.retrieval is not None:
+                research_result = agent_ctx.retrieval
+
+            synthesis = agent_supervisor_result.get("synthesis", "")
+            if synthesis:
+                generation_message = (
+                    f"{generation_message}\n\n"
+                    "=== SUPERVISOR SYNTHESIS (from specialist agents) ===\n"
+                    f"{synthesis}\n\n"
+                    "INSTRUCTIONS: Use the above synthesis, evidence, and methodology "
+                    "as your primary grounding. Cite only sources listed with real DOIs."
+                )
+        except Exception as exc:
+            logger.warning("Multi-agent supervisor failed: %s", exc)
 
     # 3. Execute
     try:
@@ -3604,9 +3695,9 @@ def run_agent(
         elif intent == "enhance_document":
             reply, updated = _enhance_document(document, topic, plan)
         elif intent == "enhance_section" and chapter_request:
-            reply, updated = _enhance_chapter_batch(document, chapter_numbers, topic, effective_message, plan)
+            reply, updated = _enhance_chapter_batch(document, chapter_numbers, topic, generation_message, plan)
         elif intent == "write_section" and chapter_request:
-            reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, effective_message, plan)
+            reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, generation_message, plan)
         elif intent == "enhance_section":
             # Use Copilot-style agentic loop: read → identify → edit → save
             copilot_steps = [
@@ -3618,11 +3709,11 @@ def run_agent(
             ]
             plan.clear()
             plan.extend([{"step": s, "status": "pending"} for s in copilot_steps])
-            reply, updated = _run_copilot_loop(document, effective_message, plan, target_section, topic)
+            reply, updated = _run_copilot_loop(document, generation_message, plan, target_section, topic)
         elif intent == "write_section":
-            reply, updated = _write_section(document, target_section, topic, effective_message, plan)
+            reply, updated = _write_section(document, target_section, topic, generation_message, plan)
         elif intent == "write_dissertation":
-            reply, updated = _write_dissertation(document, topic, effective_message, plan)
+            reply, updated = _write_dissertation(document, topic, generation_message, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "write_report":
@@ -3636,7 +3727,7 @@ def run_agent(
         elif intent == "add_chart":
             reply, updated = _add_chart(document, target_section, plan)
         elif intent == "add_image":
-            reply, updated = _add_image(document, target_section, effective_message, plan)
+            reply, updated = _add_image(document, target_section, generation_message, plan)
         else:
             try:
                 # Always ground unknown/vague prompts in the document rather than
@@ -3682,6 +3773,65 @@ def run_agent(
     if error_detail:
         orchestration["error"] = error_detail
 
+    citation_verification: dict[str, Any] | None = None
+    if verify_citations:
+        try:
+            from .research_layer import summarize_verification, verify_generated_citations
+
+            citation_verification = summarize_verification(verify_generated_citations(reply))
+            orchestration["citation_verification"] = {
+                "enabled": True,
+                "total": citation_verification.get("total", 0),
+                "verified": citation_verification.get("verified", 0),
+                "rejected": citation_verification.get("rejected", 0),
+            }
+        except Exception as exc:
+            orchestration["citation_verification"] = {"enabled": True, "error": str(exc)}
+
+    # Optionally repair low-confidence or rejected citations using retrieval pool papers.
+    if verify_citations and research_result and getattr(research_result, "top_papers", None):
+        try:
+            from .research_layer import repair_citations
+
+            repair_result = repair_citations(reply, research_result.top_papers, min_confidence=60)
+            if (repair_result.repaired_count + repair_result.removed_count) > 0:
+                reply = repair_result.repaired_text
+
+            orchestration["citation_repair"] = {
+                "enabled": True,
+                "total": repair_result.total_citations,
+                "repaired": repair_result.repaired_count,
+                "removed": repair_result.removed_count,
+                "unchanged": repair_result.unchanged_count,
+            }
+        except Exception as exc:
+            orchestration["citation_repair"] = {"enabled": True, "error": str(exc)}
+
+    research_meta: dict[str, Any] = {
+        "enabled": bool(research_mode),
+        "error": research_error or None,
+        "embedding_path": getattr(research_result, "embedding_path", None),
+        "top_sources": [
+            {
+                "title": p.title,
+                "year": p.year,
+                "doi": p.doi,
+                "source": p.source,
+                "score": p.score,
+            }
+            for p in (getattr(research_result, "top_papers", []) or [])[:10]
+        ],
+        "synthetic_mode": bool(synthetic_mode),
+        "supervisor": {
+            "enabled": bool(agent_supervisor_result),
+            "trace": (agent_supervisor_result or {}).get("trace", []),
+            "contract": (agent_supervisor_result or {}).get("contract"),
+            "citation_verification": (agent_supervisor_result or {}).get("citation_verification"),
+            "citation_repair": (agent_supervisor_result or {}).get("citation_repair"),
+        },
+        "citation_repair": orchestration.get("citation_repair"),
+    }
+
     return {
         "reply": reply,
         "plan": plan if todo_required else [],
@@ -3690,6 +3840,8 @@ def run_agent(
         "document_updated": updated,
         "intent": intent,
         "model": get_model_label(),
+        "research": research_meta,
+        "citation_verification": citation_verification,
     }
 
 

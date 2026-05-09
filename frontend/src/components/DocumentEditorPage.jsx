@@ -729,6 +729,7 @@ export default function DocumentEditorPage({
   const [showChatList, setShowChatList] = useState(false);
   const [inputValue,   setInputValue]   = useState('');
   const [attachedFile, setAttachedFile] = useState(null);
+  const [groundedResearch, setGroundedResearch] = useState(false);
   const fileInputRef = useRef(null);
   const [isThinking,   setIsThinking]   = useState(false);
   const [isSavingManual, setIsSavingManual] = useState(false);
@@ -1329,6 +1330,7 @@ export default function DocumentEditorPage({
         text: result.reply,
         summary: buildSummaryFromResult(result),
         plan: Array.isArray(result.plan) ? result.plan : msg.plan || [],
+        research: result?.research || null,
       }));
       return;
     }
@@ -1356,6 +1358,7 @@ export default function DocumentEditorPage({
       plan: finalPlan,
       summary: buildSummaryFromPlan(finalPlan, 'All planned tasks completed; document updated'),
       workflow: finalWorkflow,
+      research: result?.research || null,
       changeSet: {
         pending: true,
         editedSections: editedTitles,
@@ -1465,6 +1468,7 @@ export default function DocumentEditorPage({
         document?.id, userText, selectedModel,
         dissertationRequest ? attachedFile : null,
         /* previewOnly = */ false,
+        { groundedResearch, verifyCitations: groundedResearch },
       );
 
       setAttachedFile(null);
@@ -1490,6 +1494,7 @@ export default function DocumentEditorPage({
                       text: toChatReply(result),
                       summary: buildSummaryFromResult(result),
                       plan: Array.isArray(result.plan) ? result.plan : [],
+                      research: result?.research || null,
                     },
                   ],
                 }
@@ -2724,6 +2729,22 @@ export default function DocumentEditorPage({
                             workflow={msg.workflow || null}
                           />
                         )}
+                        {!!msg?.research?.enabled && !!msg?.research?.top_sources?.length && (
+                          <details className="dap-research-badge">
+                            <summary>
+                              Grounded on {msg.research.top_sources.length} real paper{msg.research.top_sources.length !== 1 ? 's' : ''}
+                            </summary>
+                            <ul>
+                              {msg.research.top_sources.map((source, idx) => (
+                                <li key={`${msg.id}-src-${idx}`}>
+                                  {source?.title || 'Untitled'}
+                                  {source?.year ? ` (${source.year})` : ''}
+                                  {source?.doi ? ` - DOI: ${source.doi}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </div>
                       {!!msg?.changeSet?.editedSections?.length && (
                         <div className="dap-change-summary">
@@ -2808,10 +2829,17 @@ export default function DocumentEditorPage({
                   <button type="button" className="dap-attachment-remove" onClick={() => setAttachedFile(null)} title="Remove"><X size={11} /></button>
                 </div>
               )}
+              {groundedResearch && (
+                <div className="dap-research-banner">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                  <span>Research Mode — grounded in real academic papers</span>
+                  <button type="button" onClick={() => setGroundedResearch(false)} title="Disable Research Mode"><X size={10} /></button>
+                </div>
+              )}
               <div className="dap-composer-box">
                 <textarea
                   className="dap-composer-input"
-                  placeholder="Ask Copilot…"
+                  placeholder={groundedResearch ? 'Ask Copilot (research mode)…' : 'Ask Copilot…'}
                   rows={1}
                   value={inputValue}
                   onChange={(e) => {
@@ -2824,6 +2852,15 @@ export default function DocumentEditorPage({
                 <div className="dap-composer-actions">
                   <button type="button" className="dap-attach-btn" onClick={() => fileInputRef.current?.click()} title="Attach file" disabled={isThinking}>
                     <Paperclip size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`dap-research-btn${groundedResearch ? ' active' : ''}`}
+                    onClick={() => setGroundedResearch((v) => !v)}
+                    title={groundedResearch ? 'Research Mode ON — click to disable' : 'Enable Research Mode (grounds responses in real academic papers)'}
+                    disabled={isThinking}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                   </button>
                   <select
                     className="dap-model-pill"
