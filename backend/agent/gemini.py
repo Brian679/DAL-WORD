@@ -82,7 +82,9 @@ Choose ONE intent:
 
 Guidance:
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
+- If user says "improve 2.7" or "fix 3.4" (subsection number) -> enhance_section with that exact number as target_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
+- CRITICAL: "improve 2.7", "fix section 2.7", "enhance 3.4" mean improve ONLY that subsection — set intent=enhance_section and target_section="2.7" (the number). Do NOT set intent=write_dissertation or write_section.
 - If user says "write full dissertation", "write thesis", or "write project on <topic>" -> write_dissertation.
 - If user asks for report/assignment/powerpoint/excel -> map to the matching write_* intent.
 - If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.

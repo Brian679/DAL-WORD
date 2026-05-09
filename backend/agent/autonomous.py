@@ -1403,6 +1403,15 @@ def _execute_subsection_nodes(
         meta = node.get("meta", {}) if isinstance(node.get("meta", {}), dict) else {}
         current_document_context = _full_context_for_generation(document)
 
+        # ── Broadcast current node to frontend polling ──────────────────────
+        try:
+            _act_content = dict(document.content or {})
+            _act_content["_current_activity"] = f"{section_title} › {title}"
+            document.content = _act_content
+            document.save(update_fields=["content", "updated_at"])
+        except Exception:
+            pass
+
         if kind == "table":
             objective = str(meta.get("objective") or "") or None
             table_no = table_counter[0]
@@ -1510,156 +1519,59 @@ def _execute_subsection_nodes(
             except Exception:
                 body = _fallback_subsection_text(topic, section_title, title)
         else:
-                # ── Individual AI prompt with subsection-specific guidelines ──────
-                guidelines = _subsection_guidelines(title, topic)
-                lowered_title = title.lower()
-                is_pointform = any(
-                    k in lowered_title
-                    for k in ["research objective", "objectives", "research question", "hypothes",
-                              "recommendation", "further research", "areas for future", "definition of key"]
-                )
-                wc = 120 if is_pointform else default_word_count
+            # ── Text node: multi-agent pipeline ──────────────────────────
+            # PlannerAgent.generate_spec enriches the task with guidelines +
+            # word count.  ContentGenerator → RuntimeSandbox → ErrorAnalyzer
+            # → RepairAgent handle quality gating and automatic repair.
+            from .pipeline import Pipeline
+            from .planner import PlannerAgent, TaskSpec as PipelineTaskSpec, IntentSpec
 
-                # Detect explicit user formatting instructions
-                _user_instr_lower = user_instruction.lower()
-                _explicit_pointform = any(
-                    k in _user_instr_lower
-                    for k in ["point form", "bullet point", "bullet list", "numbered list",
-                              "number form", "in points", "as points", "list form"]
-                )
-                _explicit_paragraph = any(
-                    k in _user_instr_lower
-                    for k in ["paragraph", "prose", "flowing", "narrative"]
-                )
+            guidelines = _subsection_guidelines(title, topic)
+            lowered_title = title.lower()
+            is_pointform = any(
+                k in lowered_title
+                for k in ["research objective", "objectives", "research question", "hypothes",
+                          "recommendation", "further research", "areas for future", "definition of key"]
+            )
+            wc = 120 if is_pointform else default_word_count
 
-                # Build step progress label for logging / callbacks
-                step_label = (
-                    f"{section_title} — Step {step_idx + 1}: {title}"
-                )
-                logger.info("▶ Generating: %s", step_label)
+            task_spec = PipelineTaskSpec(
+                id=re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60],
+                title=title,
+                kind="text",
+                word_count=wc,
+                guidelines=guidelines,
+                context_hint=current_document_context[-2000:],
+                chapter_title=section_title,
+                chapter_num=0,
+                topic=topic,
+                research_design=research_design,
+            )
 
-                # Override guidelines if user explicitly requested a format,
-                # OR if this section is structurally always a list (objectives, questions, etc.)
-                if _explicit_paragraph and not _explicit_pointform:
-                    format_override = (
-                        "FORMAT INSTRUCTION (from user): Write this as flowing academic paragraphs. "
-                        "Do NOT use bullet points or numbered lists.\n\n"
-                    )
-                elif _explicit_pointform or (is_pointform and not _explicit_paragraph):
-                    format_override = (
-                        "FORMAT INSTRUCTION: Present this content as a numbered list. "
-                        "Each numbered point must be on its own line (e.g. '1. ...', '2. ...', '3. ...'). "
-                        "You may include 1–2 introductory sentences before the list. "
-                        "Do NOT write the points as continuous prose paragraphs.\n\n"
-                    )
-                else:
-                    format_override = ""
+            # Enrich with user formatting intent
+            intent_spec = IntentSpec(
+                intent="write_dissertation",
+                topic=topic,
+                research_design=research_design,
+                objectives=[],
+                target_section=title,
+                raw_message=user_instruction,
+            )
+            task_spec = PlannerAgent().generate_spec(task_spec, intent_spec, doc_context=local_context)
 
-                prompt_context = (
-                    f"{document_brief}\n\n"
-                    f"You are writing the section: '{title}'\n"
-                    f"Parent chapter: {section_title}\n\n"
-                    f"--- DOCUMENT CONTENT ALREADY WRITTEN (read this and build on it) ---\n"
-                    f"{current_document_context[-3000:]}\n"
-                    f"--- END OF EXISTING DOCUMENT ---\n\n"
-                    + format_override
-                    + (
-                        f"SECTION-SPECIFIC INSTRUCTIONS:\n{guidelines}\n\n"
-                        if guidelines else
-                        "Write in formal academic prose. Be specific, substantive, and analytical.\n\n"
-                    )
-                    + "CRITICAL RULES:\n"
-                    "1. Every sentence must be specifically about the research topic in the STUDY BRIEF above.\n"
-                    "2. Reference the actual topic, objectives, methodology, and context of this specific study.\n"
-                    "3. Do NOT write generic academic content that could apply to any study.\n"
-                    "4. Do NOT include the section heading in your response.\n"
-                    "5. Do NOT use filler phrases such as 'this section will discuss', "
-                    "'in today's world', 'it is important to note', or "
-                    "'the analysis will be developed in accordance with'.\n"
-                    "6. Write actual academic content — grounded in THIS specific research.\n"
-                )
-                try:
-                    body = generate_section_content(
-                        title=title,
-                        topic=topic,
-                        context=prompt_context,
-                        word_count=wc,
-                    )
-                    # If the model echoed the prompt or returned a placeholder, retry once
-                    # with a stripped-down direct prompt before using the static fallback.
-                    _FILLERS = [
-                        "this section addresses",
-                        "this subsection addresses",
-                        "the analysis will be developed",
-                        "will be discussed in this section",
-                        "writing instructions for this section",
-                        "current document (read this",
-                    ]
-                    is_hypothesis_section = "hypoth" in lowered_title
-                    bad_hypothesis_shape = (
-                        is_hypothesis_section
-                        and (
-                            ("h0" not in body.lower() and "null hypothesis" not in body.lower())
-                            or ("h1" not in body.lower() and "alternative hypothesis" not in body.lower())
-                            or len(body.strip().splitlines()) < 2
-                        )
-                    )
-                    if (
-                        not body
-                        or len(body.strip()) < 80
-                        or any(f in body.lower() for f in _FILLERS)
-                        or bad_hypothesis_shape
-                    ):
-                        logger.warning(
-                            "▶ RETRY — placeholder/echo detected for '%s'. Sending direct prompt.", title
-                        )
-                        retry_context = (
-                            f"{document_brief}\n\n"
-                            f"You are writing a dissertation section on: '{topic}'.\n"
-                            f"Chapter: {section_title}\n"
-                            f"Research design: {research_design}\n\n"
-                            + (f"{guidelines}\n\n" if guidelines else "")
-                            + "Write ONLY the actual academic content for this section, "
-                            "grounded in the specific research topic above. "
-                            "Do NOT repeat these instructions. Do NOT include the heading. "
-                            "Do NOT output generic content — write specifically about THIS study."
-                        )
-                        if is_hypothesis_section:
-                            retry_context += (
-                                "\n\nMandatory format for this section:\n"
-                                "1. H0: ...\n"
-                                "   H1: ...\n"
-                                "2. H0: ...\n"
-                                "   H1: ...\n"
-                                "Only null/alternative pairs. No paragraphs."
-                            )
-                        body = generate_section_content(
-                            title=title,
-                            topic=topic,
-                            context=retry_context,
-                            word_count=wc,
-                        )
-                        # If retry also looks bad, escalate to fallback
-                        bad_hypothesis_shape = (
-                            is_hypothesis_section
-                            and (
-                                ("h0" not in body.lower() and "null hypothesis" not in body.lower())
-                                or ("h1" not in body.lower() and "alternative hypothesis" not in body.lower())
-                            )
-                        )
-                        if (
-                            not body
-                            or len(body.strip()) < 80
-                            or any(f in body.lower() for f in _FILLERS)
-                            or bad_hypothesis_shape
-                        ):
-                            logger.error(
-                                "▶ FALLBACK — retry also produced bad output for '%s'.", title
-                            )
-                            body = _fallback_subsection_text(topic, section_title, title)
-                except Exception as exc:
-                    logger.error("generate_section_content error for '%s': %s — using fallback", title, exc)
-                    body = _fallback_subsection_text(topic, section_title, title)
+            logger.info(
+                "▶ [PlannerAgent→Pipeline] %s — %s (wc=%d)",
+                section_title, title, task_spec.word_count,
+            )
+            result = Pipeline().run_node(
+                task=task_spec,
+                document_brief=document_brief,
+                rolling_context=local_context,
+                generate_fn=generate_section_content,
+                fallback_fn=_fallback_subsection_text,
+                user_instruction=user_instruction,
+            )
+            body = result.content
 
         body = _strip_leading_heading(body, title)
         body = _sanitize_body(body)
@@ -2362,14 +2274,26 @@ def _full_context_for_generation(document: Document, upto_index: int | None = No
     sections = (document.content or {}).get("sections", [])
     if upto_index is not None:
         sections = sections[: upto_index + 1]
+    
     parts: list[str] = [f"Title: {document.title}"]
-    for sec in sections:
+    total_sections = len(sections)
+    
+    for idx, sec in enumerate(sections):
         st = sec.get("title", "")
         sc = sec.get("content", "")
+        
         if st:
             parts.append(f"\n## {st}")
+            
         if sc:
-            parts.append(sc[:1200])
+            # Dynamic context compression:
+            # Keep the last 2 sections largely intact (up to 2500 chars).
+            # Heavily truncate older sections (first 300 chars) to save token limits.
+            if idx >= total_sections - 2:
+                parts.append(sc[:2500])
+            else:
+                parts.append(sc[:300] + "...\n[Content truncated for length]")
+                
     return "\n".join(parts)
 
 
@@ -2407,11 +2331,13 @@ def _heading_positions(text: str) -> list[tuple[int, int, str]]:
     cursor = 0
     for line in lines:
         stripped = line.strip()
-        if stripped and (
-            re.match(r"^\d+(?:\.\d+)*\s+", stripped)
-            or stripped.lower().startswith("chapter ")
+        # More robust heading matching: allows optional markdown formatting (like **2.1** or # 2.1)
+        clean_stripped = re.sub(r"^[#*]+", "", stripped).strip()
+        if clean_stripped and (
+            re.match(r"^\d+(?:\.\d+)*\s+", clean_stripped)
+            or clean_stripped.lower().startswith("chapter ")
         ):
-            positions.append((cursor, cursor + len(line), stripped))
+            positions.append((cursor, cursor + len(line), clean_stripped))
         cursor += len(line)
     return positions
 
@@ -2453,7 +2379,7 @@ def _extract_subsection_block_if_present(section_text: str, subsection_query: st
     query_num = query_num_match.group(0) if query_num_match else None
 
     hit_index = None
-    for idx, (_, end_pos, heading) in enumerate(positions):
+    for idx, (_, end_pos, heading) in enumerate(positions):  # end_pos explicitly utilized here indirectly via index logic if needed
         heading_l = heading.lower()
         heading_num_match = re.search(r"\b\d+(?:\.\d+)*\b", heading_l)
         heading_num = heading_num_match.group(0) if heading_num_match else None
@@ -2465,6 +2391,8 @@ def _extract_subsection_block_if_present(section_text: str, subsection_query: st
         return None
 
     start = positions[hit_index][0]
+    # The positions tuple is (start_pos, expected_heading_end, heading_text)
+    # We use positions[hit_index][1] to split heading and body correctly
     heading_end = positions[hit_index][1]
     end = positions[hit_index + 1][0] if hit_index + 1 < len(positions) else len(section_text)
     heading = section_text[start:heading_end].strip()
@@ -3755,7 +3683,7 @@ def run_agent(
         orchestration["error"] = error_detail
 
     return {
-        "reply": _chat_summary_text(summary) if summary else reply,
+        "reply": reply,
         "plan": plan if todo_required else [],
         "chat_summary": summary,
         "orchestration": orchestration,
@@ -3931,7 +3859,66 @@ def _run_copilot_loop(
 
     relevant_indices: list[int] = []
 
-    if target:
+    # ── Subsection-number shortcut (e.g. "2.7", "3.4.1") ────────────────────
+    # When the user says "improve 2.7", target is literally "2.7".
+    # The top-level sections are whole chapters, so find_section would fail and
+    # the LLM fallback would incorrectly pick the WHOLE Chapter 2 for replacement.
+    # Instead, find the parent chapter, extract only the subsection block, edit it,
+    # and splice the result back — leaving the rest of the chapter untouched.
+    _subsec_re = re.compile(r"^(\d+)\.(\d+(?:\.\d+)*)$")
+    _subsec_match = _subsec_re.match((target or "").strip()) if target else None
+    if _subsec_match:
+        _ch_num = int(_subsec_match.group(1))
+        _all_secs = (document.content or {}).get("sections", [])
+        _found_chapter = False
+        for _si, _sec in enumerate(_all_secs):
+            if _chapter_number_from_title(_sec.get("title", "")) == _ch_num:
+                _found_chapter = True
+                _block = _extract_subsection_block_if_present(_sec.get("content", ""), target)
+                if _block:
+                    _heading, _body = _block
+                    _edit_prompt = (
+                        f"User request: {message}\n\n"
+                        f"Document topic: {topic}\n\n"
+                        f"Subsection: {_heading}\n\n"
+                        f"Current content:\n{_body}\n\n"
+                        "Improve ONLY this subsection based on the user request. Maintain academic "
+                        "tone and do not lose any important information that was not meant to change. "
+                        "Do NOT include the subsection heading in your output. "
+                        "Return ONLY the improved body text."
+                    )
+                    for _pi in range(2, len(plan)):
+                        plan[_pi]["status"] = "done"
+                    try:
+                        _new_body = generate_text(_edit_prompt).strip()
+                        if _new_body and len(_new_body) > 50:
+                            _new_block = f"{_heading}\n{_new_body}"
+                            _new_ch_content = _replace_subsection_if_present(
+                                _sec.get("content", ""), target, _new_block
+                            )
+                            if _new_ch_content is not None:
+                                _all_secs[_si]["content"] = _new_ch_content
+                                document.content["sections"] = _all_secs
+                                _save(document, f"copilot:subsection:{target}")
+                                _all_done(plan)
+                                return f"Improved subsection {target}.", True
+                    except Exception as _sub_exc:
+                        logger.warning("Subsection edit failed for %s: %s", target, _sub_exc)
+                _all_done(plan)
+                return (
+                    f"Could not locate subsection {target} within Chapter {_ch_num}. "
+                    "Please verify the section number and try again.",
+                    False,
+                )
+        if not _found_chapter:
+            _all_done(plan)
+            return (
+                f"Could not find Chapter {_ch_num} in the document. "
+                "Please verify the section number and try again.",
+                False,
+            )
+
+    if target and not _subsec_match:
         idx = find_section(document.content, target)
         if idx is not None:
             relevant_indices = [idx]
@@ -3984,22 +3971,20 @@ def _run_copilot_loop(
 
         edit_prompt = (
             "SYSTEM INSTRUCTION:\n"
-            "You are a flexible, intelligent document editing agent operating within a structured environment.\n"
+            "You are a focused, precise document editing agent.\n"
             "You must:\n"
-            "1. Understand the document context and adapt to the user's specific needs.\n"
-            "2. Follow user instructions creatively while maintaining professional quality.\n\n"
-            "Scope Guidelines:\n"
-            "- Address the user's target section, but adapt your approach if broader changes fulfill the request.\n"
-            "- Adapt your editing style to match the user's intent (e.g., expansion, refinement, complete rewrite).\n\n"
+            "1. Understand exactly what the user asked and apply ONLY that change.\n"
+            "2. Do NOT rewrite, expand, or modify any part of the document that the user did not ask about.\n\n"
             "Editing Behavior:\n"
-            "- Enhance clarity, flow, and academic tone.\n"
-            "- Expand content meaningfully when asked, using context to generate relevant additions.\n\n"
+            "- Apply the user's specific request (improvement, fix, expansion, etc.) to this section only.\n"
+            "- Preserve all information that the user did not explicitly ask to change.\n"
+            "- Maintain academic tone.\n\n"
             f"User request: {message}\n\n"
             f"Document topic: {topic}\n\n"
             f"Section: {sec_title}\n\n"
             f"Current content:\n{current_content}\n\n"
-            "Write the improved version of this section based on the user request. Make sure not to lose any important information that was not meant to be modified. Be specific to the document topic. "
-            "Do NOT include the section heading in the output. Return ONLY the improved content in its entirety."
+            "Write the updated version of this section. Do NOT include the section heading in the output. "
+            "Return ONLY the updated content."
         )
         try:
             new_content = generate_text(edit_prompt).strip()
@@ -4501,6 +4486,22 @@ def _write_dissertation(
     plan.append({"step": "Creating dissertation to-do list", "status": "pending"})
 
     design = _research_design(instruction, topic, document)
+
+    # ── Step 0: Intent parsing via PlannerAgent ───────────────────────────
+    from .planner import PlannerAgent as _PlannerAgent
+    _planner = _PlannerAgent()
+    objectives_early = _extract_objectives(document, topic)
+    intent_spec = _planner.parse_intent(
+        message=instruction,
+        topic=topic,
+        research_design=design,
+        objectives=objectives_early,
+        intent="write_dissertation",
+    )
+    logger.info(
+        "_write_dissertation: IntentSpec parsed — topic=%s design=%s objectives=%d",
+        intent_spec.topic[:60], intent_spec.research_design, len(intent_spec.objectives),
+    )
 
     # ── Step 1: Generate the full plan via LLM ────────────────────────────
     # Check if a plan was already generated by the DissertationPlanView and cached

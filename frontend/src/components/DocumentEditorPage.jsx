@@ -281,65 +281,89 @@ function MdText({ text }) {
 }
 
 function CopilotWorkflowCard({ summary, planItems, msgId, workflow }) {
-  const pct = summary?.completion_percent ?? 0;
+  const [expanded, setExpanded] = useState(false);
   const done = summary?.tasks_completed ?? 0;
-  const total = (summary?.tasks_completed || 0) + (summary?.tasks_pending || 0);
-  const updates = workflow?.updates || [];
+  
   return (
-    <div className="copilot-workflow-card">
-      <div className="copilot-workflow-head">
-        <span className="copilot-badge">Agent Workflow</span>
-        <span className="copilot-stage">{summary?.stage || 'Working'}</span>
-      </div>
-      <div className="copilot-progress-row">
-        <div className="copilot-progress-track">
-          <span className="copilot-progress-fill" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-        </div>
-        <span className="copilot-progress-text">{done}/{total || planItems.length || 0}</span>
-      </div>
-      {!!workflow?.currentStep && (
-        <p className="copilot-current-step">Now doing: {workflow.currentStep}</p>
-      )}
-      {!!updates.length && (
-        <div className="copilot-updates">
-          {updates.slice(0, 6).map((line, idx) => (
-            <p key={`${msgId}-upd-${idx}`} className="copilot-update-line">{line}</p>
-          ))}
+    <div className="copilot-workflow-collapsible">
+      <button type="button" className="copilot-collapsible-toggle" onClick={() => setExpanded(e => !e)}>
+        <span className="copilot-collapsible-icon">✓</span>
+        <span className="copilot-collapsible-text">Completed {done} steps</span>
+        <span className="copilot-collapsible-chevron">{expanded ? '▴' : '▾'}</span>
+      </button>
+      
+      {expanded && (
+        <div className="copilot-collapsible-body">
+          <DissertationPlan planItems={planItems || []} todoList={summary?.todo_list || []} msgId={msgId} chapterPlan={summary?.chapter_plan || []} />
         </div>
       )}
-      <DissertationPlan planItems={planItems || []} todoList={summary?.todo_list || []} msgId={msgId} chapterPlan={summary?.chapter_plan || []} />
     </div>
   );
 }
 
-// ── Confirmation card — shown before the agent executes any document change ──
-function ConfirmationCard({ description, plan, onConfirm, onCancel, disabled }) {
+
+// ── Agent Todo Panel — expandable, lives just above the composer ─────────────
+function AgentTodoPanel({ plan, isActive }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!plan?.length) return null;
+
+  const done = plan.filter((i) => i.status === 'done').length;
+  const inProgress = plan.find((i) => i.status === 'in_progress');
+  const total = plan.length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+
   return (
-    <div className="dap-confirm-card">
-      <p className="dap-confirm-heading">Here&apos;s what I&apos;m going to do:</p>
-      <p className="dap-confirm-desc">{description}</p>
-      {plan.length > 0 && (
-        <ul className="dap-confirm-steps">
-          {plan.map((s, i) => (
-            <li key={i} className="dap-confirm-step">
-              <span className="dap-confirm-step-dot">○</span>
-              {s.step}
-            </li>
-          ))}
-        </ul>
+    <div className={`agent-todo-panel${isActive ? ' agent-todo-panel--active' : ''}`}>
+      <button type="button" className="agent-todo-toggle" onClick={() => setExpanded((v) => !v)}>
+        <span className={`agent-todo-icon${isActive ? ' agent-todo-icon--spin' : ''}`}>
+          {isActive ? '◌' : '☑'}
+        </span>
+        <span className="agent-todo-head">
+          Todo
+          {inProgress && (
+            <span className="agent-todo-current">
+              {' · '}{normalizeStep(inProgress.step).replace(/^Writing\s+/i, '')}
+            </span>
+          )}
+        </span>
+        <span className="agent-todo-progress">
+          <span className="agent-todo-bar">
+            <span className="agent-todo-bar-fill" style={{ width: `${pct}%` }} />
+          </span>
+          <span className="agent-todo-frac">{done}/{total}</span>
+        </span>
+        <span className="agent-todo-chevron">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <div className="agent-todo-list">
+          {plan.map((item, idx) => {
+            const st = item.status || 'pending';
+            const label = normalizeStep(item.step || '');
+            return (
+              <div key={idx} className={`agent-todo-item agent-todo-item--${st}`}>
+                <span className={`agent-todo-dot${st === 'in_progress' ? ' agent-todo-dot--spin' : ''}`}>
+                  {st === 'done' ? '✓' : st === 'in_progress' ? '◌' : '○'}
+                </span>
+                <span className="agent-todo-item-label">{label}</span>
+              </div>
+            );
+          })}
+        </div>
       )}
-      <div className="dap-confirm-actions">
-        <button className="dap-confirm-proceed" onClick={onConfirm} disabled={disabled}>
-          <Check size={12} /> Proceed
-        </button>
-        <button className="dap-confirm-cancel" onClick={onCancel} disabled={disabled}>
-          <X size={12} /> Cancel
-        </button>
-      </div>
     </div>
   );
 }
 
+// ── Agent Activity Bar — shows current subsection being written ───────────────
+function AgentActivityBar({ activity }) {
+  if (!activity) return null;
+  return (
+    <div className="agent-activity-bar">
+      <span className="agent-activity-spin">◌</span>
+      <span className="agent-activity-text">{activity}</span>
+    </div>
+  );
+}
 
 function extractChapterRows(planItems = []) {
   return planItems
@@ -1021,6 +1045,26 @@ export default function DocumentEditorPage({
     [editorHeight]
   );
 
+  // Derive the active plan from the live progress message (or last message with a plan)
+  const activePlan = useMemo(() => {
+    if (liveProgressMsgId) {
+      const liveMsg = messages.find((m) => m.id === liveProgressMsgId);
+      if (liveMsg?.plan?.length) return liveMsg.plan;
+    }
+    const withPlan = [...messages].reverse().find((m) => m.plan?.length);
+    return withPlan?.plan || [];
+  }, [messages, liveProgressMsgId]);
+
+  // Current subsection/step the agent is actively writing
+  const currentActivity = useMemo(() => {
+    if (!liveProgressMsgId) return null;
+    const liveMsg = messages.find((m) => m.id === liveProgressMsgId);
+    return liveMsg?.workflow?.currentActivity
+      || liveMsg?.workflow?.currentStep
+      || liveMsg?.summary?.stage
+      || null;
+  }, [messages, liveProgressMsgId]);
+
   // Extract all [Comment: ...] annotations from the current draft sections
   const docComments = useMemo(() => {
     const re = /\[Comment:\s*([^\]]+)\]/gi;
@@ -1251,8 +1295,13 @@ export default function DocumentEditorPage({
           ? `Generating ${normalizeStep(activeStep.step).replace(/^Writing\s+/i, '')}...`
           : 'Finalizing dissertation...';
 
+        // Read subsection-level activity written by backend before each node
+        const subsectionActivity = latestDoc?.content?._current_activity || null;
+
         const previousWorkflow = workflowStateRef.current[messageId] || null;
         const nextWorkflow = buildWorkflowFromPlan(planFromDoc, previousWorkflow);
+        // Attach current subsection activity so AgentActivityBar can display it
+        if (subsectionActivity) nextWorkflow.currentActivity = subsectionActivity;
         workflowStateRef.current[messageId] = nextWorkflow;
 
         updateAssistantMessage(chatId, messageId, (msg) => ({
@@ -1411,44 +1460,13 @@ export default function DocumentEditorPage({
 
     try {
       // ── Step 1: Preview (non-dissertation only) ──────────────────────────
-      // Send with preview_only=true so the backend can classify the intent and
-      // return a plan for the user to confirm before any document changes occur.
-      // Dissertation requests already have their own two-step plan flow.
-      const previewResult = await chatWithDocument(
+      // Send directly without preview_only so the backend executes immediately
+      const result = await chatWithDocument(
         document?.id, userText, selectedModel,
         dissertationRequest ? attachedFile : null,
-        /* previewOnly = */ !dissertationRequest,
+        /* previewOnly = */ false,
       );
 
-      // If the backend wants confirmation, show the card and stop here.
-      if (!dissertationRequest && previewResult?.awaiting_confirmation) {
-        const confirmMsgId = Date.now() + 2;
-        setChats((prev) =>
-          prev.map((chat) =>
-            chat.id !== currentChatId ? chat : {
-              ...chat,
-              messages: [
-                ...chat.messages,
-                {
-                  id: confirmMsgId,
-                  role: 'assistant',
-                  plan: previewResult.plan || [],
-                  confirmation: previewResult.confirmation || {},
-                  pendingUserText: userText,
-                  pendingModel: selectedModel,
-                },
-              ],
-            }
-          )
-        );
-        setIsThinking(false);
-        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-        return;
-      }
-
-      // ── Step 2: Non-modifying preview result (chat/summarize) or dissertation ──
-      // The result is already complete — handle it normally.
-      const result = previewResult;
       setAttachedFile(null);
       if (result?.model) {
         setActiveModel(result.model);
@@ -1524,76 +1542,6 @@ export default function DocumentEditorPage({
       e.preventDefault();
       sendMessage(inputValue);
     }
-  }
-
-  // ── Confirmation workflow ────────────────────────────────────────────────
-  // Called when the user clicks "Proceed" on a ConfirmationCard.
-  async function executeConfirmedAction(confirmMsgId, chatId, userText, modelOverride) {
-    if (isThinking) return;
-    const beforeAgentSections = cloneSections(draftSections);
-
-    // Transition the confirmation card into a "working" state immediately.
-    updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
-      ...msg,
-      confirmation: null,   // hide the card
-      text: 'Working on it…',
-      summary: buildSummaryFromPlan(msg.plan || [], 'Executing…'),
-    }));
-    setIsThinking(true);
-
-    try {
-      // Send the real (non-preview) request — backend will execute and persist.
-      const result = await chatWithDocument(
-        document?.id, userText, modelOverride || selectedModel, attachedFile,
-        /* previewOnly = */ false,
-      );
-      setAttachedFile(null);
-      if (result?.model) setActiveModel(result.model);
-
-      // Update the message in-place with the result.
-      updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
-        ...msg,
-        text: toChatReply(result),
-        summary: buildSummaryFromResult(result),
-        plan: Array.isArray(result.plan) ? result.plan : [],
-      }));
-
-      if (result.document_updated && Array.isArray(result?.document?.content?.sections)) {
-        const nextSections = cloneSections(result.document.content.sections);
-        const editedTitles = detectEditedSections(beforeAgentSections, nextSections);
-        setDraftSections(nextSections);
-        setIsDirty(false);
-        setHighlightedSections(editedTitles);
-        updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
-          ...msg,
-          changeSet: {
-            pending: true,
-            editedSections: editedTitles,
-            beforeSections: beforeAgentSections,
-          },
-        }));
-        onDocumentChanged?.();
-      }
-    } catch (err) {
-      updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
-        ...msg,
-        confirmation: null,
-        text: `Something went wrong: ${err.message || 'Unknown error'}`,
-      }));
-    } finally {
-      setIsThinking(false);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-    }
-  }
-
-  // Called when the user clicks "Cancel" on a ConfirmationCard.
-  function cancelConfirmation(confirmMsgId, chatId) {
-    updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
-      ...msg,
-      confirmation: null,
-      plan: [],
-      text: 'Action cancelled.',
-    }));
   }
 
 
@@ -2767,23 +2715,14 @@ export default function DocumentEditorPage({
                     </div>
                     <div className="dap-msg-content">
                       <div className="dap-msg-body">
-                        {msg.confirmation ? (
-                          <ConfirmationCard
-                            description={msg.confirmation.description}
-                            plan={msg.plan || []}
-                            onConfirm={() => executeConfirmedAction(msg.id, activeChatId, msg.pendingUserText, msg.pendingModel)}
-                            onCancel={() => cancelConfirmation(msg.id, activeChatId)}
-                            disabled={isThinking}
-                          />
-                        ) : msg.summary ? (
+                        <MdText text={msg.text} />
+                        {msg.summary && (
                           <CopilotWorkflowCard
                             summary={msg.summary}
                             planItems={msg.plan || []}
                             msgId={msg.id}
                             workflow={msg.workflow || null}
                           />
-                        ) : (
-                          <MdText text={msg.text} />
                         )}
                       </div>
                       {!!msg?.changeSet?.editedSections?.length && (
@@ -2822,6 +2761,9 @@ export default function DocumentEditorPage({
 
             {!showChatList && (
               <>
+                {isThinking && liveProgressMsgId && currentActivity && (
+                  <AgentActivityBar activity={currentActivity} />
+                )}
                 {isThinking && !liveProgressMsgId && (
                   <div className="dap-msg dap-msg--ai">
                     <div className="dap-ai-avatar"><Wand2 size={11} /></div>
@@ -2836,6 +2778,14 @@ export default function DocumentEditorPage({
               </>
             )}
           </div>
+
+          {/* ── Agent Todo Panel — expandable, above composer ── */}
+          {!showChatList && (
+            <AgentTodoPanel
+              plan={activePlan}
+              isActive={!!liveProgressMsgId && isThinking}
+            />
+          )}
 
           {/* ── Composer ── */}
           {!showChatList && (
