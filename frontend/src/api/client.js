@@ -54,17 +54,18 @@ export async function runAgentAction(docId, action, payload) {
     return res.json();
 }
 
-export async function chatWithDocument(docId, message, model = 'grok', file = null) {
+export async function chatWithDocument(docId, message, model = 'grok', file = null, previewOnly = false) {
     let body;
     let headers = {};
     if (file) {
         body = new FormData();
         body.append('message', message);
         body.append('model', model);
+        if (previewOnly) body.append('preview_only', 'true');
         body.append('file', file);
         // Let browser set Content-Type with boundary for multipart
     } else {
-        body = JSON.stringify({ message, model });
+        body = JSON.stringify({ message, model, preview_only: previewOnly });
         headers['Content-Type'] = 'application/json';
     }
     const res = await fetch(`${API_BASE}/agent/${docId}/chat/`, {
@@ -76,6 +77,20 @@ export async function chatWithDocument(docId, message, model = 'grok', file = nu
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Chat request failed');
     }
-    // Returns { reply, plan, document_updated, intent, document? }
+    // Returns { reply, plan, document_updated, intent, awaiting_confirmation, confirmation?, document? }
     return res.json();
+}
+
+export async function getDissertationPlan(docId, message) {
+    try {
+        const res = await fetch(`${API_BASE}/agent/${docId}/dissertation-plan/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+        });
+        if (!res.ok) return null;
+        return res.json();
+    } catch {
+        return null;
+    }
 }

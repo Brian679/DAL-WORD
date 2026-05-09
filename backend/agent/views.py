@@ -9,7 +9,7 @@ from documents.models import Document, ChatMessage
 from documents.serializers import DocumentSerializer
 from tasks.dissertation_tasks import generate_dissertation_sections
 
-from .autonomous import run_agent
+from .autonomous import run_agent, generate_dissertation_plan_llm, llm_chapters_to_flat_steps, _research_design
 from .executor import run_action
 
 logger = logging.getLogger(__name__)
@@ -17,15 +17,26 @@ logger = logging.getLogger(__name__)
 
 def _doc_context(document: Document) -> str:
     """Flatten document content to plain text for Gemini context."""
+    import re as _re
     content = document.content or {}
     parts = [document.title]
+    comment_list: list[str] = []
+    _comment_re = _re.compile(r'\[Comment:\s*([^\]]+)\]', _re.IGNORECASE)
     for section in content.get("sections", []):
         title = section.get("title", "")
         body = section.get("content", "")
         if title:
-            parts.append(f"\n## {title}")
+            wc = len(body.split()) if body else 0
+            parts.append(f"\n## {title}  (~{wc} words)")
         if body:
             parts.append(body)
+            for m in _comment_re.finditer(body):
+                comment_list.append(f"  - In \"{title}\": {m.group(1).strip()}")
+    if comment_list:
+        parts.append(
+            "\n\n## REVIEWER COMMENTS (inline annotations from the document):\n"
+            + "\n".join(comment_list)
+        )
     return "\n".join(parts)
 
 
@@ -76,31 +87,72 @@ class ChatView(APIView):
         # Support both JSON and multipart (file upload)
         message = (request.data.get("message") or request.POST.get("message", "")).strip()
         model_choice = request.data.get("model") or request.POST.get("model", "grok")
+        # preview_only=True → classify intent + build plan, but do NOT execute or persist messages.
+        # Used by the frontend to show the user a confirmation card before the agent acts.
+        preview_only_raw = request.data.get("preview_only") or request.POST.get("preview_only", "")
+        preview_only = str(preview_only_raw).lower() in {"true", "1", "yes"}
         if not message:
             return Response({"error": "message is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Optional file attachment — extract its text and append as context
+        # Optional file attachment — keep filename in chat, keep extracted text private for model context
         uploaded_file = request.FILES.get("file")
+        attachment_text = ""
+        attachment_note = ""
         if uploaded_file:
+            attachment_note = f"[Attached file: {uploaded_file.name}]"
             file_text = _extract_file_text(uploaded_file)
             if file_text:
-                message = f"{message}\n\n[Attached file: {uploaded_file.name}]\n{file_text[:8000]}"
+                attachment_text = file_text[:8000]
 
         try:
             document = Document.objects.get(pk=document_id)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        ChatMessage.objects.create(document=document, role="user", content=message)
+        user_chat_content = message
+        if attachment_note:
+            user_chat_content = f"{message}\n\n{attachment_note}" if message else attachment_note
+
+        # For normal (non-preview) requests, persist the user message up-front so it appears
+        # in recent_history for the agent.  Preview requests don't persist anything yet.
+        if not preview_only:
+            ChatMessage.objects.create(document=document, role="user", content=user_chat_content)
+
+        recent_history = list(
+            ChatMessage.objects.filter(document=document)
+            .order_by("-created_at")
+            .values("role", "content")[:14]
+        )
+        recent_history.reverse()
 
         try:
-            result = run_agent(document, message, model_choice=model_choice)
+            result = run_agent(
+                document,
+                message,
+                model_choice=model_choice,
+                recent_history=recent_history,
+                attachment_text=attachment_text,
+                preview_only=preview_only,
+            )
         except Exception as exc:
             logger.error("Agent error for doc %d: %s", document_id, exc, exc_info=True)
-            ChatMessage.objects.create(document=document, role="assistant", content=f"Error: {exc}")
+            if not preview_only:
+                ChatMessage.objects.create(document=document, role="assistant", content=f"Error: {exc}")
             return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
-        ChatMessage.objects.create(document=document, role="assistant", content=result["reply"])
+        awaiting_confirmation = result.get("awaiting_confirmation", False)
+
+        if awaiting_confirmation:
+            # Preview for a document-modifying intent: don't persist anything yet.
+            pass
+        elif preview_only:
+            # preview_only request but a non-modifying intent (chat/summarize) executed fully.
+            # Persist both messages now so they appear in history.
+            ChatMessage.objects.create(document=document, role="user", content=user_chat_content)
+            ChatMessage.objects.create(document=document, role="assistant", content=result["reply"])
+        else:
+            # Normal (confirmed) execution: persist assistant message.
+            ChatMessage.objects.create(document=document, role="assistant", content=result["reply"])
 
         response_data = {
             "reply": result["reply"],
@@ -110,6 +162,8 @@ class ChatView(APIView):
             "document_updated": result["document_updated"],
             "intent": result["intent"],
             "model": result.get("model", "Unknown Model"),
+            "awaiting_confirmation": awaiting_confirmation,
+            "confirmation": result.get("confirmation"),
         }
         if result["document_updated"]:
             document.refresh_from_db()
@@ -123,3 +177,43 @@ class GenerateDissertationView(APIView):
         topic = request.data.get("topic", "Untitled Topic")
         task = generate_dissertation_sections.delay(document_id=document_id, topic=topic)
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
+
+
+class DissertationPlanView(APIView):
+    """Call the LLM to generate a tailored dissertation chapter plan.
+
+    The plan is returned to the frontend so the user sees a topic-specific
+    todo list immediately, before writing begins. The generated chapter
+    structure is also cached inside the document so the write step reuses it.
+    """
+
+    def post(self, request, document_id: int):
+        message = (request.data.get("message") or "").strip()
+        topic = (request.data.get("topic") or message[:300]).strip()
+        if not topic and not message:
+            return Response({"error": "message or topic required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            document = Document.objects.get(pk=document_id)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Detect research design from the message so the plan is appropriate
+        research_design = _research_design(message, topic, document)
+
+        # Ask the LLM to generate the chapter plan
+        try:
+            llm_chapters = generate_dissertation_plan_llm(topic, message, research_design)
+        except Exception as exc:
+            logger.error("DissertationPlanView LLM call failed: %s", exc, exc_info=True)
+            return Response({"error": "Plan generation failed"}, status=status.HTTP_502_BAD_GATEWAY)
+
+        # Cache the plan in the document so _write_dissertation can reuse it
+        existing = document.content or {}
+        existing["_dissertation_plan_chapters"] = llm_chapters
+        document.content = existing
+        document.save(update_fields=["content"])
+
+        # Convert to the flat step format the frontend uses
+        flat_steps = llm_chapters_to_flat_steps(llm_chapters)
+        return Response({"plan": flat_steps, "chapters": llm_chapters})

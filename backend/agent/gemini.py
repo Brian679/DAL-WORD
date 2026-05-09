@@ -175,6 +175,13 @@ def create_execution_plan(intent: str) -> list[str]:
             "Inserting image into section",
             "Saving document",
         ],
+        "address_comments": [
+            "Scanning document for reviewer comments",
+            "Reading each annotated section",
+            "Generating revisions to address comments",
+            "Applying changes to document",
+            "Saving updated document",
+        ],
         "chat": [
             "Reading document context",
             "Understanding user intent",
@@ -238,6 +245,7 @@ def generate_section_content(
         f"- Use clear, formal academic language with varied sentence rhythm and precise claims\n"
         f"- Reference the specific context: methodology, objectives, population, findings — whatever is relevant\n"
         f"- Do NOT include the section heading in your response\n"
+        f"- Do NOT use HTML tags (no <br>, <p>, <b>, etc.) — use plain text with blank lines between paragraphs\n"
         f"- Avoid generic AI phrases: 'in today's world', 'it is important to note', "
         f"'this section will discuss', or meta-references to being an AI\n"
         f"- Aim for exactly ~{word_count} words — do not stop early\n"

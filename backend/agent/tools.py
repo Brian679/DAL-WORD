@@ -392,6 +392,64 @@ def _draw_framework_diagram(ax: Any, spec: dict[str, Any]) -> None:
         ax.text(0.03, 0.04, fill(f"Note: {notes}", width=120), fontsize=8.3, color="#516472", ha="left", va="bottom")
 
 
+def _draw_process_flow(ax: Any, steps: list[str], title: str = "") -> None:
+    """Render a horizontal process-flow / methodology flowchart."""
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    ax.set_facecolor("#f7f9fc")
+    n = min(len(steps), 5) or 1
+    steps = steps[:n]
+    colors = ["#4e89e0", "#5aac6f", "#e0884e", "#9c59d1", "#d95f5f"]
+    box_w = 0.14
+    gap = (1.0 - n * box_w) / (n + 1)
+    box_h = 0.30
+    box_y = 0.32
+    if title:
+        ax.text(0.50, 0.94, fill(title, width=60), fontsize=14, fontweight="bold",
+                color="#1a2a3a", ha="center", va="center")
+    for i, step in enumerate(steps):
+        x = gap + i * (box_w + gap)
+        ax.add_patch(FancyBboxPatch(
+            (x, box_y), box_w, box_h,
+            boxstyle="round,pad=0.015,rounding_size=0.025",
+            linewidth=1.5, edgecolor=colors[i % len(colors)],
+            facecolor=colors[i % len(colors)] + "33",
+        ))
+        step_num = f"Step {i + 1}"
+        ax.text(x + box_w / 2, box_y + box_h * 0.70, step_num, fontsize=9,
+                fontweight="bold", color=colors[i % len(colors)], ha="center", va="center")
+        ax.text(x + box_w / 2, box_y + box_h * 0.38,
+                fill(step, width=16), fontsize=8.5, color="#1a2a3a",
+                ha="center", va="center", linespacing=1.25)
+        if i < n - 1:
+            arrow_x = x + box_w + 0.008
+            ax.annotate("", xy=(arrow_x + gap - 0.016, box_y + box_h / 2),
+                        xytext=(arrow_x, box_y + box_h / 2),
+                        arrowprops={"arrowstyle": "-|>", "lw": 1.8,
+                                    "color": "#5a7a9a"})
+
+
+def _draw_timeline(ax: Any, phases: list[str], title: str = "") -> None:
+    """Render a vertical research-phases timeline."""
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    ax.set_facecolor("#f8f9fa")
+    n = min(len(phases), 6) or 1
+    phases = phases[:n]
+    colors = ["#2b5eb6", "#1a8f5a", "#c26d2c", "#8b4fcf", "#b51c1c", "#0d7a7a"]
+    if title:
+        ax.text(0.50, 0.95, fill(title, width=62), fontsize=14, fontweight="bold",
+                color="#1a2a3a", ha="center", va="center")
+    ax.plot([0.38, 0.38], [0.06, 0.88], color="#aab6c8", linewidth=2, zorder=1)
+    step_h = 0.82 / max(n, 1)
+    for i, phase in enumerate(phases):
+        y = 0.88 - i * step_h - step_h * 0.5
+        ax.plot(0.38, y, "o", markersize=11, color=colors[i % len(colors)], zorder=3)
+        ax.plot(0.38, y, "o", markersize=6, color="white", zorder=4)
+        ax.text(0.41, y, fill(phase, width=42), fontsize=9.5, color="#1a2a3a",
+                ha="left", va="center", linespacing=1.3)
+        ax.text(0.35, y, f"Phase {i + 1}", fontsize=8.5, fontweight="bold",
+                color=colors[i % len(colors)], ha="right", va="center")
+
+
 def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) -> str:
     images_dir = Path(settings.MEDIA_ROOT) / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -401,11 +459,51 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
     words = re.split(r"[^a-z]+", (prompt or "").lower())
     drawer = next((fn for w in words if (fn := _SUBJECT_DRAWERS.get(w))), None)
 
+    # ── Detect academic diagram type from prompt keywords ────────────────────
+    _is_process = any(k in (prompt or "").lower() for k in [
+        "process", "step", "procedure", "methodology", "flowchart", "flow chart",
+        "workflow", "pipeline", "stages of", "steps of", "phases of", "how to",
+    ])
+    _is_timeline = any(k in (prompt or "").lower() for k in [
+        "timeline", "gantt", "schedule", "phases", "research phase", "time frame",
+        "milestones", "roadmap", "sequence",
+    ])
+
+    def _ai_generate_process_steps(n: int = 5) -> list[str]:
+        """Ask the LLM to suggest steps/phases for the given prompt."""
+        from .llm import generate_text as _gen
+        try:
+            raw = _gen(
+                f"List {n} short step/phase labels (3-5 words each) for: '{prompt}'. "
+                "Return JSON array of strings only, e.g. [\"Data Collection\", \"Analysis\"]."
+            )
+            m = re.search(r"\[.*?\]", raw, re.DOTALL)
+            if m:
+                items = json.loads(m.group(0))
+                items = [str(i).strip() for i in items if str(i).strip()]
+                if items:
+                    return items[:n]
+        except Exception:
+            pass
+        return [f"Step {i + 1}" for i in range(n)]
+
     if framework_spec:
         fig, ax = plt.subplots(figsize=(12.4, 7.2), dpi=180)
         fig.patch.set_facecolor("#ffffff")
         ax.set_facecolor("#ffffff")
         _draw_framework_diagram(ax, framework_spec)
+    elif _is_timeline:
+        phases = _ai_generate_process_steps(6)
+        fig, ax = plt.subplots(figsize=(9, 7), dpi=160)
+        fig.patch.set_facecolor("#f8f9fa")
+        ax.set_facecolor("#f8f9fa")
+        _draw_timeline(ax, phases, title=prompt.strip()[:72])
+    elif _is_process:
+        steps = _ai_generate_process_steps(5)
+        fig, ax = plt.subplots(figsize=(13, 5), dpi=160)
+        fig.patch.set_facecolor("#f7f9fc")
+        ax.set_facecolor("#f7f9fc")
+        _draw_process_flow(ax, steps, title=prompt.strip()[:72])
     elif drawer:
         fig, ax = plt.subplots(figsize=(8, 8), dpi=140)
         drawer(ax)
@@ -462,7 +560,13 @@ def _y_limits(values: list[float]) -> tuple[float, float]:
     return y_min - pad, y_max + pad
 
 
-def generate_chart(series: list[float], chart_type: str = "line", title: str = "Generated Chart") -> str:
+def generate_chart(
+    series: list[float],
+    chart_type: str = "line",
+    title: str = "Generated Chart",
+    x_labels: list[str] | None = None,
+    unit: str | None = None,
+) -> str:
     charts_dir = Path(settings.MEDIA_ROOT) / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     file_name = f"chart-{uuid4().hex[:10]}.png"
@@ -474,9 +578,21 @@ def generate_chart(series: list[float], chart_type: str = "line", title: str = "
 
     selected_chart = (chart_type or "line").strip().lower()
 
+    # Normalise x_labels: strip blanks, ensure list length matches values
+    clean_labels: list[str] | None = None
+    if x_labels:
+        stripped = [str(lbl).strip() for lbl in x_labels if str(lbl).strip()]
+        if stripped:
+            # Pad or truncate to match value count
+            while len(stripped) < len(values):
+                stripped.append(str(len(stripped) + 1))
+            clean_labels = stripped[: len(values)]
+
+    y_axis_label = (unit.strip() if unit and unit.strip() else "Value")
+
     # ── Pie chart: separate code path (no x/y axes) ─────────────────────────
     if selected_chart == "pie":
-        _generate_pie(values, title, output_path)
+        _generate_pie(values, title, output_path, x_labels=clean_labels)
         return f"/media/charts/{file_name}"
 
     # ── All axis-based charts ─────────────────────────────────────────────────
@@ -624,8 +740,10 @@ def generate_chart(series: list[float], chart_type: str = "line", title: str = "
 
     ax.set_title(title, fontsize=16, fontweight="bold", color="#4a3421", pad=14)
     ax.set_xlabel("Observation", color="#5a524a")
-    ax.set_ylabel("Value", color="#5a524a")
+    ax.set_ylabel(y_axis_label, color="#5a524a")
     ax.set_xticks(x_positions)
+    if clean_labels:
+        ax.set_xticklabels(clean_labels, rotation=30 if max(len(lbl) for lbl in clean_labels) > 6 else 0, ha="right" if max(len(lbl) for lbl in clean_labels) > 6 else "center", fontsize=8.5)
     ax.set_ylim(y_min, y_max)
     ax.grid(axis="y", color="#d9c7b8", linestyle="--", linewidth=0.8, alpha=0.7, zorder=1)
     ax.spines["top"].set_visible(False)
@@ -699,15 +817,20 @@ def generate_table_chart(headers: list[str], rows: list[list[Any]], title: str =
     return f"/media/charts/{file_name}"
 
 
-def _generate_pie(values: list[float], title: str, output_path: "Path") -> None:
+def _generate_pie(values: list[float], title: str, output_path: "Path", x_labels: list[str] | None = None) -> None:
     """Render a styled pie / donut chart."""
     import numpy as np
 
-    # keep only positive values; label each slice as "Slice N"
-    pos_values = [v for v in values if v > 0]
-    if not pos_values:
-        pos_values = [1.0]
-    labels = [f"Slice {i + 1}\n{v:.1f}" for i, v in enumerate(pos_values)]
+    # keep only positive values
+    indexed = [(v, (x_labels[i] if x_labels and i < len(x_labels) else None)) for i, v in enumerate(values) if v > 0]
+    if not indexed:
+        indexed = [(1.0, None)]
+    pos_values = [v for v, _ in indexed]
+    raw_labels = [lbl for _, lbl in indexed]
+    labels = [
+        f"{lbl}\n{v:.1f}" if lbl else f"Slice {i + 1}\n{v:.1f}"
+        for i, (v, lbl) in enumerate(indexed)
+    ]
 
     palette = [
         "#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#f4a261",

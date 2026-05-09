@@ -66,8 +66,10 @@ import {
   ChevronRight,
   Minus,
   MoreHorizontal,
+  MessageCircle,
+  CheckCircle2,
 } from 'lucide-react';
-import { chatWithDocument, getDocument } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -79,77 +81,6 @@ const INITIAL_CHATS = [{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: INITIA
 const MIN_EDITOR_HEIGHT = 900;
 const PAGE_CYCLE_PX = 1120;
 const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
-const DISSERTATION_TODO_TEMPLATE = [
-  {
-    chapter: 'Chapter 1: Introduction',
-    items: [
-      '1.1 Background of the Study',
-      '1.2 Statement of the Problem',
-      '1.3 Research Objectives',
-      '1.4 Research Questions',
-      '1.5 Research Hypotheses',
-      '1.6 Significance of the Study',
-      '1.7 Scope and Delimitations',
-      '1.8 Definition of Key Terms',
-    ],
-  },
-  {
-    chapter: 'Chapter 2: Literature Review',
-    items: [
-      '2.1 Introduction',
-      '2.2 Conceptual Review',
-      '2.2.1 Key Concepts',
-      '2.2.2 Variables and Relationships',
-      '2.3 Theoretical Framework',
-      '2.3.1 Supporting Theories',
-      '2.3.2 Applicability to the Study',
-      '2.4 Empirical Review',
-      '2.4.1 Evidence from Developed Economies',
-      '2.4.2 Evidence from Developing Economies',
-      '2.4.3 Synthesis of Empirical Findings',
-      '2.5 Research Gap',
-      '2.6 Chapter Summary',
-    ],
-  },
-  {
-    chapter: 'Chapter 3: Methodology',
-    items: [
-      '3.1 Introduction',
-      '3.2 Research Design',
-      '3.3 Target Population',
-      '3.4 Sampling Techniques and Sample Size',
-      '3.5 Data Collection Methods',
-      '3.6 Data Analysis Techniques',
-      '3.7 Reliability and Validity',
-      '3.8 Ethical Considerations',
-      '3.9 Chapter Summary',
-    ],
-  },
-  {
-    chapter: 'Chapter 4: Results and Discussion',
-    items: [
-      '4.1 Data Presentation',
-      '4.2 Objective-wise Findings',
-      '4.3 Discussion of Findings',
-      '4.4 Chapter Summary',
-    ],
-  },
-  {
-    chapter: 'Chapter 5: Conclusion and Recommendations',
-    items: [
-      '5.1 Introduction',
-      '5.2 Summary of Findings',
-      '5.3 Conclusions',
-      '5.4 Recommendations',
-      '5.5 Limitations of the Study',
-      '5.6 Areas for Further Research',
-    ],
-  },
-  {
-    chapter: 'Chapter 6: References and Appendices',
-    items: ['6.1 References', '6.2 Appendices'],
-  },
-];
 
 function normalizeStep(step = '') {
   return step.replace(/^[-\s]+/, '').trim();
@@ -159,19 +90,17 @@ function looksLikeDissertationRequest(text = '') {
   return DISSERTATION_REQUEST_RE.test((text || '').trim());
 }
 
-function createDissertationPreviewPlan() {
-  const steps = [{ step: 'Creating dissertation to-do list', status: 'done' }];
-  for (const chapter of DISSERTATION_TODO_TEMPLATE) {
-    steps.push({ step: `Writing ${chapter.chapter}`, status: 'pending' });
-    for (const item of chapter.items) {
-      steps.push({ step: `  Writing ${item}`, status: 'pending' });
-    }
-  }
-  const firstPending = steps.findIndex((step) => step.status === 'pending');
-  if (firstPending >= 0) {
-    steps[firstPending] = { ...steps[firstPending], status: 'in_progress' };
-  }
-  return steps;
+function createFallbackPreviewPlan() {
+  // Minimal fallback used only when the dynamic plan endpoint is unavailable.
+  return [
+    { step: 'Creating dissertation to-do list', status: 'done' },
+    { step: 'Writing Chapter 1: Introduction', status: 'in_progress' },
+    { step: 'Writing Chapter 2: Literature Review', status: 'pending' },
+    { step: 'Writing Chapter 3: Methodology', status: 'pending' },
+    { step: 'Writing Chapter 4: Results and Discussion', status: 'pending' },
+    { step: 'Writing Chapter 5: Conclusion and Recommendations', status: 'pending' },
+    { step: 'Writing Chapter 6: References and Appendices', status: 'pending' },
+  ];
 }
 
 function escapeRegExp(value = '') {
@@ -383,6 +312,35 @@ function CopilotWorkflowCard({ summary, planItems, msgId, workflow }) {
   );
 }
 
+// ── Confirmation card — shown before the agent executes any document change ──
+function ConfirmationCard({ description, plan, onConfirm, onCancel, disabled }) {
+  return (
+    <div className="dap-confirm-card">
+      <p className="dap-confirm-heading">Here&apos;s what I&apos;m going to do:</p>
+      <p className="dap-confirm-desc">{description}</p>
+      {plan.length > 0 && (
+        <ul className="dap-confirm-steps">
+          {plan.map((s, i) => (
+            <li key={i} className="dap-confirm-step">
+              <span className="dap-confirm-step-dot">○</span>
+              {s.step}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="dap-confirm-actions">
+        <button className="dap-confirm-proceed" onClick={onConfirm} disabled={disabled}>
+          <Check size={12} /> Proceed
+        </button>
+        <button className="dap-confirm-cancel" onClick={onCancel} disabled={disabled}>
+          <X size={12} /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function extractChapterRows(planItems = []) {
   return planItems
     .filter((item) => /^writing chapter\s*\d+/i.test(normalizeStep(item.step || '')))
@@ -413,8 +371,59 @@ function renderFigureBlock(blk, key) {
   );
 }
 
+const _UL_RE = /^[-*•◦▪]\s+/;
+const _OL_RE = /^\d+[.):]\s+/;
+
+function _isListLine(l) { return _UL_RE.test(l) || _OL_RE.test(l); }
+
+function renderParagraph(para, key) {
+  const lines = para.split('\n').map(l => l.trimEnd());
+  const nonEmpty = lines.filter(l => l.trim());
+
+  if (nonEmpty.length === 0) return null;
+
+  // Check if this block is mostly list items (allow one intro line at top)
+  const listItemLines = nonEmpty.filter(l => _isListLine(l.trimStart()));
+  const hasIntro = nonEmpty.length > 1 && !_isListLine(nonEmpty[0].trimStart()) && listItemLines.length >= nonEmpty.length - 1;
+  const isList = listItemLines.length >= 2 && (listItemLines.length === nonEmpty.length || hasIntro);
+
+  if (isList) {
+    const intro = hasIntro ? nonEmpty[0].trim() : null;
+    const itemLines = nonEmpty.filter((l, i) => !(i === 0 && hasIntro) && l.trim());
+    const isOrdered = itemLines.filter(l => _OL_RE.test(l.trimStart())).length > itemLines.filter(l => _UL_RE.test(l.trimStart())).length;
+    const items = itemLines.map(l => l.trimStart().replace(_UL_RE, '').replace(_OL_RE, '').trim());
+    const ListTag = isOrdered ? 'ol' : 'ul';
+    const result = [];
+    if (intro) result.push(<p key={`${key}-intro`} className="doc-list-intro">{intro}</p>);
+    result.push(
+      <ListTag key={`${key}-list`} className="doc-content-list">
+        {items.map((item, i) => <li key={i}>{item}</li>)}
+      </ListTag>
+    );
+    return result;
+  }
+
+  // Regular paragraph
+  if (nonEmpty.length === 1) return <p key={key}>{para.trim()}</p>;
+  return (
+    <p key={key}>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {line}
+          {i < lines.length - 1 && <br />}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function normalizeContentText(raw) {
+  // Convert <br> / <br/> / <BR> etc. to newlines so they render correctly.
+  return (raw || '').replace(/<br\s*\/?>/gi, '\n');
+}
+
 function renderContentWithMarkers(section, sectionIndex) {
-  const rawContent = section?.content || '';
+  const rawContent = normalizeContentText(section?.content || '');
   const blocks = Array.isArray(section?.blocks) ? section.blocks : [];
   const parts = [];
   const markerRe = /\[\[BLOCK:([^\]]+)\]\]/g;
@@ -429,7 +438,7 @@ function renderContentWithMarkers(section, sectionIndex) {
         .split('\n\n')
         .filter(Boolean)
         .forEach((para, idx) => {
-          parts.push(<p key={`s${sectionIndex}-t${parts.length}-${idx}`}>{para}</p>);
+          parts.push(renderParagraph(para.trim(), `s${sectionIndex}-t${parts.length}-${idx}`));
         });
     }
 
@@ -448,7 +457,7 @@ function renderContentWithMarkers(section, sectionIndex) {
       .split('\n\n')
       .filter(Boolean)
       .forEach((para, idx) => {
-        parts.push(<p key={`s${sectionIndex}-tail-${idx}`}>{para}</p>);
+        parts.push(renderParagraph(para.trim(), `s${sectionIndex}-tail-${idx}`));
       });
   }
 
@@ -710,6 +719,8 @@ export default function DocumentEditorPage({
   const [highlightedSections, setHighlightedSections] = useState([]);
   // AI panel visibility
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
+  // Comments panel (shown inside the AI panel)
+  const [showCommentsPanel, setShowCommentsPanel] = useState(false);
   // Ribbon state
   const [activeRibbonTab, setActiveRibbonTab] = useState('Home');
   // View state
@@ -718,6 +729,12 @@ export default function DocumentEditorPage({
   const [trackChanges, setTrackChanges] = useState(false);
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true);
   const [lineSpacing, setLineSpacing] = useState('1.5');
+  const [pageMarginsInch, setPageMarginsInch] = useState({
+    top: '1',
+    bottom: '1',
+    left: '1.25',
+    right: '1.25',
+  });
   const imageInputRef = useRef(null);
   const [fontFamily, setFontFamily] = useState('Times New Roman');
   const [fontSize, setFontSize] = useState('12');
@@ -752,8 +769,37 @@ export default function DocumentEditorPage({
         html += `<${tag} data-section-title="true">${s.title}</${tag}>`;
       }
       if (s.content) {
-        const paras = s.content.split(/\n\n+/);
-        html += paras.map((p) => `<p>${p.replace(/\n/g, '<br>').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`).join('');
+        const normalized = s.content.replace(/<br\s*\/?>/gi, '\n');
+        const paras = normalized.split(/\n\n+/);
+        html += paras.map((p) => {
+          const pLines = p.split('\n').map(l => l.trimEnd()).filter(l => l.trim());
+          if (pLines.length === 0) return '';
+          const listItems = pLines.filter(l => _isListLine(l.trimStart()));
+          const hasIntro = pLines.length > 1 && !_isListLine(pLines[0].trimStart()) && listItems.length >= pLines.length - 1;
+          const isList = listItems.length >= 2 && (listItems.length === pLines.length || hasIntro);
+          if (isList) {
+            const intro = hasIntro ? `<p>${pLines[0].trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>` : '';
+            const items = pLines.filter((l, i) => !(i === 0 && hasIntro) && l.trim());
+            const orderedCount = items.filter(l => _OL_RE.test(l.trimStart())).length;
+            const tag = orderedCount > items.length - orderedCount ? 'ol' : 'ul';
+            const lis = items.map(l => {
+              const text = l.trimStart().replace(_UL_RE,'').replace(_OL_RE,'').trim();
+              const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+              const withComments = esc.replace(
+                /\[Comment:\s*([^\]]+)\]/gi,
+                (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
+              );
+              return `<li>${withComments}</li>`;
+            }).join('');
+            return `${intro}<${tag}>${lis}</${tag}>`;
+          }
+          const escaped = p.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const withComments = escaped.replace(
+            /\[Comment:\s*([^\]]+)\]/gi,
+            (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
+          );
+          return `<p>${withComments.replace(/\n/g, '<br>')}</p>`;
+        }).join('');
       }
       return html;
     }).join('');
@@ -766,9 +812,16 @@ export default function DocumentEditorPage({
     let current = { title: '', content: '', blocks: [] };
     for (const node of Array.from(div.childNodes)) {
       const tag = node.nodeName.toLowerCase();
-      if (['h1', 'h2', 'h3'].includes(tag)) {
+      if (['h1', 'h2', 'h3', 'h4'].includes(tag)) {
         if (current.title || current.content) sections.push(current);
         current = { title: node.textContent.trim(), content: '', blocks: [] };
+      } else if (tag === 'ul' || tag === 'ol') {
+        const liNodes = Array.from(node.querySelectorAll('li'));
+        if (liNodes.length) {
+          const prefix = tag === 'ol' ? (i) => `${i + 1}. ` : () => '- ';
+          const listText = liNodes.map((li, i) => `${prefix(i)}${li.textContent.trim()}`).join('\n');
+          current.content += (current.content ? '\n\n' : '') + listText;
+        }
       } else if (tag !== '#comment') {
         const text = (node.textContent || '').trim();
         if (text) {
@@ -926,6 +979,20 @@ export default function DocumentEditorPage({
     paper.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
   }
 
+  function applyPageMarginsInches(next) {
+    setPageMarginsInch(next);
+    const toPx = (v, fallback) => {
+      const num = parseFloat(v);
+      return Number.isFinite(num) ? Math.max(0, num) * 96 : fallback;
+    };
+    applyPageMargins(
+      toPx(next.top, 96),
+      toPx(next.right, 120),
+      toPx(next.bottom, 96),
+      toPx(next.left, 120)
+    );
+  }
+
   function applyColumnLayout(cols) {
     const editor = richEditorRef.current;
     if (!editor) return;
@@ -953,6 +1020,21 @@ export default function DocumentEditorPage({
     () => Math.max(1, Math.ceil(editorHeight / PAGE_CYCLE_PX)),
     [editorHeight]
   );
+
+  // Extract all [Comment: ...] annotations from the current draft sections
+  const docComments = useMemo(() => {
+    const re = /\[Comment:\s*([^\]]+)\]/gi;
+    const results = [];
+    for (const section of draftSections) {
+      const body = section.content || '';
+      let m;
+      re.lastIndex = 0;
+      while ((m = re.exec(body)) !== null) {
+        results.push({ sectionTitle: section.title, text: m[1].trim(), fullMatch: m[0] });
+      }
+    }
+    return results;
+  }, [draftSections]);
 
   // Auto-resize textarea to content height (no inner scrollbar)
   useEffect(() => {
@@ -1007,7 +1089,7 @@ export default function DocumentEditorPage({
     // Auto-clear after 6 seconds
     const timer = setTimeout(() => setHighlightedSections([]), 6000);
     return () => clearTimeout(timer);
-  }, [highlightedSections]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [highlightedSections, draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const sections = Array.isArray(document?.content?.sections) ? document.content.sections : [];
@@ -1021,8 +1103,11 @@ export default function DocumentEditorPage({
     setIsDirty(false);
     setAutoSaved(false);
     setManualError('');
+  }, [document?.id, document?.updated_at]);
 
-    // Load persisted chat messages if any exist
+  // Reset chat only when switching to a different document, not on every save/update.
+  // This preserves frontend-only state (changeSet.pending for Keep/Undo) across agent saves.
+  useEffect(() => {
     if (document?.chat_messages?.length) {
       const persistedMessages = document.chat_messages.map((msg) => ({
         id: msg.id,
@@ -1035,7 +1120,7 @@ export default function DocumentEditorPage({
       setChats([{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: [] }]);
       setActiveChatId(INITIAL_CHAT_ID);
     }
-  }, [document?.id, document?.updated_at]);
+  }, [document?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateDraftSection(index, field, value) {
     setDraftSections((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
@@ -1231,9 +1316,19 @@ export default function DocumentEditorPage({
   }
 
   async function sendMessage(text) {
-    if (!text.trim() || isThinking) return;
+    if (!text.trim() && (!attachedFile)) return;
+    if (isThinking) return;
     const userText = text.trim();
-    const userMsg = { id: Date.now(), role: 'user', text: text.trim() };
+    // If a file is attached, the message text should reflect the file, not the internal content
+    let displayText = userText;
+    if (attachedFile) {
+        if (!displayText) {
+             displayText = `Uploaded file: ${attachedFile.name}`;
+        } else {
+             displayText += `\n[Attached File: ${attachedFile.name}]`;
+        }
+    }
+    const userMsg = { id: Date.now(), role: 'user', text: displayText };
     const currentChatId = activeChatId;
     const beforeAgentSections = cloneSections(draftSections);
     const dissertationRequest = looksLikeDissertationRequest(userText);
@@ -1254,7 +1349,8 @@ export default function DocumentEditorPage({
 
     let previewPlan = [];
     if (dissertationRequest) {
-      previewPlan = createDissertationPreviewPlan();
+      // Show an immediate placeholder so the user sees something straight away.
+      const placeholderPlan = createFallbackPreviewPlan();
       setChats((prev) =>
         prev.map((chat) =>
           chat.id === currentChatId
@@ -1265,18 +1361,15 @@ export default function DocumentEditorPage({
                   {
                     id: progressMessageId,
                     role: 'assistant',
-                    text: 'Starting dissertation workflow...',
-                    summary: buildSummaryFromPlan(previewPlan, `Generating ${DISSERTATION_TODO_TEMPLATE[0].chapter}...`),
-                    plan: previewPlan,
+                    text: 'Generating your personalised dissertation plan...',
+                    summary: buildSummaryFromPlan(placeholderPlan, 'AI is creating your todo list...'),
+                    plan: placeholderPlan,
                     workflow: {
-                      currentStep: statusLabel(previewPlan.find((item) => item.status === 'in_progress')?.step || ''),
-                      completedCount: previewPlan.filter((item) => item.status === 'done').length,
-                      totalCount: previewPlan.length,
-                      statuses: previewPlan.map((item) => item.status),
-                      updates: [
-                        'Created dissertation to-do list',
-                        `Now doing: ${statusLabel(previewPlan.find((item) => item.status === 'in_progress')?.step || '')}`,
-                      ],
+                      currentStep: 'Generating todo list',
+                      completedCount: 0,
+                      totalCount: placeholderPlan.length,
+                      statuses: placeholderPlan.map((item) => item.status),
+                      updates: ['AI is generating a tailored chapter plan for your topic...'],
                     },
                   },
                 ],
@@ -1285,11 +1378,77 @@ export default function DocumentEditorPage({
         )
       );
       setLiveProgressMsgId(progressMessageId);
+
+      // Call the LLM plan endpoint — this is where the AI generates the tailored todo structure.
+      const planResult = await getDissertationPlan(document?.id, userText);
+      previewPlan = planResult?.plan?.length ? planResult.plan : createFallbackPreviewPlan();
+
+      const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
+      const stageLabel = firstInProgress
+        ? `Starting: ${statusLabel(firstInProgress.step || '')}...`
+        : 'Writing dissertation...';
+
+      // Replace placeholder with the real AI-generated plan.
+      updateAssistantMessage(currentChatId, progressMessageId, (msg) => ({
+        ...msg,
+        text: 'Dissertation plan ready. Starting to write...',
+        summary: buildSummaryFromPlan(previewPlan, stageLabel),
+        plan: previewPlan,
+        workflow: {
+          currentStep: statusLabel(firstInProgress?.step || ''),
+          completedCount: previewPlan.filter((item) => item.status === 'done').length,
+          totalCount: previewPlan.length,
+          statuses: previewPlan.map((item) => item.status),
+          updates: [
+            'Todo list generated by AI',
+            `Now doing: ${statusLabel(firstInProgress?.step || '')}`,
+          ],
+        },
+      }));
+
       startDissertationProgressPolling(document?.id, currentChatId, progressMessageId, previewPlan);
     }
 
     try {
-      const result = await chatWithDocument(document?.id, userText, selectedModel, attachedFile);
+      // ── Step 1: Preview (non-dissertation only) ──────────────────────────
+      // Send with preview_only=true so the backend can classify the intent and
+      // return a plan for the user to confirm before any document changes occur.
+      // Dissertation requests already have their own two-step plan flow.
+      const previewResult = await chatWithDocument(
+        document?.id, userText, selectedModel,
+        dissertationRequest ? attachedFile : null,
+        /* previewOnly = */ !dissertationRequest,
+      );
+
+      // If the backend wants confirmation, show the card and stop here.
+      if (!dissertationRequest && previewResult?.awaiting_confirmation) {
+        const confirmMsgId = Date.now() + 2;
+        setChats((prev) =>
+          prev.map((chat) =>
+            chat.id !== currentChatId ? chat : {
+              ...chat,
+              messages: [
+                ...chat.messages,
+                {
+                  id: confirmMsgId,
+                  role: 'assistant',
+                  plan: previewResult.plan || [],
+                  confirmation: previewResult.confirmation || {},
+                  pendingUserText: userText,
+                  pendingModel: selectedModel,
+                },
+              ],
+            }
+          )
+        );
+        setIsThinking(false);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+        return;
+      }
+
+      // ── Step 2: Non-modifying preview result (chat/summarize) or dissertation ──
+      // The result is already complete — handle it normally.
+      const result = previewResult;
       setAttachedFile(null);
       if (result?.model) {
         setActiveModel(result.model);
@@ -1367,6 +1526,77 @@ export default function DocumentEditorPage({
     }
   }
 
+  // ── Confirmation workflow ────────────────────────────────────────────────
+  // Called when the user clicks "Proceed" on a ConfirmationCard.
+  async function executeConfirmedAction(confirmMsgId, chatId, userText, modelOverride) {
+    if (isThinking) return;
+    const beforeAgentSections = cloneSections(draftSections);
+
+    // Transition the confirmation card into a "working" state immediately.
+    updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
+      ...msg,
+      confirmation: null,   // hide the card
+      text: 'Working on it…',
+      summary: buildSummaryFromPlan(msg.plan || [], 'Executing…'),
+    }));
+    setIsThinking(true);
+
+    try {
+      // Send the real (non-preview) request — backend will execute and persist.
+      const result = await chatWithDocument(
+        document?.id, userText, modelOverride || selectedModel, attachedFile,
+        /* previewOnly = */ false,
+      );
+      setAttachedFile(null);
+      if (result?.model) setActiveModel(result.model);
+
+      // Update the message in-place with the result.
+      updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
+        ...msg,
+        text: toChatReply(result),
+        summary: buildSummaryFromResult(result),
+        plan: Array.isArray(result.plan) ? result.plan : [],
+      }));
+
+      if (result.document_updated && Array.isArray(result?.document?.content?.sections)) {
+        const nextSections = cloneSections(result.document.content.sections);
+        const editedTitles = detectEditedSections(beforeAgentSections, nextSections);
+        setDraftSections(nextSections);
+        setIsDirty(false);
+        setHighlightedSections(editedTitles);
+        updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
+          ...msg,
+          changeSet: {
+            pending: true,
+            editedSections: editedTitles,
+            beforeSections: beforeAgentSections,
+          },
+        }));
+        onDocumentChanged?.();
+      }
+    } catch (err) {
+      updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
+        ...msg,
+        confirmation: null,
+        text: `Something went wrong: ${err.message || 'Unknown error'}`,
+      }));
+    } finally {
+      setIsThinking(false);
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    }
+  }
+
+  // Called when the user clicks "Cancel" on a ConfirmationCard.
+  function cancelConfirmation(confirmMsgId, chatId) {
+    updateAssistantMessage(chatId, confirmMsgId, (msg) => ({
+      ...msg,
+      confirmation: null,
+      plan: [],
+      text: 'Action cancelled.',
+    }));
+  }
+
+
   return (
     <div className="doc-editor-root">
       <div className="doc-page-root">
@@ -1376,10 +1606,14 @@ export default function DocumentEditorPage({
           <div className="doc-ribbon-shell">
             {/* ── Tab bar ── */}
             <div className="doc-ribbon-tabs">
-              <button className="doc-back-btn" onClick={onBackHome} title="Back to Home">
-                <ArrowLeft size={14} />
-              </button>
-              <span className="doc-title-pill">{document?.title || 'Document'}.docx</span>
+              <div className="doc-quick-access">
+                <button className="doc-qa-btn" title="Menu"><Menu size={15} /></button>
+                <button className="doc-qa-file" onClick={onBackHome} title="Back to Home">File</button>
+                <button className="doc-qa-btn" title="Save"><Download size={14} /></button>
+                <button className="doc-qa-btn" title="Print"><Printer size={14} /></button>
+                <button className="doc-qa-btn" title="Undo"><RotateCcw size={14} /></button>
+                <button className="doc-qa-btn" title="More"><ChevronDown size={14} /></button>
+              </div>
               {['Home', 'Insert', 'Page Layout', 'References', 'Review', 'View', 'Tools', 'WPS AI'].map((tab) => (
                 <span
                   key={tab}
@@ -1500,30 +1734,70 @@ export default function DocumentEditorPage({
                   <span className="doc-tool-group-label">Paragraph</span>
                 </div>
 
-                {/* Styles group */}
-                <div className="doc-tool-group" style={{minWidth:'120px'}}>
-                  <div className="doc-tool-group-rows" style={{flex:1,justifyContent:'center',alignItems:'center'}}>
-                    <div className="doc-style-gallery">
-                      {[
-                        {label:'Normal',tag:'p'},
-                        {label:'Heading 1',tag:'h1'},
-                        {label:'Heading 2',tag:'h2'},
-                        {label:'Heading 3',tag:'h3'},
-                      ].map(({label,tag}) => (
-                        <button
-                          key={tag}
-                          className="doc-style-chip"
-                          title={`Apply ${label}`}
-                          onClick={() => {
-                            const editor = richEditorRef.current;
-                            if (!editor) return;
-                            editor.focus();
-                            document.execCommand('formatBlock', false, tag);
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
+                {/* Styles / Headings group */}
+                <div className="doc-tool-group" style={{minWidth:'140px'}}>
+                  <div className="doc-tool-group-rows">
+                    <div className="doc-tool-group-row">
+                      <button
+                        className="doc-tool-btn doc-heading-btn"
+                        title="Heading 1"
+                        onClick={() => {
+                          const editor = richEditorRef.current;
+                          if (!editor) return;
+                          editor.focus();
+                          document.execCommand('formatBlock', false, 'h1');
+                          handleEditorInput({ currentTarget: editor });
+                        }}
+                        style={{fontWeight:'bold',fontSize:'13px'}}
+                      >H1</button>
+                      <button
+                        className="doc-tool-btn doc-heading-btn"
+                        title="Heading 2"
+                        onClick={() => {
+                          const editor = richEditorRef.current;
+                          if (!editor) return;
+                          editor.focus();
+                          document.execCommand('formatBlock', false, 'h2');
+                          handleEditorInput({ currentTarget: editor });
+                        }}
+                        style={{fontWeight:'bold',fontSize:'12px'}}
+                      >H2</button>
+                      <button
+                        className="doc-tool-btn doc-heading-btn"
+                        title="Heading 3"
+                        onClick={() => {
+                          const editor = richEditorRef.current;
+                          if (!editor) return;
+                          editor.focus();
+                          document.execCommand('formatBlock', false, 'h3');
+                          handleEditorInput({ currentTarget: editor });
+                        }}
+                        style={{fontWeight:'bold',fontSize:'11px'}}
+                      >H3</button>
+                      <button
+                        className="doc-tool-btn doc-heading-btn"
+                        title="Heading 4"
+                        onClick={() => {
+                          const editor = richEditorRef.current;
+                          if (!editor) return;
+                          editor.focus();
+                          document.execCommand('formatBlock', false, 'h4');
+                          handleEditorInput({ currentTarget: editor });
+                        }}
+                        style={{fontWeight:'bold',fontSize:'10px'}}
+                      >H4</button>
+                      <button
+                        className="doc-tool-btn doc-heading-btn"
+                        title="Normal text"
+                        onClick={() => {
+                          const editor = richEditorRef.current;
+                          if (!editor) return;
+                          editor.focus();
+                          document.execCommand('formatBlock', false, 'p');
+                          handleEditorInput({ currentTarget: editor });
+                        }}
+                        style={{fontSize:'11px'}}
+                      >T</button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Styles</span>
@@ -1692,204 +1966,175 @@ export default function DocumentEditorPage({
             {/* ── PAGE LAYOUT tab ── */}
             {activeRibbonTab === 'Page Layout' && (
               <div className="doc-ribbon-toolbar">
-                {/* Page Setup */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
-                    <div style={{ position: 'relative' }}>
-                      <button className="doc-tool-btn doc-tool-btn--tall" title="Margins" style={{ width: '46px' }}>
-                        <LayoutTemplate size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Margins <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
-                      </button>
-                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === 'normal') applyPageMargins(96, 120, 96, 120);
-                        if (val === 'narrow') applyPageMargins(48, 48, 48, 48);
-                        if (val === 'moderate') applyPageMargins(96, 72, 96, 72);
-                        if (val === 'wide') applyPageMargins(96, 192, 96, 192);
-                        e.target.value = "";
-                      }} title="Margins Menu">
-                        <option value="" disabled>Margins</option>
-                        <option value="normal">Normal</option>
-                        <option value="narrow">Narrow</option>
-                        <option value="moderate">Moderate</option>
-                        <option value="wide">Wide</option>
-                      </select>
+                <div className="doc-tool-group doc-layout-group-page-setup">
+                  <div className="doc-layout-page-setup-wrap">
+                    <div className="doc-layout-icon-title" title="Margins">
+                      <LayoutTemplate size={24} />
+                      <span>Margins</span>
+                      <ChevronDown size={11} />
                     </div>
 
-                    <div style={{ position: 'relative' }}>
-                      <button className="doc-tool-btn doc-tool-btn--tall" title="Orientation" style={{ width: '60px' }}>
-                        <FileText size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Orientation <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
-                      </button>
-                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
+                    <div className="doc-layout-margins-grid">
+                      <div className="doc-layout-spin-row">
+                        <label>Top:</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.05"
+                          value={pageMarginsInch.top}
+                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, top: e.target.value })}
+                        />
+                        <span>in</span>
+                      </div>
+                      <div className="doc-layout-spin-row">
+                        <label>Bottom:</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.05"
+                          value={pageMarginsInch.bottom}
+                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, bottom: e.target.value })}
+                        />
+                        <span>in</span>
+                      </div>
+                      <div className="doc-layout-spin-row">
+                        <label>Left:</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.05"
+                          value={pageMarginsInch.left}
+                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, left: e.target.value })}
+                        />
+                        <span>in</span>
+                      </div>
+                      <div className="doc-layout-spin-row">
+                        <label>Right:</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.05"
+                          value={pageMarginsInch.right}
+                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, right: e.target.value })}
+                        />
+                        <span>in</span>
+                      </div>
+                    </div>
+
+                    <div className="doc-layout-mini-icons">
+                      <button className="doc-tool-btn" title="Portrait" onClick={() => {
                         const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
                         if (!scroll) return;
-                        if (e.target.value === 'portrait') { scroll.style.width = '816px'; scroll.style.minHeight = '1056px'; }
-                        if (e.target.value === 'landscape') { scroll.style.width = '1056px'; scroll.style.minHeight = '816px'; }
-                        e.target.value = "";
-                      }} title="Orientation Menu">
-                        <option value="" disabled>Orientation</option>
-                        <option value="portrait">Portrait</option>
-                        <option value="landscape">Landscape</option>
-                      </select>
-                    </div>
-
-                    <div style={{ position: 'relative' }}>
-                      <button className="doc-tool-btn doc-tool-btn--tall" title="Size" style={{ width: '38px' }}>
-                        <Ruler size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Size <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                        scroll.style.width = '816px';
+                        scroll.style.minHeight = '1056px';
+                      }}>
+                        <FileText size={15} />
                       </button>
-                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => {
+                      <button className="doc-tool-btn" title="Landscape" onClick={() => {
                         const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
                         if (!scroll) return;
-                        if (e.target.value === 'letter') { scroll.style.width = '816px'; scroll.style.minHeight = '1056px'; }
-                        if (e.target.value === 'a4') { scroll.style.width = '794px'; scroll.style.minHeight = '1123px'; }
-                        if (e.target.value === 'legal') { scroll.style.width = '816px'; scroll.style.minHeight = '1344px'; }
-                        e.target.value = "";
-                      }} title="Size Menu">
-                        <option value="" disabled>Size</option>
-                        <option value="letter">Letter</option>
-                        <option value="a4">A4</option>
-                        <option value="legal">Legal</option>
-                      </select>
-                    </div>
-
-                    <div style={{ position: 'relative', marginRight: '6px' }}>
-                      <button className="doc-tool-btn doc-tool-btn--tall" title="Columns" style={{ width: '50px' }}>
-                        <Columns size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                        <span style={{ display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>Columns <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                        scroll.style.width = '1056px';
+                        scroll.style.minHeight = '816px';
+                      }}>
+                        <FileText size={15} style={{ transform: 'rotate(90deg)' }} />
                       </button>
-                      <select style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={(e) => { applyColumnLayout(parseInt(e.target.value)); e.target.value = ""; }} title="Columns Menu">
-                        <option value="" disabled>Columns</option>
-                        <option value="1">One</option>
-                        <option value="2">Two</option>
-                        <option value="3">Three</option>
-                      </select>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', justifyContent: 'center' }}>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Breaks">
-                        <FileText size={14} color="#2b579a"/><span>Breaks</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
-                      </button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Line Numbers">
-                        <ListOrdered size={14} color="#2b579a"/><span>Line Numbers</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
-                      </button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '110px' }} title="Hyphenation">
-                        <Minus size={14} color="#2b579a"/><span>Hyphenation</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
-                      </button>
+                      <div className="doc-layout-mini-select-wrap" title="Columns">
+                        <button className="doc-tool-btn">
+                          <Columns size={15} />
+                          <ChevronDown size={10} />
+                        </button>
+                        <select onChange={(e) => applyColumnLayout(parseInt(e.target.value, 10))}>
+                          <option value="1">1</option>
+                          <option value="2">2</option>
+                          <option value="3">3</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Page Setup</span>
                 </div>
 
-                {/* Page Background */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
-                    <button className="doc-tool-btn doc-tool-btn--tall" title="Watermark" style={{ width: '62px' }}>
-                      <Image size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px', opacity: 0.6 }}/>
-                      <span style={{ display: 'flex', alignItems: 'center' }}>Watermark <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                <div className="doc-tool-group doc-layout-group-background">
+                  <div className="doc-layout-quick-stack">
+                    <button className="doc-layout-text-btn" title="Themes">
+                      <Type size={14} />
+                      <span>Themes</span>
+                      <ChevronDown size={10} />
                     </button>
-                    <button className="doc-tool-btn doc-tool-btn--tall" title="Page Color" style={{ width: '60px' }} onClick={() => {
-                        const el = window.document.createElement('input'); el.type = 'color'; el.value = '#ffffff';
-                        el.onchange = (ev) => {
-                          const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                          if (scroll) scroll.style.backgroundColor = ev.target.value;
-                        };
-                        el.click();
-                      }}>
-                      <Palette size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                      <span style={{ display: 'flex', alignItems: 'center' }}>Page Color <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
-                    </button>
-                    <button className="doc-tool-btn doc-tool-btn--tall" title="Page Borders" style={{ width: '68px' }} onClick={() => {
-                        const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-                        if (!scroll) return;
-                        scroll.style.border = scroll.style.border ? '' : '1px solid #1a1a1a';
-                      }}>
-                      <LayoutTemplate size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                      <span style={{ display: 'flex', alignItems: 'center' }}>Page Borders <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
+                    <button className="doc-layout-text-btn" title="Cover Page">
+                      <Image size={14} />
+                      <span>Cover Page</span>
+                      <ChevronDown size={10} />
                     </button>
                   </div>
+                  <button className="doc-tool-btn doc-tool-btn--tall" title="Page Borders" onClick={() => {
+                    const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+                    if (!scroll) return;
+                    scroll.style.border = scroll.style.border ? '' : '1px solid #1a1a1a';
+                  }}>
+                    <LayoutTemplate size={22} />
+                    <span>Page Borders</span>
+                  </button>
+                  <button className="doc-tool-btn doc-tool-btn--tall" title="Page Color" onClick={() => {
+                    const el = window.document.createElement('input');
+                    el.type = 'color';
+                    el.value = '#ffffff';
+                    el.onchange = (ev) => {
+                      const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+                      if (scroll) scroll.style.backgroundColor = ev.target.value;
+                    };
+                    el.click();
+                  }}>
+                    <Palette size={22} />
+                    <span>Page Color</span>
+                  </button>
+                  <button className="doc-layout-text-btn" title="Watermark">
+                    <Globe size={14} />
+                    <span>Watermark</span>
+                    <ChevronDown size={10} />
+                  </button>
+                  <button className="doc-layout-text-btn" title="Line Numbers">
+                    <ListOrdered size={14} />
+                    <span>Line Numbers</span>
+                    <ChevronDown size={10} />
+                  </button>
                   <span className="doc-tool-group-label">Page Background</span>
                 </div>
 
-                {/* Paragraph */}
-                <div className="doc-tool-group">
-                  <div className="doc-tool-group-rows" style={{ gap: '16px', alignItems: 'center', height: '100%' }}>
-                    <div className="doc-tool-group-col" style={{ gap: '4px' }}>
-                      <div style={{ fontSize: '11px', color: '#4d5566', marginBottom: '1px' }}>Indent</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ fontSize: '11px', color: '#4d5566', width: '32px' }}>Left:</span>
-                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
-                          <input type="text" defaultValue="0&quot;" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
-                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }} onClick={() => execFmt('outdent')}>▲</button>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }} onClick={() => execFmt('indent')}>▼</button>
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ fontSize: '11px', color: '#4d5566', width: '32px' }}>Right:</span>
-                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
-                          <input type="text" defaultValue="0&quot;" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
-                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="doc-tool-group-col" style={{ gap: '4px' }}>
-                      <div style={{ fontSize: '11px', color: '#4d5566', marginBottom: '1px' }}>Spacing</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ fontSize: '11px', color: '#4d5566', width: '38px' }}>Before:</span>
-                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
-                          <input type="text" defaultValue="0 pt" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
-                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ fontSize: '11px', color: '#4d5566', width: '38px' }}>After:</span>
-                        <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: '3px', overflow: 'hidden', background: '#fff' }}>
-                          <input type="text" defaultValue="8 pt" style={{ width: '40px', border: 'none', fontSize: '11px', padding: '1px 4px', outline: 'none' }} />
-                          <div style={{ display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderLeft: '1px solid #cbd5e1' }}>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▲</button>
-                            <button style={{ border: 'none', background: 'var(--border)', height: '9px', borderTop: '1px solid #cbd5e1', fontSize: '7px', cursor: 'pointer', lineHeight: '9px', padding: '0 4px', color: '#475569' }}>▼</button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  <span className="doc-tool-group-label" style={{ display: 'flex', alignItems: 'center', gap: '2px', cursor: 'pointer' }} onClick={() => {}}>Paragraph <ChevronDown size={10} style={{ opacity: 0.7 }}/></span>
+                <div className="doc-tool-group doc-layout-group-sections">
+                  <button className="doc-layout-text-btn" title="Blank Page" onClick={() => insertPageBreak()}>
+                    <FileText size={14} />
+                    <span>Blank Page</span>
+                    <ChevronDown size={10} />
+                  </button>
+                  <button className="doc-layout-text-btn" title="Breaks" onClick={() => insertPageBreak()}>
+                    <Minus size={14} />
+                    <span>Breaks</span>
+                    <ChevronDown size={10} />
+                  </button>
+                  <button className="doc-layout-text-btn" title="Table Of Contents">
+                    <BookOpen size={14} />
+                    <span>Table Of Contents</span>
+                    <ChevronDown size={10} />
+                  </button>
+                  <button className="doc-layout-text-btn" title="Section Pane">
+                    <PanelLeft size={14} />
+                    <span>Section Pane</span>
+                  </button>
+                  <button className="doc-layout-text-btn doc-layout-text-btn--disabled" title="Delete Section" disabled>
+                    <X size={14} />
+                    <span>Delete Section</span>
+                  </button>
+                  <span className="doc-tool-group-label">Sections</span>
                 </div>
 
-                {/* Arrange */}
-                <div className="doc-tool-group" style={{ opacity: 0.5, pointerEvents: 'none' }}>
-                  <div className="doc-tool-group-rows" style={{ alignItems: 'flex-start' }}>
-                    <button className="doc-tool-btn doc-tool-btn--tall" title="Position" style={{ width: '48px' }}>
-                      <Image size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                      <span style={{ display: 'flex', alignItems: 'center' }}>Position <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
-                    </button>
-                    <button className="doc-tool-btn doc-tool-btn--tall" title="Wrap Text" style={{ width: '56px' }}>
-                      <FileText size={22} color="#2b579a" strokeWidth={1} style={{ marginBottom: '2px' }}/>
-                      <span style={{ display: 'flex', alignItems: 'center' }}>Wrap Text <ChevronDown size={10} style={{ marginLeft: 1 }}/></span>
-                    </button>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', justifyContent: 'center', marginLeft: '6px' }}>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Bring Forward">
-                        <ChevronRight size={14} color="#2b579a" style={{ transform: 'rotate(-90deg)' }}/><span>Bring Forward</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
-                      </button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Send Backward">
-                        <ChevronRight size={14} color="#2b579a" style={{ transform: 'rotate(90deg)' }}/><span>Send Backward</span><ChevronDown size={10} style={{ marginLeft: 'auto' }}/>
-                      </button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" style={{ justifyContent: 'flex-start', paddingLeft: '4px', width: '105px' }} title="Selection Pane">
-                        <List size={14} color="#2b579a"/><span>Selection Pane</span>
-                      </button>
-                    </div>
-                  </div>
-                  <span className="doc-tool-group-label" style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>Arrange</span>
+                <div className="doc-tool-group doc-layout-group-settings">
+                  <button className="doc-tool-btn doc-tool-btn--tall" title="Settings">
+                    <Settings2 size={20} />
+                    <span>Settings</span>
+                    <ChevronDown size={10} />
+                  </button>
+                  <span className="doc-tool-group-label">Settings</span>
                 </div>
               </div>
             )}
@@ -2025,13 +2270,31 @@ export default function DocumentEditorPage({
                         if (!comment) return;
                         const editor = richEditorRef.current; if (!editor) return;
                         editor.focus();
+                        const marker = `[Comment: ${comment}]`;
                         if (sel) {
-                          document.execCommand('insertHTML', false, `<mark style="background:#fef08a;cursor:pointer" title="Comment: ${comment}">${sel}</mark>`);
+                          // Wrap selected text in a highlight mark AND append the comment marker
+                          document.execCommand('insertHTML', false,
+                            `<mark class="doc-comment-mark" data-comment="${comment.replace(/"/g,'&quot;')}" title="Comment: ${comment}">${sel}</mark><span class="doc-comment-inline" contenteditable="false">${marker}</span>`);
                         } else {
-                          document.execCommand('insertHTML', false, `<span style="color:#1a56db;font-size:10pt;cursor:pointer" title="Comment: ${comment}">[Comment: ${comment}]</span>`);
+                          document.execCommand('insertHTML', false,
+                            `<span class="doc-comment-inline" contenteditable="false">${marker}</span>`);
                         }
                         handleEditorInput({ currentTarget: editor });
                       }}><StickyNote size={13}/><span>New Comment</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to address all comments in the document"
+                        disabled={docComments.length === 0 || isThinking}
+                        onClick={() => {
+                          setAiPanelOpen(true);
+                          sendMessage('Address all comments in the document');
+                        }}>
+                        <CheckCircle2 size={13}/><span>Address Comments</span>
+                      </button>
+                    </div>
+                    <div className="doc-tool-group-row">
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="View all comments"
+                        onClick={() => { setAiPanelOpen(true); setShowCommentsPanel(true); }}>
+                        <MessageCircle size={13}/><span>View Comments {docComments.length > 0 ? `(${docComments.length})` : ''}</span>
+                      </button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Comments</span>
@@ -2209,38 +2472,34 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to continue writing at cursor" onClick={() => {
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = 'Continue writing from where I left off.'; inp.focus(); }
-                        }, 200);
-                      }}><Wand2 size={13}/><span>Continue Writing</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to rewrite selected text" onClick={() => {
-                        const sel = window.getSelection()?.toString();
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = sel ? `Rewrite this more clearly: "${sel}"` : 'Rewrite the last paragraph more clearly.'; inp.focus(); }
-                        }, 200);
-                      }}><Wand2 size={13}/><span>Rewrite</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to continue writing at cursor"
+                        disabled={isThinking}
+                        onClick={() => { setAiPanelOpen(true); sendMessage('Continue writing from where I left off.'); }}
+                      ><Wand2 size={13}/><span>Continue Writing</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to rewrite selected text"
+                        disabled={isThinking}
+                        onClick={() => {
+                          const sel = window.getSelection()?.toString().trim();
+                          const msg = sel ? `Rewrite this more clearly: "${sel}"` : 'Rewrite the last paragraph more clearly.';
+                          setAiPanelOpen(true);
+                          setInputValue(msg);
+                        }}
+                      ><Wand2 size={13}/><span>Rewrite</span></button>
                     </div>
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to improve selected text" onClick={() => {
-                        const sel = window.getSelection()?.toString();
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = sel ? `Improve this text: "${sel}"` : 'Improve the writing quality of the last paragraph.'; inp.focus(); }
-                        }, 200);
-                      }}><Star size={13}/><span>Improve</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Summarise the document with AI" onClick={() => {
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = 'Summarise the entire document in 3-5 bullet points.'; inp.focus(); }
-                        }, 200);
-                      }}><FileSearch size={13}/><span>Summarise</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to improve selected text"
+                        disabled={isThinking}
+                        onClick={() => {
+                          const sel = window.getSelection()?.toString().trim();
+                          const msg = sel ? `Improve this text: "${sel}"` : 'Improve the writing quality of the document.';
+                          setAiPanelOpen(true);
+                          setInputValue(msg);
+                        }}
+                      ><Star size={13}/><span>Improve</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Summarise the document with AI"
+                        disabled={isThinking}
+                        onClick={() => { setAiPanelOpen(true); sendMessage('Summarise the entire document in 3-5 bullet points.'); }}
+                      ><FileSearch size={13}/><span>Summarise</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Writing Assistance</span>
@@ -2249,15 +2508,15 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI a research question" onClick={() => {
-                        const q = window.prompt('Research question:');
-                        if (!q) return;
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = q; inp.focus(); }
-                        }, 200);
-                      }}><BookOpen size={13}/><span>Research</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI a research question"
+                        disabled={isThinking}
+                        onClick={() => {
+                          const q = window.prompt('Research question:');
+                          if (!q) return;
+                          setAiPanelOpen(true);
+                          sendMessage(q);
+                        }}
+                      ><BookOpen size={13}/><span>Research</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Research</span>
@@ -2266,16 +2525,16 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Translate selected text" onClick={() => {
-                        const sel = window.getSelection()?.toString();
-                        const lang = window.prompt('Translate to language:', 'French');
-                        if (!lang) return;
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = sel ? `Translate this to ${lang}: "${sel}"` : `Translate the document to ${lang}.`; inp.focus(); }
-                        }, 200);
-                      }}><Globe size={13}/><span>Translate</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Translate selected text"
+                        disabled={isThinking}
+                        onClick={() => {
+                          const sel = window.getSelection()?.toString().trim();
+                          const lang = window.prompt('Translate to language:', 'French');
+                          if (!lang) return;
+                          setAiPanelOpen(true);
+                          sendMessage(sel ? `Translate this to ${lang}: "${sel}"` : `Translate the document to ${lang}.`);
+                        }}
+                      ><Globe size={13}/><span>Translate</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Language</span>
@@ -2284,17 +2543,35 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Check grammar with AI" onClick={() => {
-                        const sel = window.getSelection()?.toString();
-                        setAiPanelOpen(true);
-                        setTimeout(() => {
-                          const inp = window.document.querySelector('.dap-input');
-                          if (inp) { inp.value = sel ? `Check and fix the grammar in: "${sel}"` : 'Check the grammar of the entire document and list any issues.'; inp.focus(); }
-                        }, 200);
-                      }}><SpellCheck size={13}/><span>Grammar Check</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Check grammar and style with AI"
+                        disabled={isThinking}
+                        onClick={() => {
+                          const sel = window.getSelection()?.toString().trim();
+                          setAiPanelOpen(true);
+                          sendMessage(sel ? `Check and fix the grammar in: "${sel}"` : 'Check the grammar and academic style of the entire document and suggest improvements.');
+                        }}
+                      ><SpellCheck size={13}/><span>Grammar Check</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Grammar</span>
+                </div>
+                {/* Tone */}
+                <div className="doc-tool-group">
+                  <div className="doc-tool-group-rows">
+                    <div className="doc-tool-group-row">
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Make writing more formal/academic"
+                        disabled={isThinking}
+                        onClick={() => { setAiPanelOpen(true); sendMessage('Make the writing style more formal and academic throughout the document.'); }}
+                      ><Star size={13}/><span>Formalise</span></button>
+                    </div>
+                    <div className="doc-tool-group-row">
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Expand the document with more detail"
+                        disabled={isThinking}
+                        onClick={() => { setAiPanelOpen(true); sendMessage('Expand each section with more detail and supporting analysis.'); }}
+                      ><Wand2 size={13}/><span>Expand</span></button>
+                    </div>
+                  </div>
+                  <span className="doc-tool-group-label">Tone &amp; Style</span>
                 </div>
               </div>
             )}
@@ -2347,9 +2624,20 @@ export default function DocumentEditorPage({
               <div className="dap-header-logo">
                 <Wand2 size={14} />
               </div>
-              <span className="dap-title">Copilot</span>
+              <span className="dap-title">{showCommentsPanel ? 'Comments' : 'Copilot'}</span>
             </div>
             <div className="dap-header-right">
+              <button
+                type="button"
+                className={`dap-head-icon-btn${showCommentsPanel ? ' dap-head-icon-btn--active' : ''}`}
+                title={showCommentsPanel ? 'Back to Chat' : `Comments${docComments.length ? ` (${docComments.length})` : ''}`}
+                onClick={() => setShowCommentsPanel(p => !p)}
+              >
+                <MessageCircle size={13} className="dap-icon-btn" />
+                {docComments.length > 0 && !showCommentsPanel && (
+                  <span className="dap-comment-badge">{docComments.length}</span>
+                )}
+              </button>
               <button type="button" className="dap-head-icon-btn" onClick={createNewChat} title="New Chat">
                 <Plus size={15} className="dap-icon-btn" />
               </button>
@@ -2367,6 +2655,60 @@ export default function DocumentEditorPage({
             </div>
           </div>
 
+          {/* ── Comments panel ── */}
+          {showCommentsPanel ? (
+            <div className="dap-comments-panel">
+              {docComments.length === 0 ? (
+                <div className="dap-comments-empty">
+                  <MessageCircle size={28} strokeWidth={1.5} />
+                  <p className="dap-comments-empty-title">No comments yet</p>
+                  <p className="dap-comments-empty-sub">Select text and use the <strong>New Comment</strong> button in the Review tab to annotate your document.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="dap-comments-header">
+                    <span className="dap-comments-count">{docComments.length} comment{docComments.length !== 1 ? 's' : ''}</span>
+                    <button
+                      type="button"
+                      className="dap-comments-address-btn"
+                      title="Ask AI to address all comments"
+                      disabled={isThinking}
+                      onClick={() => {
+                        setShowCommentsPanel(false);
+                        sendMessage('Address all comments in the document');
+                      }}
+                    >
+                      <CheckCircle2 size={12} />
+                      Address all with AI
+                    </button>
+                  </div>
+                  <div className="dap-comments-list">
+                    {docComments.map((c, i) => (
+                      <div key={i} className="dap-comment-card">
+                        <div className="dap-comment-card-section">{c.sectionTitle || 'Untitled'}</div>
+                        <div className="dap-comment-card-text">{c.text}</div>
+                        <div className="dap-comment-card-actions">
+                          <button
+                            type="button"
+                            className="dap-comment-action-btn"
+                            title="Ask AI to address this comment"
+                            disabled={isThinking}
+                            onClick={() => {
+                              setShowCommentsPanel(false);
+                              sendMessage(`Address the comment "${c.text}" in the "${c.sectionTitle}" section`);
+                            }}
+                          >
+                            <Wand2 size={10} /> Fix with AI
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+          <>
           {/* ── Messages area ── */}
           <div className="dap-messages">
             {showChatList ? (
@@ -2398,7 +2740,12 @@ export default function DocumentEditorPage({
                 <h3 className="dap-empty-title">How can I help?</h3>
                 <p className="dap-empty-sub">Ask anything about your document</p>
                 <div className="dap-suggestion-chips">
-                  {['Summarise this document', 'Improve the writing', 'Check grammar & style', 'Continue writing'].map((prompt) => (
+                  {[
+                    'Summarise this document',
+                    'Improve the writing',
+                    'Check grammar & style',
+                    docComments.length > 0 ? `Address ${docComments.length} comment${docComments.length !== 1 ? 's' : ''}` : 'Continue writing',
+                  ].map((prompt) => (
                     <button
                       key={prompt}
                       className="dap-suggestion-chip"
@@ -2420,7 +2767,15 @@ export default function DocumentEditorPage({
                     </div>
                     <div className="dap-msg-content">
                       <div className="dap-msg-body">
-                        {msg.summary ? (
+                        {msg.confirmation ? (
+                          <ConfirmationCard
+                            description={msg.confirmation.description}
+                            plan={msg.plan || []}
+                            onConfirm={() => executeConfirmedAction(msg.id, activeChatId, msg.pendingUserText, msg.pendingModel)}
+                            onCancel={() => cancelConfirmation(msg.id, activeChatId)}
+                            disabled={isThinking}
+                          />
+                        ) : msg.summary ? (
                           <CopilotWorkflowCard
                             summary={msg.summary}
                             planItems={msg.plan || []}
@@ -2446,7 +2801,11 @@ export default function DocumentEditorPage({
                         </div>
                       )}
                       <div className="dap-msg-actions">
-                        <button className="dap-msg-act-btn" title="Retry"><RotateCcw size={11} /></button>
+                        <button className="dap-msg-act-btn" title="Retry" disabled={isThinking} onClick={() => {
+                          const msgIdx = messages.findIndex((m) => m.id === msg.id);
+                          const lastUser = [...messages].slice(0, msgIdx).reverse().find((m) => m.role === 'user');
+                          if (lastUser) sendMessage(lastUser.text);
+                        }}><RotateCcw size={11} /></button>
                         <button className="dap-msg-act-btn" title="Copy" onClick={() => navigator.clipboard?.writeText(msg.text)}><Copy size={11} /></button>
                         <button className="dap-msg-act-btn" title="Dislike"><ThumbsDown size={11} /></button>
                         <span className="dap-model-tag">{activeModel}</span>
@@ -2539,6 +2898,8 @@ export default function DocumentEditorPage({
               <p className="dap-composer-hint">Enter to send · Shift+Enter for new line</p>
             </div>
           )}
+          </>
+          )}
         </aside>}
       </div>
 
@@ -2559,8 +2920,18 @@ export default function DocumentEditorPage({
       {/* ── Status bar — full width, below both columns ── */}
       <footer className="doc-status-bar">
         <div className="doc-status-left">
-          <span className="doc-status-item">Page: 1</span>
-          <span className="doc-status-item">Words: {wordCount}</span>
+          <span className="doc-status-item">Page: {pageCount}</span>
+          <span className="doc-status-item">Words: {wordCount.toLocaleString()}</span>
+          {wordCount > 0 && (
+            <span className="doc-status-item">{Math.max(1, Math.ceil(wordCount / 200))} min read</span>
+          )}
+          {isSavingManual ? (
+            <span className="doc-status-item doc-status-saving">Saving…</span>
+          ) : autoSaved && !isDirty ? (
+            <span className="doc-status-item doc-status-saved">✓ Saved</span>
+          ) : isDirty ? (
+            <span className="doc-status-item doc-status-unsaved">● Unsaved</span>
+          ) : null}
           <button type="button" className="doc-spell-btn">
             <span className="doc-spell-indicator"><Check size={11} /></span>
             AI Spell Check

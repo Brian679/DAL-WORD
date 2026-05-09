@@ -6,6 +6,15 @@ from .gemini import generate_outline_sections, generate_section_content
 from .planner import create_dissertation_outline
 from .tools import find_section, generate_chart, generate_image, insert_after, insert_image_block, update_section
 
+import re
+
+
+def _sanitize_body(text: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 
 def _save(document: Document, note: str) -> Document:
     document.save(update_fields=["content", "updated_at"])
@@ -29,6 +38,7 @@ def enhance_section(document: Document, query: str, instruction: str) -> Documen
         )
     except Exception:
         enhanced = f"{original}\n\nRefined draft: {instruction}."
+    enhanced = _sanitize_body(enhanced)
     document.content = update_section(document.content, idx, enhanced)
     return _save(document, f"enhance:{query}")
 

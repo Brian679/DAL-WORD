@@ -35,6 +35,47 @@ from .tools import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Intents that modify the document and therefore require user confirmation
+# before the agent proceeds to execute.
+# ---------------------------------------------------------------------------
+DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
+    "write_section",
+    "write_dissertation",
+    "enhance_section",
+    "enhance_document",
+    "address_comments",
+    "create_outline",
+    "write_report",
+    "write_assignment",
+    "write_presentation",
+    "write_spreadsheet",
+    "add_chart",
+    "add_image",
+})
+
+
+def _intent_description(intent: str, target_section: str | None, topic: str | None) -> str:
+    """Generate a human-readable summary of what the agent is about to do."""
+    t = target_section or ""
+    tp = topic or ""
+    _descriptions: dict[str, str] = {
+        "write_section":    f"Write the **{t or 'target'}** section",
+        "write_dissertation": f"Write the full dissertation on **{tp}**",
+        "enhance_section":  f"Improve and polish {'the **' + t + '** section' if t else 'the document content'}",
+        "enhance_document": "Improve the entire document — structure, clarity, and academic quality",
+        "address_comments": "Read all inline reviewer comments and address each one in the document",
+        "create_outline":   f"Generate a structured outline for **{tp or 'the document'}**",
+        "write_report":     "Write a structured report",
+        "write_assignment": "Write a formatted assignment",
+        "write_presentation": "Generate a presentation outline with slide content",
+        "write_spreadsheet": "Generate a structured spreadsheet layout",
+        "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
+        "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
+    }
+    return _descriptions.get(intent, "Execute the requested task")
+
+
+# ---------------------------------------------------------------------------
 # Per-subsection writing guidelines injected into every AI prompt.
 # Keys are lowercase substrings matched against the subsection title.
 # ---------------------------------------------------------------------------
@@ -43,10 +84,240 @@ logger = logging.getLogger(__name__)
 
 def _subsection_guidelines(title: str, topic: str = "") -> str:
     """Generate dynamic writing instructions for the given subsection title."""
+    lowered = title.lower()
+
+    # ── Front matter ────────────────────────────────────────────────────────
+    if "abstract" in lowered:
+        return (
+            "Write a concise academic abstract (200–300 words) structured as: background/context, "
+            "problem statement, research objectives, methodology, key findings or expected contributions, "
+            "and conclusion. Write as a single flowing paragraph with no internal headings."
+        )
+    if "dedication" in lowered:
+        return (
+            "Write a brief, heartfelt dedication (3–6 lines) in the first person. "
+            "Dedicate the work to family members, mentors, or others who supported the researcher. "
+            "Use warm, personal language. Do NOT use academic jargon. "
+            "Begin with 'To...' or 'Dedicated to...'. Keep it short and sincere."
+        )
+    if "acknowledgement" in lowered or "acknowledgment" in lowered:
+        return (
+            "Write formal acknowledgements (150–250 words) thanking supervisors/advisors, "
+            "the institution, research participants, family, and colleagues in that order. "
+            "Use formal but warm academic prose."
+        )
+    if "table of contents" in lowered:
+        return (
+            "Write a placeholder note explaining that a detailed Table of Contents "
+            "listing all chapters, sections, and page numbers will be compiled upon final "
+            "document assembly. Then list the main chapter titles."
+        )
+    if "list of figure" in lowered:
+        return (
+            "Write a brief placeholder note that a List of Figures with captions and page numbers "
+            "will be compiled upon final assembly. Provide a sample format line."
+        )
+    if "list of table" in lowered:
+        return (
+            "Write a brief placeholder note that a List of Tables with captions and page numbers "
+            "will be compiled upon final assembly. Provide a sample format line."
+        )
+    if "list of abbreviation" in lowered or "list of acronym" in lowered or "abbreviation" in lowered:
+        return (
+            f"Write a well-organised List of Abbreviations and Acronyms relevant to the topic: '{topic}'. "
+            "Format each entry as: ABBREVIATION — Full meaning. Include at least 10–15 common abbreviations "
+            "used in the specific field/topic of study."
+        )
+
+    # ── Chapter summary (at the end of every main chapter) ──────────────────
+    if "chapter summary" in lowered:
+        return (
+            "Write a comprehensive Chapter Summary (200–300 words) that: "
+            "(1) recaps the key points and arguments developed in this chapter, "
+            "(2) highlights the most important findings or conclusions reached, and "
+            "(3) explains how this chapter connects to and prepares the reader for the next chapter. "
+            "Write in past tense ('This chapter examined...', 'The review revealed...'). "
+            "Be SPECIFIC to the content of this chapter — not generic."
+        )
+
+    # ── Chapter 1 core sections ──────────────────────────────────────────────
+    if "research objective" in lowered or (lowered.endswith("objectives") and "background" not in lowered):
+        return (
+            "Write the Research Objectives as a numbered list. "
+            "Start with 1–2 introductory sentences stating the overall aim of the study. "
+            "Then list 4–6 specific objectives numbered 1, 2, 3... "
+            "Each objective must begin with an action verb (To examine, To investigate, To assess, "
+            "To determine, To evaluate, To explore). "
+            "Each objective must be concise (one sentence) and directly related to the research topic. "
+            "Use numbered list format: each objective on its own line starting with '1.', '2.', etc."
+        )
+
+    if "research question" in lowered or (lowered.endswith("questions") and "background" not in lowered):
+        return (
+            "Write the Research Questions as a numbered list. "
+            "Start with 1 sentence introducing the research questions. "
+            "Then list 4–6 specific questions numbered 1, 2, 3... "
+            "Each question must be a complete interrogative sentence directly tied to an objective. "
+            "Questions should be answerable through the stated research methodology. "
+            "Use numbered list format: each question on its own line starting with '1.', '2.', etc."
+        )
+
+    if "hypothes" in lowered:
+        return (
+            "Write the Research Hypotheses as a numbered list of null/alternative hypothesis pairs. "
+            "Format each pair as: "
+            "N. H0: [null hypothesis — states no significant relationship/effect]. "
+            "   H1: [alternative hypothesis — states a significant relationship/effect]. "
+            "Include 3–5 hypothesis pairs, each corresponding to a research objective. "
+            "Use formal statistical language."
+        )
+
+    if "significance of the study" in lowered or "significance of study" in lowered or (
+        lowered.endswith("significance") and "statistical" not in lowered
+    ):
+        return (
+            "Write the Significance of the Study in a structured format. "
+            "Open with 1–2 paragraphs on the theoretical/academic contribution. "
+            "Then present practical significance using clearly labelled sub-headings or numbered points: "
+            "e.g., '1.5.1 Significance to the Researcher', '1.5.2 Significance to the Institution', "
+            "'1.5.3 Significance to the Organisation', '1.5.4 Significance to Policy'. "
+            "Each sub-section should be 2–4 sentences explaining who benefits and how. "
+            "Write in formal academic prose within each sub-section."
+        )
+
+    if "background of the study" in lowered or "background of study" in lowered or (
+        lowered.endswith("background") and "theoretical" not in lowered
+    ):
+        return (
+            "Write the Background of the Study (350–500 words) covering: "
+            "(1) global context and relevance of the topic, "
+            "(2) the situation in the specific country or sector of the study, "
+            "(3) identification of the research problem or gap, and "
+            "(4) brief justification for the study. "
+            "Write in formal academic prose with logical flow between paragraphs."
+        )
+
+    if "statement of the problem" in lowered or "problem statement" in lowered:
+        return (
+            "Write the Statement of the Problem (250–350 words) that: "
+            "(1) clearly articulates the specific problem being studied, "
+            "(2) provides evidence (statistics, citations, observable trends) that the problem exists, "
+            "(3) explains the consequences of NOT addressing the problem, and "
+            "(4) ends with a clear statement of what this study will do. "
+            "Do NOT propose solutions — only state the problem."
+        )
+
+    if "scope and delimitation" in lowered or lowered.endswith("scope") or "delimitation" in lowered:
+        return (
+            "Write the Scope and Delimitations (200–300 words). "
+            "Cover: (1) the geographical scope, (2) the target population/participants, "
+            "(3) the time frame of the study, (4) the variables or concepts studied, and "
+            "(5) what is deliberately excluded and why. "
+            "Be specific and academic."
+        )
+
+    if "definition of key terms" in lowered or "key terms" in lowered:
+        return (
+            "Write the Definition of Key Terms as an alphabetically ordered list. "
+            "Define 6–10 key concepts central to this research. "
+            "For each term: state the term in bold or followed by a colon, then provide "
+            "a concise academic definition (2–3 sentences) grounded in the literature. "
+            "Cite a source for each definition where possible."
+        )
+
     return (
         f"Adapt your writing style naturally and intelligently to fit the purpose of the '{title}' section. "
         "Do not rigidly follow a fixed, hardcoded template. Write comprehensively and organically."
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-chapter visual node specs — injected automatically when the agent writes
+# any of these sections. Chapter 4 is excluded (handled by _chapter4_subsections).
+# Each spec: chapter (int), keyword (str, lowercase, matched against node title),
+#             kind ("table"|"chart"|"image"), title (child node title), meta (dict),
+#             designs_only (list[str]|None — None means all designs)
+# ---------------------------------------------------------------------------
+_SECTION_VISUAL_SPECS: list[dict[str, Any]] = [
+    # Chapter 1
+    {
+        "chapter": 1, "keyword": "definition of key terms",
+        "kind": "table", "title": "Table of Key Terms and Definitions",
+        "meta": {"table_type": "key_terms"}, "designs_only": None,
+    },
+    # Chapter 2
+    {
+        "chapter": 2, "keyword": "empirical review",
+        "kind": "table", "title": "Summary of Reviewed Empirical Studies",
+        "meta": {"table_type": "empirical_summary"}, "designs_only": None,
+    },
+    {
+        "chapter": 2, "keyword": "conceptual review",
+        "kind": "chart", "title": "Conceptual Framework Diagram",
+        "meta": {"chart_type": "framework"}, "designs_only": None,
+    },
+    # Chapter 3
+    {
+        "chapter": 3, "keyword": "sampling technique",
+        "kind": "table", "title": "Sampling Frame and Allocation",
+        "meta": {"table_type": "sampling"}, "designs_only": None,
+    },
+    {
+        "chapter": 3, "keyword": "data collection",
+        "kind": "table", "title": "Data Collection Instruments",
+        "meta": {"table_type": "instruments"}, "designs_only": None,
+    },
+    {
+        "chapter": 3, "keyword": "reliability",
+        "kind": "table", "title": "Reliability and Validity Summary",
+        "meta": {"table_type": "reliability"}, "designs_only": ["quantitative", "mixed"],
+    },
+    # Chapter 5
+    {
+        "chapter": 5, "keyword": "summary of findings",
+        "kind": "table", "title": "Summary of Key Findings by Objective",
+        "meta": {"table_type": "findings_summary"}, "designs_only": None,
+    },
+]
+
+# Maps section keywords to canonical section names.  Defined at module level so
+# it is available before the local variable assignment inside _heuristic_intent.
+_SECTION_KEYWORD_MAP: list[tuple[list[str], str]] = [
+    (["hypothesis", "hypothes", "null hypothesis", "alternative hypothesis", "h0", "h1"], "Research Hypotheses"),
+    (["background of the study", "background of study", "background"], "Background of the Study"),
+    (["statement of the problem", "problem statement", "problem of the study"], "Statement of the Problem"),
+    (["research objectives", "research objective", "objectives", "specific objectives", "study objectives"], "Research Objectives"),
+    (["research questions", "research question", "study questions"], "Research Questions"),
+    (["significance of the study", "significance of study", "signifance of the study", "signifance", "significance"], "Significance of the Study"),
+    (["scope and delimitations", "scope of the study", "delimitations", "scope"], "Scope and Delimitations"),
+    (["definition of key terms", "key terms"], "Definition of Key Terms"),
+    (["conceptual review", "conceptual framework"], "Conceptual Review"),
+    (["theoretical framework", "theoretical review"], "Theoretical Framework"),
+    (["empirical review", "empirical literature"], "Empirical Review"),
+    (["research gap"], "Research Gap"),
+    (["research design"], "Research Design"),
+    (["target population", "study population"], "Target Population"),
+    (["sampling technique", "sample size", "sampling method"], "Sampling Techniques and Sample Size"),
+    (["data collection"], "Data Collection Methods"),
+    (["data analysis", "analysis technique"], "Data Analysis Techniques"),
+    (["reliability and validity", "reliability", "validity"], "Reliability and Validity"),
+    (["ethical consideration", "research ethics"], "Ethical Considerations"),
+    (["summary of findings", "findings summary"], "Summary of Findings"),
+    (["recommendations"], "Recommendations"),
+    (["limitations of the study", "limitations"], "Limitations of the Study"),
+    (["areas for further research", "future research", "further research"], "Areas for Further Research"),
+    (["discussion of findings", "discussion"], "Discussion of Findings"),
+    (["abstract"], "Abstract"),
+    (["conclusion"], "Conclusion"),
+    (["references"], "References"),
+    (["appendices", "appendix"], "Appendices"),
+]
+
+_SECTION_ACTION_WORDS: list[str] = [
+    "redo", "rewrite", "write", "define", "fix", "correct",
+    "improve", "enhance", "update", "replace", "regenerate", "generate",
+    "refine", "modify", "change",
+]
 
 
 DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
@@ -163,6 +434,99 @@ def _normalize_subsection_node(raw: Any) -> dict[str, Any]:
             "meta": raw.get("meta", {}),
         }
     return {"title": str(raw), "children": [], "kind": "text"}
+
+
+def _inject_standard_visuals(
+    nodes: list[dict[str, Any]],
+    chapter_number: int,
+    research_design: str,
+) -> list[dict[str, Any]]:
+    """Walk the node tree for this chapter and append table/chart child nodes to
+    sections that benefit from visual data.  Chapter 4 is skipped — it already
+    has its own visual logic in _chapter4_subsections.
+    """
+    if chapter_number == 4:
+        return nodes
+
+    specs = [s for s in _SECTION_VISUAL_SPECS if s["chapter"] == chapter_number]
+    if not specs:
+        return nodes
+
+    result: list[dict[str, Any]] = []
+    for node in nodes:
+        title_lower = node.get("title", "").lower()
+        children = list(node.get("children", []))
+
+        for spec in specs:
+            if spec["keyword"] not in title_lower:
+                continue
+            # Skip if design restriction doesn't match
+            allowed = spec.get("designs_only")
+            if allowed and research_design not in allowed:
+                continue
+            # Don't double-inject if a visual child already exists
+            has_visual = any(ch.get("kind") in {"table", "chart", "image"} for ch in children)
+            if has_visual:
+                continue
+            children.append({
+                "title": spec["title"],
+                "kind": spec["kind"],
+                "children": [],
+                "meta": spec.get("meta", {}),
+            })
+
+        # Recurse into children (e.g. subsections of Chapter 2's Empirical Review)
+        if children:
+            children = _inject_standard_visuals(children, chapter_number, research_design)
+
+        result.append({**node, "children": children})
+    return result
+
+
+def _detect_visual_injection_request(
+    instruction: str,
+) -> tuple[str, str] | None:
+    """Return (kind, raw_section_hint) when the user explicitly asks to add a
+    table / chart / graph / image to a specific section.  Returns None otherwise.
+
+    Examples that match:
+      "put a table in the sampling section"
+      "add a chart to the background of the study"
+      "insert an image in chapter 3"
+      "include a graph in the empirical review"
+    """
+    text = (instruction or "").strip().lower()
+
+    # Determine visual kind first
+    kind: str | None = None
+    if "table" in text:
+        kind = "table"
+    elif any(k in text for k in ["chart", "graph", "bar chart", "pie chart", "line graph"]):
+        kind = "chart"
+    elif any(k in text for k in ["image", "figure", "diagram", "picture", "illustration"]):
+        kind = "chart"  # routed via generate_image in tools.py
+
+    if kind is None:
+        return None
+
+    # Need an action verb alongside the visual word
+    action_verbs = ["add", "put", "insert", "include", "place", "attach", "create", "generate", "make"]
+    has_action = any(v in text for v in action_verbs)
+    if not has_action:
+        return None
+
+    # Extract section hint: text after "in" / "to" / "for" / "into" that follows the visual kind
+    section_match = re.search(
+        r"(?:in|to|for|into|on|within)\s+(?:the\s+)?(.+?)(?:\s+section)?$",
+        text,
+    )
+    section_hint = section_match.group(1).strip() if section_match else ""
+
+    # Must have some section text to be meaningful
+    if len(section_hint) < 3:
+        return None
+
+    return kind, section_hint
 
 
 def _research_design(message: str, topic: str, document: Document) -> str:
@@ -507,48 +871,67 @@ def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
     Returns a dict with keys:
       - series: list[float]   — the data points
       - chart_type: str       — suggested chart type (bar/line/scatter/area/pie)
-      - x_labels: list[str]   — short label for each point
+      - x_labels: list[str]   — short label for each point (SAME length as series)
       - unit: str             — measurement unit, e.g. "%", "score", "count"
     Falls back to seed-based data on any error so the pipeline never breaks.
     """
+    # Pie charts look cluttered with many slices; cap at 6 for pie-likely topics.
+    pie_keywords = {"distribution", "composition", "proportion", "breakdown", "demographic", "share", "pie"}
+    likely_pie = any(kw in context.lower() for kw in pie_keywords)
+    effective_n = min(n_points, 6) if likely_pie else n_points
+
     prompt = (
-        f"You are a data analyst. Generate realistic numeric data for a chart about:\n"
-        f"  \"{context}\"\n\n"
-        f"Rules:\n"
-        f"- Return ONLY a JSON object, no markdown, no extra text.\n"
-        f"- Exactly {n_points} data points. Values must be realistic for the topic.\n"
-        f"- Pick the best chart_type from: bar, line, scatter, area, pie.\n"
-        f"- x_labels: short (1-3 word) label for each data point (e.g. year, category, group).\n"
-        f"- unit: the measurement unit (e.g. '%%', 'score', 'count', 'USD', 'years').\n"
-        f"- Do NOT use random-looking numbers. Make them believable for the topic.\n\n"
-        f"Format:\n"
-        f"{{\"series\":[...],\"chart_type\":\"bar\",\"x_labels\":[...],\"unit\":\"%%\"}}"
+        "You are an academic data analyst generating chart data for a dissertation figure.\n"
+        f"Chart topic / section title: \"{context}\"\n\n"
+        "Instructions:\n"
+        f"1. Generate EXACTLY {effective_n} data points that are academically plausible for this topic.\n"
+        "2. Choose the BEST chart_type: 'bar' for comparisons/categories, 'line' for trends over time, "
+        "'scatter' for correlation/relationship, 'area' for cumulative trends, 'pie' for proportions.\n"
+        f"3. x_labels: provide EXACTLY {effective_n} short labels (1-4 words each) describing each data point "
+        "(e.g. years like '2019', '2020'; categories like 'Urban', 'Rural'; groups like 'Group A').\n"
+        "4. unit: the y-axis measurement unit as a short string, e.g. '%', 'score (1-5)', 'count', "
+        "'USD millions', 'years', 'kg/ha'. Use '%' for percentages, not 'percent' or '%%'.\n"
+        "5. Values must show meaningful variation — NOT all the same. Be realistic and grounded.\n"
+        "6. For demographic/proportion charts, values should sum to approximately 100 (percentages).\n"
+        "7. For Likert/survey-score charts, values should be between 1.0 and 5.0.\n\n"
+        "Return ONLY a JSON object — no markdown, no explanation:\n"
+        '{"series":[v1,v2,...],"chart_type":"bar","x_labels":["lbl1","lbl2",...],"unit":"%"}'
     )
 
     try:
         raw = generate_text(prompt)
-        # strip any accidental fences
         raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        # Tolerate a stray trailing comma before closing brace
+        raw = re.sub(r",\s*}", "}", raw)
         data = json.loads(raw)
         series = [float(v) for v in (data.get("series") or []) if v is not None]
         if not series:
             raise ValueError("empty series")
+        x_labels_raw = [str(lbl).strip() for lbl in (data.get("x_labels") or [])]
+        # Ensure x_labels length matches series; pad or trim as needed
+        while len(x_labels_raw) < len(series):
+            x_labels_raw.append(str(len(x_labels_raw) + 1))
+        x_labels_raw = x_labels_raw[: len(series)]
+        unit_raw = str(data.get("unit") or "").strip()
+        # Normalise common LLM mis-renderings of percent
+        if unit_raw.lower() in {"percent", "percentage", "%%"}:
+            unit_raw = "%"
         return {
             "series": series,
             "chart_type": str(data.get("chart_type") or "bar").lower(),
-            "x_labels": [str(label) for label in (data.get("x_labels") or [])],
-            "unit": str(data.get("unit") or ""),
+            "x_labels": x_labels_raw,
+            "unit": unit_raw,
         }
     except Exception as exc:
         logger.warning("_ai_chart_series fallback (%s): %s", context[:60], exc)
         seed = sum(ord(c) for c in context)
         base = 10.0 + (seed % 30)
         return {
-            "series": [round(base + i * 3.5 + (seed + i) % 7, 1) for i in range(n_points)],
+            "series": [round(base + i * 3.5 + (seed + i) % 7, 1) for i in range(effective_n)],
             "chart_type": "bar",
-            "x_labels": [f"Item {i+1}" for i in range(n_points)],
+            "x_labels": [f"Item {i + 1}" for i in range(effective_n)],
             "unit": "",
         }
 
@@ -565,6 +948,192 @@ def _extract_json_obj(raw: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("json payload is not an object")
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# LLM-generated dissertation plan (the ONLY source of truth for chapter structure)
+# ---------------------------------------------------------------------------
+
+def generate_dissertation_plan_llm(
+    topic: str,
+    message: str,
+    research_design: str = "quantitative",
+) -> list[dict[str, Any]]:
+    """Ask the LLM to produce the complete dissertation chapter and section plan.
+
+    Returns a list of chapter dicts:
+        [{"title": "Chapter 1: ...", "sections": [{"title": "1.1 ...", "sections": [...]}, ...]}, ...]
+
+    Falls back to a minimal generic structure if the LLM call fails.
+    """
+    prompt = (
+        "You are an expert academic dissertation planner.\n"
+        "A student has asked you to help write a dissertation. Your task is to generate a detailed, "
+        "academically appropriate chapter plan tailored to their specific topic and research type.\n\n"
+        f"Topic: {topic or message[:300]}\n"
+        f"Research type: {research_design}\n"
+        f"Student request: {message[:500]}\n\n"
+        "Return ONLY valid JSON — no markdown fences, no explanation. Use this exact schema:\n"
+        "[\n"
+        "  {\n"
+        '    "title": "Chapter 1: Introduction",\n'
+        '    "sections": [\n'
+        '      {"title": "1.1 Background of the Study", "sections": []},\n'
+        '      {"title": "1.2 Statement of the Problem", "sections": []}\n'
+        "    ]\n"
+        "  }\n"
+        "]\n\n"
+        "Rules:\n"
+        "- The FIRST entry in the array must be the front matter with the title 'Preliminary Pages' and "
+        "these exact sections (in order, numbered as shown): "
+        "'i. Abstract', 'ii. Dedication', 'iii. Acknowledgements', "
+        "'iv. Table of Contents', 'v. List of Figures', 'vi. List of Tables', "
+        "'vii. List of Abbreviations and Acronyms'.\n"
+        "- After the front matter, generate exactly 5 or 6 main chapters (Introduction, Literature Review, "
+        "Methodology, Results/Analysis, Conclusion, and optionally References & Appendices).\n"
+        "- Chapter 1 must contain: Background, Statement of the Problem, Research Objectives, "
+        "Research Questions, Significance, Scope & Delimitations, Definition of Key Terms, Chapter Summary.\n"
+        "- Chapter 2 title and section headings must be SPECIFIC to the research topic — do NOT use "
+        "generic placeholder titles like 'Related Work' or 'Review of Literature'. Instead, frame "
+        "headings around the actual subject matter (e.g. if the topic is municipal finance, use "
+        "'2.2 Revenue Mechanisms in Local Government', '2.3 Fiscal Sustainability Theories', etc.).\n"
+        "- Chapter 2 must end with a 'Chapter Summary' section.\n"
+        "- Chapter 3 sections must reflect the stated research design "
+        f"({research_design}): include appropriate data collection and analysis subsections. "
+        "Chapter 3 must end with a 'Chapter Summary' section.\n"
+        "- Chapter 4 must have results subsections that directly correspond to the research objectives "
+        "or questions. Chapter 4 must end with a 'Chapter Summary' section.\n"
+        "- Chapter 5 must include: Summary of Findings, Conclusions, Recommendations, Limitations, "
+        "Areas for Further Research, Chapter Summary.\n"
+        "- Each main chapter should have 6–12 sections (including the Chapter Summary). Sections may have nested sub-sections.\n"
+        "- All titles must use standard academic numbering (1.1, 1.2, 2.1, 2.2.1, etc.).\n"
+        "- The Chapter Summary in each chapter must be the LAST section.\n"
+        "- Return ONLY the JSON array. Nothing else."
+    )
+
+    raw = ""
+    try:
+        raw = generate_text(prompt)
+        # Strip markdown fences if present
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned).rstrip("`").strip()
+        # Find the JSON array
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start != -1 and end != -1 and end > start:
+            chapters = json.loads(cleaned[start : end + 1])
+            if isinstance(chapters, list) and chapters:
+                return chapters
+    except Exception as exc:
+        logger.warning("generate_dissertation_plan_llm failed: %s | raw=%s", exc, raw[:300])
+
+    # Fallback: minimal generic plan
+    logger.info("generate_dissertation_plan_llm using fallback plan for topic=%s", topic[:80] if topic else "")
+    return _fallback_dissertation_chapters(topic or "the study")
+
+
+def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
+    """Minimal generic fallback when LLM plan generation fails."""
+    return [
+        {"title": "Preliminary Pages", "sections": [
+            {"title": "i. Abstract", "sections": []},
+            {"title": "ii. Dedication", "sections": []},
+            {"title": "iii. Acknowledgements", "sections": []},
+            {"title": "iv. Table of Contents", "sections": []},
+            {"title": "v. List of Figures", "sections": []},
+            {"title": "vi. List of Tables", "sections": []},
+            {"title": "vii. List of Abbreviations and Acronyms", "sections": []},
+        ]},
+        {"title": "Chapter 1: Introduction", "sections": [
+            {"title": "1.1 Background of the Study", "sections": []},
+            {"title": "1.2 Statement of the Problem", "sections": []},
+            {"title": "1.3 Research Objectives", "sections": []},
+            {"title": "1.4 Research Questions", "sections": []},
+            {"title": "1.5 Significance of the Study", "sections": []},
+            {"title": "1.6 Scope and Delimitations", "sections": []},
+            {"title": "1.7 Definition of Key Terms", "sections": []},
+            {"title": "1.8 Chapter Summary", "sections": []},
+        ]},
+        {"title": "Chapter 2: Literature Review", "sections": [
+            {"title": f"2.1 Introduction to {topic[:60]}", "sections": []},
+            {"title": "2.2 Theoretical Framework", "sections": []},
+            {"title": "2.3 Conceptual Framework", "sections": []},
+            {"title": "2.4 Empirical Review", "sections": []},
+            {"title": "2.5 Research Gap", "sections": []},
+            {"title": "2.6 Chapter Summary", "sections": []},
+        ]},
+        {"title": "Chapter 3: Research Methodology", "sections": [
+            {"title": "3.1 Introduction", "sections": []},
+            {"title": "3.2 Research Design", "sections": []},
+            {"title": "3.3 Target Population", "sections": []},
+            {"title": "3.4 Sampling Techniques and Sample Size", "sections": []},
+            {"title": "3.5 Data Collection Methods", "sections": []},
+            {"title": "3.6 Data Analysis Techniques", "sections": []},
+            {"title": "3.7 Reliability and Validity", "sections": []},
+            {"title": "3.8 Ethical Considerations", "sections": []},
+            {"title": "3.9 Chapter Summary", "sections": []},
+        ]},
+        {"title": "Chapter 4: Results and Discussion", "sections": [
+            {"title": "4.1 Introduction", "sections": []},
+            {"title": "4.2 Presentation of Findings", "sections": []},
+            {"title": "4.3 Discussion of Findings", "sections": []},
+            {"title": "4.4 Chapter Summary", "sections": []},
+        ]},
+        {"title": "Chapter 5: Conclusions and Recommendations", "sections": [
+            {"title": "5.1 Summary of Findings", "sections": []},
+            {"title": "5.2 Conclusions", "sections": []},
+            {"title": "5.3 Recommendations", "sections": []},
+            {"title": "5.4 Limitations of the Study", "sections": []},
+            {"title": "5.5 Areas for Further Research", "sections": []},
+            {"title": "5.6 Chapter Summary", "sections": []},
+        ]},
+        {"title": "Chapter 6: References and Appendices", "sections": [
+            {"title": "6.1 References", "sections": []},
+            {"title": "6.2 Appendices", "sections": []},
+        ]},
+    ]
+
+
+def llm_chapters_to_blueprints(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert LLM plan chapters to the internal blueprint format used by _write_dissertation."""
+    blueprints = []
+    for chapter in chapters:
+        title = chapter.get("title", "Untitled Chapter")
+        nodes = _sections_to_nodes(chapter.get("sections", []))
+        blueprints.append({"title": title, "nodes": nodes})
+    return blueprints
+
+
+def _sections_to_nodes(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recursively convert LLM plan sections to normalised node dicts."""
+    result = []
+    for sec in sections:
+        title = sec.get("title", "Untitled")
+        children = _sections_to_nodes(sec.get("sections", []))
+        result.append({"title": title, "children": children, "kind": "text"})
+    return result
+
+
+def llm_chapters_to_flat_steps(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert LLM plan chapters to the flat step list shown in the frontend todo."""
+    steps: list[dict[str, Any]] = [{"step": "Creating dissertation to-do list", "status": "done"}]
+    first = True
+    for chapter in chapters:
+        step_status = "in_progress" if first else "pending"
+        first = False
+        steps.append({"step": f"Writing {chapter.get('title', 'Chapter')}", "status": step_status})
+        _sections_to_steps(steps, chapter.get("sections", []), depth=1)
+    return steps
+
+
+def _sections_to_steps(
+    steps: list[dict[str, Any]], sections: list[dict[str, Any]], depth: int
+) -> None:
+    indent = "  " * depth
+    for sec in sections:
+        steps.append({"step": f"{indent}Writing {sec.get('title', 'Section')}", "status": "pending"})
+        _sections_to_steps(steps, sec.get("sections", []), depth + 1)
 
 
 def _default_framework_spec(topic: str, prompt: str) -> dict[str, Any]:
@@ -792,6 +1361,17 @@ def _strip_leading_heading(body: str, title: str) -> str:
         return rest.lstrip("\n")
     return body
 
+
+def _sanitize_body(text: str) -> str:
+    """Strip HTML tags and normalise whitespace in LLM-generated body text."""
+    # Replace <br> variants with a newline so paragraph structure is preserved.
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    # Remove any remaining HTML/XML tags.
+    text = re.sub(r"<[^>]+>", "", text)
+    # Collapse runs of 3+ blank lines to at most 2.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 def _execute_subsection_nodes(
     nodes: list[dict[str, Any]],
     document: Document,
@@ -805,6 +1385,7 @@ def _execute_subsection_nodes(
     table_counter: list[int],
     on_node_completed: Any | None = None,
     default_word_count: int = 220,
+    user_instruction: str = "",
 ) -> tuple[str, str, list[dict[str, str]]]:
     chunks: list[str] = []
     blocks: list[dict[str, str]] = []
@@ -893,6 +1474,8 @@ def _execute_subsection_nodes(
                     series=ai_data["series"],
                     chart_type=ai_data["chart_type"],
                     title=title,
+                    x_labels=ai_data.get("x_labels") or None,
+                    unit=ai_data.get("unit") or None,
                 )
                 block_id = f"fig-{figure_no}-{len(blocks) + 1}"
                 blocks.append({
@@ -937,11 +1520,40 @@ def _execute_subsection_nodes(
                 )
                 wc = 120 if is_pointform else default_word_count
 
+                # Detect explicit user formatting instructions
+                _user_instr_lower = user_instruction.lower()
+                _explicit_pointform = any(
+                    k in _user_instr_lower
+                    for k in ["point form", "bullet point", "bullet list", "numbered list",
+                              "number form", "in points", "as points", "list form"]
+                )
+                _explicit_paragraph = any(
+                    k in _user_instr_lower
+                    for k in ["paragraph", "prose", "flowing", "narrative"]
+                )
+
                 # Build step progress label for logging / callbacks
                 step_label = (
                     f"{section_title} — Step {step_idx + 1}: {title}"
                 )
                 logger.info("▶ Generating: %s", step_label)
+
+                # Override guidelines if user explicitly requested a format,
+                # OR if this section is structurally always a list (objectives, questions, etc.)
+                if _explicit_paragraph and not _explicit_pointform:
+                    format_override = (
+                        "FORMAT INSTRUCTION (from user): Write this as flowing academic paragraphs. "
+                        "Do NOT use bullet points or numbered lists.\n\n"
+                    )
+                elif _explicit_pointform or (is_pointform and not _explicit_paragraph):
+                    format_override = (
+                        "FORMAT INSTRUCTION: Present this content as a numbered list. "
+                        "Each numbered point must be on its own line (e.g. '1. ...', '2. ...', '3. ...'). "
+                        "You may include 1–2 introductory sentences before the list. "
+                        "Do NOT write the points as continuous prose paragraphs.\n\n"
+                    )
+                else:
+                    format_override = ""
 
                 prompt_context = (
                     f"{document_brief}\n\n"
@@ -950,6 +1562,7 @@ def _execute_subsection_nodes(
                     f"--- DOCUMENT CONTENT ALREADY WRITTEN (read this and build on it) ---\n"
                     f"{current_document_context[-3000:]}\n"
                     f"--- END OF EXISTING DOCUMENT ---\n\n"
+                    + format_override
                     + (
                         f"SECTION-SPECIFIC INSTRUCTIONS:\n{guidelines}\n\n"
                         if guidelines else
@@ -1049,6 +1662,7 @@ def _execute_subsection_nodes(
                     body = _fallback_subsection_text(topic, section_title, title)
 
         body = _strip_leading_heading(body, title)
+        body = _sanitize_body(body)
         chunks.append(f"{title}\n{body}")
         local_context = f"{local_context}\n\n{title}\n{body}".strip()
 
@@ -1067,6 +1681,7 @@ def _execute_subsection_nodes(
                 table_counter,
                 on_node_completed,
                 default_word_count,
+                user_instruction,
             )
             if child_text:
                 chunks.append(child_text)
@@ -1085,6 +1700,12 @@ def _execute_subsection_nodes(
 
 def _heuristic_intent(message: str) -> dict[str, Any]:
     text = (message or "").strip().lower()
+
+    # Detect requests to address/resolve inline document comments
+    _comment_verbs = {"address", "fix", "resolve", "handle", "respond", "answer", "deal with", "review", "check"}
+    _comment_nouns = {"comment", "comments", "annotation", "annotations", "feedback", "reviewer note", "reviewer notes", "inline comment"}
+    if any(v in text for v in _comment_verbs) and any(n in text for n in _comment_nouns):
+        return {"intent": "address_comments", "target_section": None, "topic": None}
 
     def _extract_target() -> str | None:
         chapter_match = re.search(r"chapter\s*\d+(?:\.\d+)?", text)
@@ -1223,10 +1844,21 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
         return {"intent": "create_outline", "target_section": None, "topic": topic}
 
+    # ── Visual + section-keyword detection (must come before plain add_chart/add_image) ──
+    # "generate the conceptual framework image" / "add a chart to the empirical review"
+    # → route to write_section so _write_section injects the visual node.
+    _visual_verbs = {"add", "put", "insert", "include", "place", "attach", "generate", "create", "make"}
+    _visual_kinds = {"table", "chart", "graph", "image", "figure", "diagram"}
+    if any(v in text for v in _visual_verbs) and any(k in text for k in _visual_kinds):
+        for _kws, _sec_name in _SECTION_KEYWORD_MAP:
+            if any(kw in text for kw in _kws):
+                return {"intent": "write_section", "target_section": _sec_name, "topic": None}
+        # No named section found — fall through to plain add_chart / add_image
+
     if "chart" in text or "graph" in text:
         return {"intent": "add_chart", "target_section": target, "topic": None}
 
-    if "image" in text or "figure" in text:
+    if "image" in text or "figure" in text or "diagram" in text:
         return {"intent": "add_image", "target_section": target, "topic": None}
 
     if "report" in text:
@@ -1243,6 +1875,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
 
     if any(k in text for k in [
         "correct", "improve", "enhance", "fix", "expand", "add to",
+        "refine", "modify", "change", "update",
         "put it again", "add it again", "add it back",
         "put back", "put the", "include the",
         "write it again", "write it back", "write again",
@@ -1252,45 +1885,25 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
             return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
+    # ── Grammar / proofreading ───────────────────────────────────────────────
+    _grammar_kw = {"grammar", "spelling", "spell", "typo", "typos", "proofread", "spellcheck", "spell check"}
+    if any(k in text for k in _grammar_kw):
+        return {"intent": "enhance_section", "target_section": target, "topic": "grammar_and_style"}
+
+    # ── Rephrase / reword / formality ───────────────────────────────────────
+    _rephrase_kw = {"rephrase", "reword", "restate", "paraphrase"}
+    _formal_kw   = {"more formal", "more academic", "more professional", "formal tone", "academic tone", "academic style", "formalise", "formalize"}
+    if any(k in text for k in _rephrase_kw) or any(k in text for k in _formal_kw):
+        return {"intent": "enhance_section", "target_section": target, "topic": None}
+
+    # ── Expand / elaborate ──────────────────────────────────────────────────
+    if any(k in text for k in ["expand", "elaborate", "more detail", "add more", "flesh out"]):
+        if any(k in text for k in ["document", "whole document", "entire document", "all sections"]):
+            return {"intent": "enhance_document", "target_section": None, "topic": None}
+        return {"intent": "enhance_section", "target_section": target, "topic": None}
+
     # ── Section-keyword detection ────────────────────────────────────────────
-    # Detect named sections BEFORE falling through to dissertation triggers so that
-    # "redo the hypothesis" never escalates to write_dissertation.
-    _SECTION_KEYWORD_MAP: list[tuple[list[str], str]] = [
-        (["hypothesis", "hypothes", "null hypothesis", "alternative hypothesis", "h0", "h1"], "Research Hypotheses"),
-        (["background of the study", "background of study"], "Background of the Study"),
-        (["statement of the problem", "problem statement"], "Statement of the Problem"),
-        (["research objectives", "research objective"], "Research Objectives"),
-        (["research questions", "research question"], "Research Questions"),
-        (["significance of the study", "significance of study", "signifance of the study", "signifance"], "Significance of the Study"),
-        (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
-        (["definition of key terms", "key terms"], "Definition of Key Terms"),
-        (["conceptual review", "conceptual framework"], "Conceptual Review"),
-        (["theoretical framework", "theoretical review"], "Theoretical Framework"),
-        (["empirical review", "empirical literature"], "Empirical Review"),
-        (["research gap"], "Research Gap"),
-        (["research design"], "Research Design"),
-        (["target population", "study population"], "Target Population"),
-        (["sampling technique", "sample size", "sampling method"], "Sampling Techniques and Sample Size"),
-        (["data collection"], "Data Collection Methods"),
-        (["data analysis", "analysis technique"], "Data Analysis Techniques"),
-        (["reliability and validity", "reliability", "validity"], "Reliability and Validity"),
-        (["ethical consideration", "research ethics"], "Ethical Considerations"),
-        (["summary of findings", "findings summary"], "Summary of Findings"),
-        (["recommendations"], "Recommendations"),
-        (["limitations of the study", "limitations"], "Limitations of the Study"),
-        (["areas for further research", "future research", "further research"], "Areas for Further Research"),
-        (["discussion of findings", "discussion"], "Discussion of Findings"),
-        (["abstract"], "Abstract"),
-        (["conclusion"], "Conclusion"),
-        (["references"], "References"),
-        (["appendices", "appendix"], "Appendices"),
-    ]
-
-    _SECTION_ACTION_WORDS = [
-        "redo", "rewrite", "rewrite", "write", "define", "fix", "correct",
-        "improve", "enhance", "update", "replace", "regenerate", "generate",
-    ]
-
+    # _SECTION_KEYWORD_MAP and _SECTION_ACTION_WORDS are module-level constants.
     if any(verb in text for verb in _SECTION_ACTION_WORDS):
         for keywords, section_name in _SECTION_KEYWORD_MAP:
             if any(kw in text for kw in keywords):
@@ -1469,6 +2082,9 @@ def _has_explicit_edit_instruction(message: str) -> bool:
         "insert",
         "add section",
         "change the",
+        "refine",
+        "modify",
+        "improve",
     ]
     return any(s in text for s in edit_signals)
 
@@ -1522,58 +2138,93 @@ def _is_document_grounded_chat_request(message: str) -> bool:
     return has_doc_ref and (has_analysis_ref or conversational_shape)
 
 
-def _document_grounded_chat_response(message: str, doc_context: str) -> str:
+def _document_grounded_chat_response(
+    message: str,
+    doc_context: str,
+    recent_history: list[dict[str, Any]] | None = None,
+    attachment_text: str | None = None,
+) -> str:
     """Generate a flexible, conversational reply grounded in the actual document."""
     msg_lower = (message or "").strip().lower()
-    # Detect hint/tip/clue/next-step type requests
+
+    # Detect the nature of the request so we give an appropriate instruction
     hint_mode = any(w in msg_lower for w in [
         "hint", "tip", "clue", "nudge", "suggestion", "suggest", "next step",
         "what should i do", "what do i do", "help me", "not sure", "stuck",
         "direction", "guide me", "point me",
     ])
+    feedback_mode = any(w in msg_lower for w in [
+        "feedback", "critique", "criticize", "assess", "evaluate", "review",
+        "look for", "find issues", "find gaps", "find weaknesses", "areas of improvement",
+        "improvement", "what\'s wrong", "what is wrong", "problems with",
+    ])
+    analysis_mode = any(w in msg_lower for w in [
+        "analys", "analyze", "examine", "what do you think", "your take", "your thoughts",
+        "how is", "is this good", "how good", "rate this",
+    ])
+    question_mode = (
+        any(w in msg_lower for w in [
+            "what is", "what are", "who is", "explain", "define", "describe",
+            "tell me about", "why is", "when did",
+        ])
+        and not feedback_mode and not analysis_mode
+    )
+
     if hint_mode:
         instruction = (
             "The user wants a hint or nudge. Look at the document and identify the "
-            "single most impactful area that needs work (e.g., a weak section, a missing element, "
-            "a gap in argumentation). Give ONE specific, actionable hint referencing the actual "
-            "content. Be direct and concrete — name the section/chapter and say exactly what to do. "
-            "Do NOT list multiple things. Do NOT say 'I can help with that'. "
-            "Start with 'Here\'s a hint:' or 'One thing to focus on:'. Keep it to 3-5 sentences."
+            "single most impactful area that needs work. Give ONE specific, actionable hint "
+            "referencing the actual content. Name the section/chapter and say exactly what to do. "
+            "Do NOT list multiple things. Keep it to 3-5 sentences."
+        )
+    elif feedback_mode:
+        instruction = (
+            "The user is asking for feedback or critique. Read the actual document content carefully "
+            "and provide SPECIFIC, document-grounded feedback. "
+            "Reference real section titles and actual content issues you observe. "
+            "Structure your feedback as: (1) key strengths you can see, "
+            "(2) concrete areas that need improvement with section names, "
+            "(3) the top 2-3 actions the writer should take next. "
+            "Be honest, direct, and specific -- no generic advice. "
+            "Do NOT say you need more information. Do NOT offer to rewrite anything."
+        )
+    elif analysis_mode:
+        instruction = (
+            "The user wants analysis or your opinion on the document. "
+            "Read the entire document carefully and give a SPECIFIC, evidence-based assessment. "
+            "Reference actual section names and content you observe. "
+            "Cover: what the document achieves, where the argument is strong, "
+            "where it is weak or underdeveloped, and what the most important gap is. "
+            "Be direct and substantive. Write 6-10 sentences grounded in the actual text."
+        )
+    elif question_mode:
+        instruction = (
+            "The user is asking an informational question. "
+            "Answer it directly and accurately, drawing on the document context where relevant. "
+            "Be concise and factual."
         )
     else:
         instruction = (
-            "You are a document editing agent operating within a structured document environment.\n"
-            "You must:\n"
-            "1. Read and understand the entire document before performing any action.\n"
-            "2. Identify document structure, including sections and subsections.\n"
-            "3. Strictly follow user instructions.\n\n"
-            "Scope Rules:\n"
-            "- If a user specifies a section (e.g., “Introduction”, “Section 2.2”), you must ONLY modify that section.\n"
-            "- Do NOT modify any other section.\n"
-            "- Do NOT infer additional edits beyond the requested scope.\n"
-            "- If the section is unclear or missing, ask for clarification.\n\n"
-            "Editing Behavior:\n"
-            "- Preserve meaning unless explicitly asked to change it.\n"
-            "- Maintain consistency with the rest of the document.\n"
-            "- Keep formatting and structure intact.\n\n"
-            "Modes of Operation:\n"
-            "- Refinement: improve clarity and grammar\n"
-            "- Enhancement: expand content meaningfully\n"
-            "- Analysis: summarize or evaluate\n"
-            "- Rewrite: rephrase content\n\n"
-            "Output Rules:\n"
-            "- Return only the modified section content unless instructed otherwise.\n"
-            "If the user is asking a general question, give: (1) what you notice, (2) key strengths/weaknesses, "
-            "and (3) practical next steps based on the document context."
+            "You are a helpful, intelligent academic assistant. "
+            "The user has sent a message related to their document. "
+            "Read the document carefully and respond directly to their request. "
+            "Be specific -- reference actual section names and content from the document. "
+            "Do NOT give generic writing advice. Do NOT ask for more information. "
+            "Do NOT say you will help -- just help. Be direct and substantive."
         )
-    prompt = (
-        f"You are a helpful, human-sounding academic assistant.\n"
-        f"{instruction}\n\n"
-        f"User message: {message}\n\n"
-        f"Document:\n{doc_context[:15000]}"
-    )
-    return chat_with_document(prompt, doc_context)
 
+    history_context = _history_text(recent_history, limit=8)
+    attachment_context = (attachment_text or "").strip()
+
+    prompt = (
+        f"You are a helpful, expert academic assistant.\n\n"
+        f"INSTRUCTION: {instruction}\n\n"
+        f"RECENT CONVERSATION:\n{history_context or 'None'}\n\n"
+        + (f"ATTACHED CONTENT:\n{attachment_context[:2500]}\n\n" if attachment_context else "")
+        + f"USER MESSAGE: {message}\n\n"
+        f"DOCUMENT CONTENT:\n{doc_context[:14000]}"
+    )
+    return generate_text(prompt)
 
 def _explicit_section_target_from_message(message: str) -> str | None:
     """Return a concrete section target when the user clearly names one."""
@@ -1581,19 +2232,14 @@ def _explicit_section_target_from_message(message: str) -> str | None:
     if not text:
         return None
 
-    # Prefer numeric subsection references (e.g., 1.5)
-    subsection_num = re.search(r"\b\d+\.\d+(?:\.\d+)*\b", text)
-    if subsection_num:
-        return subsection_num.group(0)
-
     keyword_map: list[tuple[list[str], str]] = [
         (["hypothesis", "hypotheses", "null hypothesis", "alternative hypothesis", "h0", "h1"], "Research Hypotheses"),
-        (["background of the study", "background of study"], "Background of the Study"),
-        (["statement of the problem", "problem statement"], "Statement of the Problem"),
-        (["research objective", "research objectives"], "Research Objectives"),
-        (["research question", "research questions"], "Research Questions"),
-        (["significance of the study", "significance of study", "signifance of the study", "signifance"], "Significance of the Study"),
-        (["scope and delimitations", "scope of the study", "delimitations"], "Scope and Delimitations"),
+        (["background of the study", "background of study", "background"], "Background of the Study"),
+        (["statement of the problem", "problem statement", "problem of the study"], "Statement of the Problem"),
+        (["research objective", "research objectives", "objectives", "specific objectives", "study objectives"], "Research Objectives"),
+        (["research question", "research questions", "study questions"], "Research Questions"),
+        (["significance of the study", "significance of study", "signifance of the study", "signifance", "significance"], "Significance of the Study"),
+        (["scope and delimitations", "scope of the study", "delimitations", "scope"], "Scope and Delimitations"),
         (["definition of key terms", "key terms"], "Definition of Key Terms"),
         (["conceptual review", "conceptual framework"], "Conceptual Review"),
         (["theoretical framework", "theoretical review"], "Theoretical Framework"),
@@ -1619,6 +2265,12 @@ def _explicit_section_target_from_message(message: str) -> str | None:
     for keys, section in keyword_map:
         if any(k in text for k in keys):
             return section
+
+    # Fall back to numeric subsection reference only when no named section matched
+    # (e.g. user types "redo 3.2" without naming the section)
+    subsection_num = re.search(r"\b\d+\.\d+(?:\.\d+)*\b", text)
+    if subsection_num:
+        return subsection_num.group(0)
 
     return None
 
@@ -1743,6 +2395,7 @@ def _build_section_content(
             )
         except Exception:
             subsection_text = _fallback_subsection_text(topic, section_title, subsection)
+        subsection_text = _sanitize_body(subsection_text)
         blocks.append(f"{subsection}\n{subsection_text}")
         rolling_context = f"{rolling_context}\n\n{subsection}\n{subsection_text}".strip()
     return "\n\n".join(blocks)
@@ -1828,13 +2481,13 @@ def _extract_subsection_phrase(instruction: str) -> str:
     # Ordered from most specific to least so longer matches win
     # Maps: (keywords to detect) -> canonical section name returned
     known_map: list[tuple[tuple[str, ...], str]] = [
-        (("background of the study", "background of study"), "Background of the Study"),
-        (("statement of the problem", "problem statement"), "Statement of the Problem"),
-        (("research objectives", "research objective"), "Research Objectives"),
-        (("research questions", "research question"), "Research Questions"),
+        (("background of the study", "background of study", "background"), "Background of the Study"),
+        (("statement of the problem", "problem statement", "problem of the study"), "Statement of the Problem"),
+        (("research objectives", "research objective", "objectives", "specific objectives", "study objectives"), "Research Objectives"),
+        (("research questions", "research question", "study questions"), "Research Questions"),
         (("research hypotheses", "hypotheses", "hypothesis", "null hypothesis", "alternative hypothesis", "h0", "h1"), "Research Hypotheses"),
-        (("significance of the study", "significance of study", "signifance of the study", "signifance"), "Significance of the Study"),
-        (("scope and delimitations", "scope of the study", "delimitations"), "Scope and Delimitations"),
+        (("significance of the study", "significance of study", "signifance of the study", "signifance", "significance"), "Significance of the Study"),
+        (("scope and delimitations", "scope of the study", "delimitations", "scope"), "Scope and Delimitations"),
         (("definition of key terms", "key terms"), "Definition of Key Terms"),
         (("conceptual review", "conceptual framework"), "Conceptual Review"),
         (("empirical review", "empirical literature"), "Empirical Review"),
@@ -1973,10 +2626,53 @@ def _chapter_word_count_target(chapter_number: int | None, instruction: str, nod
     return max(base, per_leaf)
 
 
+def _dynamic_chapter_nodes(
+    chapter_number: int,
+    topic: str,
+    research_design: str,
+    objectives: list[str],
+) -> list[dict[str, Any]]:
+    objective_lines = "\n".join(f"- {o}" for o in objectives[:6])
+    prompt = (
+        "You are designing a dissertation chapter outline. Return JSON only.\n"
+        f"Chapter number: {chapter_number}\n"
+        f"Topic: {topic}\n"
+        f"Research design: {research_design}\n"
+        f"Objectives:\n{objective_lines}\n\n"
+        "Output schema:\n"
+        "[{\"title\":\"X.X ...\",\"children\":[{\"title\":\"X.X.X ...\",\"children\":[]}]}]\n"
+        "Rules:\n"
+        "- Generate 5 to 10 subsection nodes for this chapter.\n"
+        "- Use academically valid numbering for the chapter (e.g., chapter 2 -> 2.1, 2.2...).\n"
+        "- For chapter 2 and chapter 4, create varied, non-boilerplate subsection titles while preserving meaning.\n"
+        "- Keep each title concise and specific to the topic.\n"
+        "- Do not repeat the exact same subsection wording across runs.\n"
+        "- Return JSON only, no markdown."
+    )
+    try:
+        data = _extract_json_obj(f"{{\"nodes\": {generate_text(prompt)} }}")
+        raw_nodes = data.get("nodes")
+        if isinstance(raw_nodes, list) and raw_nodes:
+            return [_normalize_subsection_node(n) for n in raw_nodes]
+    except Exception:
+        try:
+            raw_text = generate_text(prompt)
+            cleaned = raw_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned).rstrip("`").strip()
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, list) and parsed:
+                return [_normalize_subsection_node(n) for n in parsed]
+        except Exception as exc:
+            logger.warning("dynamic chapter nodes fallback for chapter %s: %s", chapter_number, exc)
+    return []
+
+
 def _chapter_nodes_for_generation(
     chapter_number: int,
     research_design: str,
     objectives: list[str],
+    topic: str,
 ) -> list[dict[str, Any]]:
     chapter_template = next(
         (
@@ -1989,9 +2685,20 @@ def _chapter_nodes_for_generation(
         return [{"title": f"{chapter_number}.1 Overview", "children": []}]
 
     chapter_title = chapter_template.get("title", "")
+
+    if chapter_number in {2, 4}:
+        dynamic = _dynamic_chapter_nodes(chapter_number, topic, research_design, objectives)
+        if dynamic:
+            # Chapter 4 already has visuals from _chapter4_subsections; skip injection there.
+            if chapter_number != 4:
+                dynamic = _inject_standard_visuals(dynamic, chapter_number, research_design)
+            return dynamic
+
     if "chapter 4" in chapter_title.lower():
         return _chapter4_subsections(research_design, objectives)
-    return [_normalize_subsection_node(s) for s in chapter_template.get("subsections", [])]
+
+    nodes = [_normalize_subsection_node(s) for s in chapter_template.get("subsections", [])]
+    return _inject_standard_visuals(nodes, chapter_number, research_design)
 
 
 def _find_matching_node(nodes: list[dict[str, Any]], query: str) -> dict[str, Any] | None:
@@ -2181,7 +2888,7 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
     if intent == "write_dissertation":
         return True
 
-    if intent in {"write_section", "enhance_section"}:
+    if intent in {"write_section", "enhance_section", "address_comments"}:
         return True
 
     if intent in {
@@ -2403,7 +3110,8 @@ def _looks_like_workflow_or_prompt_echo(text: str) -> bool:
 
 def _rule_based_document_feedback(document: Document, mode: str) -> str:
     """
-    Deterministic fallback for summary/review/take modes when model output is noisy.
+    Fallback for summary/review/take modes when primary model output is noisy.
+    Tries LLM with a stripped-down prompt first; only returns template text if LLM fails.
     mode: 'analysis' | 'improvement' | 'take'
     """
     sections = (document.content or {}).get("sections", [])
@@ -2412,7 +3120,7 @@ def _rule_based_document_feedback(document: Document, mode: str) -> str:
 
     if not sections:
         if mode == "improvement":
-            return "- The document has no sections yet, so there is no structure to evaluate.\n- Add core sections first (Introduction, Methodology, Findings, Conclusion) before quality review."
+            return "The document has no sections yet — there is no structure to evaluate. Add core sections first (Introduction, Methodology, Findings, Conclusion) before requesting a quality review."
         return (
             f"The document titled '{title}' is currently empty. "
             "There is no section content to assess yet. "
@@ -2420,9 +3128,49 @@ def _rule_based_document_feedback(document: Document, mode: str) -> str:
         )
 
     titles = [str(s.get("title") or "Untitled section") for s in sections]
-    non_empty = [s for s in sections if (s.get("content") or "").strip()]
+    non_empty_sections = [s for s in sections if (s.get("content") or "").strip()]
     empty_titles = [str(s.get("title") or "Untitled section") for s in sections if not (s.get("content") or "").strip()]
 
+    # Try a lightweight LLM call first when content exists.
+    if non_empty_sections:
+        section_lines = []
+        for sec in non_empty_sections[:8]:
+            sec_title = str(sec.get("title") or "Untitled")
+            content_preview = str(sec.get("content") or "")[:300].replace("\n", " ")
+            section_lines.append(f"- {sec_title}: {content_preview}")
+        section_text = "\n".join(section_lines)
+
+        if mode == "improvement":
+            fallback_prompt = (
+                f"Dissertation topic: {topic}\n\n"
+                f"Sections present:\n{section_text}\n\n"
+                "List 4–6 specific, concrete areas that need improvement in this document. "
+                "Name the actual section and the exact issue for each point. "
+                "Use bullet points. Be direct. Do NOT be generic."
+            )
+        elif mode == "take":
+            fallback_prompt = (
+                f"Dissertation topic: {topic}\n\n"
+                f"Sections present:\n{section_text}\n\n"
+                "Give a short, honest assessment (5–8 sentences): what is working, what needs work, "
+                "and what to do next. Reference actual section names."
+            )
+        else:
+            fallback_prompt = (
+                f"Dissertation topic: {topic}\n\n"
+                f"Sections present:\n{section_text}\n\n"
+                "Provide a 4–6 sentence summary covering: what the document is about, "
+                "what sections are in place, key strengths, and top areas for improvement."
+            )
+        try:
+            result = generate_text(fallback_prompt)
+            result = (result or "").strip()
+            if result and len(result) > 60 and not _looks_like_workflow_or_prompt_echo(result):
+                return result
+        except Exception:
+            pass
+
+    # Pure template fallback when LLM is unavailable.
     has_intro = any("introduction" in t.lower() for t in titles)
     has_method = any("method" in t.lower() or "research design" in t.lower() for t in titles)
     has_conclusion = any("conclusion" in t.lower() for t in titles)
@@ -2440,7 +3188,7 @@ def _rule_based_document_feedback(document: Document, mode: str) -> str:
             points.append("- No explicit Conclusion section that synthesizes findings and implications.")
         if not has_refs:
             points.append("- References section is missing, which affects academic completeness.")
-        if len(non_empty) < max(2, len(sections) // 2):
+        if len(non_empty_sections) < max(2, len(sections) // 2):
             points.append("- Content depth is uneven across sections; several parts need fuller development.")
         if not points:
             points.append("- Overall structure is present, but argument flow between sections can be tightened.")
@@ -2453,7 +3201,7 @@ def _rule_based_document_feedback(document: Document, mode: str) -> str:
         strengths.append("the document has a recognizable opening structure")
     if has_method:
         strengths.append("it includes methodological framing")
-    if len(non_empty) >= 3:
+    if len(non_empty_sections) >= 3:
         strengths.append("several sections already contain substantive content")
 
     gaps: list[str] = []
@@ -2496,67 +3244,98 @@ def _summarize_document(document: Document, user_message: str, plan: list) -> tu
     is_improvement_review = _is_improvement_review_request(user_message)
     is_take_request = _is_document_take_request(user_message)
 
+    # Build a structured section inventory so the LLM can reference actual content.
+    sections = (document.content or {}).get("sections", [])
+    topic = ((document.content or {}).get("topic") or document.title or "this study").strip()
+
+    section_inventory: list[str] = []
+    for sec in sections:
+        sec_title = str(sec.get("title") or "Untitled").strip()
+        sec_content = str(sec.get("content") or "").strip()
+        word_count = len(sec_content.split())
+        preview = sec_content[:400].replace("\n", " ") if sec_content else "(empty)"
+        section_inventory.append(
+            f"- {sec_title} ({word_count} words): {preview}{'...' if len(sec_content) > 400 else ''}"
+        )
+    section_summary = "\n".join(section_inventory) if section_inventory else "(No sections written yet)"
+
+    mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+
     if is_improvement_review:
-        summary_prompt = (
-            "Review this academic document and list ONLY the areas that need improvement. "
-            "Return 4-8 concise bullet points. "
-            "Each bullet should name the weak section and the specific issue. "
-            "Reference actual section titles when available. "
-            "Do NOT rewrite the document. Do NOT ask for more information. "
-            "Do NOT include workflow or planning text."
+        direct_prompt = (
+            f"You are a rigorous academic reviewer assessing a dissertation on: '{topic}'.\n\n"
+            f"DOCUMENT SECTIONS (with word counts and content previews):\n{section_summary}\n\n"
+            f"FULL DOCUMENT CONTENT:\n{doc_context[:12000]}\n\n"
+            f"USER REQUEST: {user_message}\n\n"
+            "TASK: Provide a detailed, specific critique of this document. "
+            "Go through EACH section that has content and identify concrete issues. "
+            "Your response must:\n"
+            "1. List areas of improvement section by section using the ACTUAL section titles.\n"
+            "2. For each section, name the SPECIFIC issue (e.g., too short, lacks citations, "
+            "argument not developed, no evidence, unclear objective).\n"
+            "3. Include 5–10 specific points, not generic advice.\n"
+            "4. If a section is strong, skip it — only flag genuine weaknesses.\n"
+            "5. End with 2–3 highest-priority actions the writer should take NOW.\n\n"
+            "Format: Use bullet points. Reference section titles. Be direct and specific.\n"
+            "Do NOT rewrite the document. Do NOT say 'I can help'. Just give the feedback."
         )
     elif is_take_request:
-        summary_prompt = (
-            "Give your take on this academic document in a human, conversational tone. "
-            "Write 6-9 sentences total. "
-            "Include: what is working well (1-2 points), the main gaps you notice (2-3 points), "
-            "and concrete next improvements the user should do now (2-3 actions). "
-            "Reference section/chapter titles where possible. "
-            "Do NOT rewrite the document. Do NOT ask for more information. "
-            "Do NOT output workflow or planning text."
+        direct_prompt = (
+            f"You are an expert academic mentor reviewing a dissertation on: '{topic}'.\n\n"
+            f"DOCUMENT SECTIONS:\n{section_summary}\n\n"
+            f"FULL DOCUMENT CONTENT:\n{doc_context[:12000]}\n\n"
+            f"USER REQUEST: {user_message}\n\n"
+            "Give your honest take on this document in a direct, human tone. "
+            "Cover: (1) what is genuinely working well — cite specific sections, "
+            "(2) the 2–3 most important gaps or weaknesses you see in the actual content, "
+            "(3) the single most impactful improvement the writer should make next. "
+            "Be specific to THIS document — reference actual section titles and content. "
+            "Write 6–10 sentences. Do NOT be generic. Do NOT ask questions."
         )
     elif is_analysis:
-        summary_prompt = (
-            "Analyse this academic document briefly in 4-7 sentences maximum. Cover:\n"
-            "• What is in the document (topic + key sections/chapters)\n"
-            "• 1-2 strengths\n"
-            "• 2-3 concrete areas for improvement\n"
-            "• One immediate next action\n"
-            "Reference actual section titles. Be direct and concise. "
-            "Do NOT ask for more information. Do NOT repeat this prompt. Write the analysis now."
+        direct_prompt = (
+            f"You are an expert academic reviewer analysing a dissertation on: '{topic}'.\n\n"
+            f"DOCUMENT SECTIONS:\n{section_summary}\n\n"
+            f"FULL DOCUMENT CONTENT:\n{doc_context[:12000]}\n\n"
+            f"USER REQUEST: {user_message}\n\n"
+            "Provide a structured analysis covering:\n"
+            "• Topic and scope: what the document is about and what it covers\n"
+            "• Structural strengths: which sections/chapters are well-developed\n"
+            "• Key weaknesses: which sections are thin, missing, or underdeveloped\n"
+            "• Argument quality: is the academic argument coherent end-to-end?\n"
+            "• Immediate next action: what should the writer do first?\n\n"
+            "Reference actual section titles. Be concise but specific. "
+            "Do NOT ask for more information. Write the analysis now."
         )
     else:
-        summary_prompt = (
-            "Summarise this academic document in 4-6 sentences. Include the main topic, "
-            "the chapters/sections covered, and the key conclusions. "
+        direct_prompt = (
+            f"You are an expert academic assistant summarising a dissertation on: '{topic}'.\n\n"
+            f"DOCUMENT SECTIONS:\n{section_summary}\n\n"
+            f"FULL DOCUMENT CONTENT:\n{doc_context[:12000]}\n\n"
+            f"USER REQUEST: {user_message}\n\n"
+            "Summarise this document covering: the main research topic, the chapters/sections "
+            "present, the key arguments or findings, and any notable gaps. "
             "Reference actual section titles. Be direct and concise. "
-            "Do NOT ask for more information. Write the summary now."
+            "Do NOT ask questions. Write the summary now."
         )
 
     try:
-        reply = chat_with_document(summary_prompt, doc_context)
+        reply = generate_text(direct_prompt)
     except Exception:
-        mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
-        reply = _rule_based_document_feedback(document, mode)
+        reply = ""
 
     reply = _sanitize_chat_reply(reply)
-    if not reply:
-        mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
+    if not reply or _looks_like_workflow_or_prompt_echo(reply):
         reply = _rule_based_document_feedback(document, mode)
-    else:
-        if _looks_like_workflow_or_prompt_echo(reply):
-            mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
-            reply = _rule_based_document_feedback(document, mode)
 
-        # Final safety net: if output still looks like repetitive coaching chain, replace it.
-        low = reply.lower()
-        loop_hits = re.findall(
-            r"what should i do next|you should now|i have (?:reviewed|proofread|formatted|submitted|received|revised|finalized|completed)",
-            low,
-        )
-        if len(loop_hits) >= 3:
-            mode = "improvement" if is_improvement_review else ("take" if is_take_request else "analysis")
-            reply = _rule_based_document_feedback(document, mode)
+    # Final safety net: if output still looks like repetitive coaching chain, replace it.
+    low = reply.lower()
+    loop_hits = re.findall(
+        r"what should i do next|you should now|i have (?:reviewed|proofread|formatted|submitted|received|revised|finalized|completed)",
+        low,
+    )
+    if len(loop_hits) >= 3:
+        reply = _rule_based_document_feedback(document, mode)
 
     if plan:
         _all_done(plan)
@@ -2597,6 +3376,94 @@ def _flatten_doc(document: Document, truncate: bool = False) -> str:
     return "\n".join(parts)
 
 
+def _history_text(recent_history: list[dict[str, Any]] | None, limit: int = 8) -> str:
+    entries = recent_history or []
+    if not entries:
+        return ""
+    trimmed = entries[-limit:]
+    lines: list[str] = []
+    for item in trimmed:
+        role = str(item.get("role") or "user").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        lines.append(f"{role}: {content[:500]}")
+    return "\n".join(lines)
+
+
+def _resolve_followup_message(message: str, recent_history: list[dict[str, Any]] | None) -> str:
+    text = (message or "").strip()
+    lowered = text.lower()
+    followups = {
+        "proceed", "continue", "go on", "carry on", "do it", "do that",
+        "yes", "okay", "ok", "next", "continue please",
+    }
+    if lowered not in followups:
+        return text
+
+    entries = recent_history or []
+    # Find the last meaningful user request before this follow-up token.
+    for item in reversed(entries[:-1] if entries else entries):
+        if str(item.get("role") or "").lower() != "user":
+            continue
+        prev = str(item.get("content") or "").strip()
+        if not prev:
+            continue
+        if prev.lower() in followups:
+            continue
+        return f"Continue the previous request: {prev}"
+    return text
+
+
+def _extract_locator_query(message: str) -> str | None:
+    text = (message or "").strip()
+    low = text.lower()
+    locator_signals = ["where is", "locate", "find where", "position of", "where can i find"]
+    if not any(sig in low for sig in locator_signals):
+        return None
+
+    cleaned = re.sub(r"^(where is|locate|find where|position of|where can i find)\s+", "", low).strip()
+    return cleaned or None
+
+
+def _locate_section_positions(document: Document, query: str) -> str:
+    content = document.content or {}
+    sections = content.get("sections", [])
+    q = (query or "").strip().lower()
+    if not q:
+        return "I could not determine what to locate. Mention the section or topic to find."
+
+    hits: list[str] = []
+    for idx, section in enumerate(sections):
+        title = str(section.get("title") or "")
+        body = str(section.get("content") or "")
+        title_l = title.lower()
+        body_l = body.lower()
+
+        if q in title_l:
+            hits.append(f"- Section {idx + 1}: {title} (title match)")
+
+        sub_positions = _heading_positions(body)
+        for _, _, heading in sub_positions:
+            if q in heading.lower():
+                hits.append(f"- Section {idx + 1}: {title} -> {heading}")
+
+        if q in body_l and len(hits) < 10:
+            hits.append(f"- Section {idx + 1}: {title} (content mention)")
+
+    # De-duplicate while preserving order.
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for h in hits:
+        if h not in seen:
+            seen.add(h)
+            uniq.append(h)
+
+    if not uniq:
+        return f"I could not find '{query}' in the current document sections."
+    return "I found these positions:\n" + "\n".join(uniq[:12])
+
+
 def _save(document: Document, note: str) -> None:
     document.save(update_fields=["content", "updated_at"])
     DocumentVersion.objects.create(
@@ -2616,7 +3483,14 @@ def _all_done(plan: list[dict]) -> None:
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-def run_agent(document: Document, message: str, model_choice: str | None = None) -> dict[str, Any]:
+def run_agent(
+    document: Document,
+    message: str,
+    model_choice: str | None = None,
+    recent_history: list[dict[str, Any]] | None = None,
+    attachment_text: str | None = None,
+    preview_only: bool = False,
+) -> dict[str, Any]:
     """
     Returns:
     {
@@ -2627,18 +3501,42 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     }
     """
     set_active_model(model_choice)
+    effective_message = _resolve_followup_message(message, recent_history)
     doc_context = _flatten_doc(document)
-    lowered_message = (message or "").strip().lower()
+    history_context = _history_text(recent_history, limit=8)
+    if history_context:
+        doc_context = f"{doc_context}\n\nRecent chat context:\n{history_context}"
+    if attachment_text:
+        doc_context = f"{doc_context}\n\nAttachment context:\n{attachment_text[:4000]}"
+    lowered_message = (effective_message or "").strip().lower()
+
+    locator_query = _extract_locator_query(effective_message)
+    if locator_query:
+        reply = _locate_section_positions(document, locator_query)
+        return {
+            "reply": reply,
+            "plan": [],
+            "chat_summary": None,
+            "orchestration": {
+                "mode": "direct",
+                "todo_required": False,
+                "execution": "single_pass",
+                "status": "ok",
+            },
+            "document_updated": False,
+            "intent": "locate_section",
+            "model": get_model_label(),
+        }
 
     # 1. Classify intent
-    intent_data = _heuristic_intent(message)
+    intent_data = _heuristic_intent(effective_message)
     # Only call the LLM classifier if heuristic returned chat AND the message is NOT
     # a pure question/explanation (those must stay as chat — the LLM sometimes
     # misclassifies "explain X" or "what is X" as write_section).
-    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(message):
-        intent_data = classify_intent(message, doc_context)
-    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(message):
-        heur = _heuristic_intent(message)
+    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(effective_message):
+        intent_data = classify_intent(effective_message, doc_context)
+    if intent_data.get("intent") == "chat" and not _is_pure_chat_question(effective_message):
+        heur = _heuristic_intent(effective_message)
         if heur.get("intent") != "chat":
             intent_data = heur
     intent = intent_data.get("intent", "chat")
@@ -2651,22 +3549,22 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     topic = re.sub(r"^on\s+", "", (topic or "").strip(), flags=re.IGNORECASE)
 
     # Force review-only phrasing to analysis mode (no edits, no Copilot edit workflow).
-    if _is_improvement_review_request(message):
+    if _is_improvement_review_request(effective_message):
         intent = "summarize_document"
         target_section = None
 
     # Force conversational document-opinion phrasing to feedback mode.
-    if _is_document_take_request(message):
+    if _is_document_take_request(effective_message):
         intent = "summarize_document"
         target_section = None
 
     # Flexible fallback: for broad/out-of-pattern queries, answer from the document in chat mode.
-    if _is_document_grounded_chat_request(message):
+    if _is_document_grounded_chat_request(effective_message):
         intent = "chat"
         target_section = None
 
-    explicit_target = _explicit_section_target_from_message(message)
-    derived_target = _extract_subsection_phrase(message)
+    explicit_target = _explicit_section_target_from_message(effective_message)
+    derived_target = _extract_subsection_phrase(effective_message)
     has_section_action = any(
         k in lowered_message
         for k in [
@@ -2734,22 +3632,53 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
     plan = [{"step": s, "status": "pending"} for s in steps]
     todo_required = _needs_todo_workflow(intent, lowered_message)
 
+    # ── Confirmation gate ────────────────────────────────────────────────────
+    # When the caller is in preview-only mode and the resolved intent would
+    # modify the document, return the plan for the user to review before we
+    # execute anything.  Non-modifying intents (chat, summarize, locate) pass
+    # straight through so conversational messages are never delayed.
+    if preview_only and intent in DOCUMENT_MODIFYING_INTENTS:
+        description = _intent_description(intent, target_section, topic)
+        return {
+            "reply": description,
+            "plan": plan,
+            "chat_summary": None,
+            "orchestration": {
+                "mode": "confirmation",
+                "todo_required": False,
+                "execution": "pending",
+                "status": "awaiting_confirmation",
+            },
+            "document_updated": False,
+            "intent": intent,
+            "model": get_model_label(),
+            "awaiting_confirmation": True,
+            "confirmation": {
+                "description": description,
+                "intent": intent,
+                "target_section": target_section,
+                "topic": topic,
+            },
+        }
+
     had_error = False
     error_detail = ""
 
     # 3. Execute
     try:
-        chapter_numbers = _extract_chapter_numbers(message)
+        chapter_numbers = _extract_chapter_numbers(effective_message)
         chapter_request = "chapter" in lowered_message and len(chapter_numbers) >= 1
 
         if intent == "summarize_document":
-            reply, updated = _summarize_document(document, message, plan)
+            reply, updated = _summarize_document(document, effective_message, plan)
+        elif intent == "address_comments":
+            reply, updated = _address_comments(document, topic, plan)
         elif intent == "enhance_document":
             reply, updated = _enhance_document(document, topic, plan)
         elif intent == "enhance_section" and chapter_request:
-            reply, updated = _enhance_chapter_batch(document, chapter_numbers, topic, message, plan)
+            reply, updated = _enhance_chapter_batch(document, chapter_numbers, topic, effective_message, plan)
         elif intent == "write_section" and chapter_request:
-            reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, message, plan)
+            reply, updated = _rewrite_chapter_batch(document, chapter_numbers, topic, effective_message, plan)
         elif intent == "enhance_section":
             # Use Copilot-style agentic loop: read → identify → edit → save
             copilot_steps = [
@@ -2761,11 +3690,11 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
             ]
             plan.clear()
             plan.extend([{"step": s, "status": "pending"} for s in copilot_steps])
-            reply, updated = _run_copilot_loop(document, message, plan, target_section, topic)
+            reply, updated = _run_copilot_loop(document, effective_message, plan, target_section, topic)
         elif intent == "write_section":
-            reply, updated = _write_section(document, target_section, topic, message, plan)
+            reply, updated = _write_section(document, target_section, topic, effective_message, plan)
         elif intent == "write_dissertation":
-            reply, updated = _write_dissertation(document, topic, message, plan)
+            reply, updated = _write_dissertation(document, topic, effective_message, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "write_report":
@@ -2779,22 +3708,30 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
         elif intent == "add_chart":
             reply, updated = _add_chart(document, target_section, plan)
         elif intent == "add_image":
-            reply, updated = _add_image(document, target_section, message, plan)
+            reply, updated = _add_image(document, target_section, effective_message, plan)
         else:
             try:
                 # Always ground unknown/vague prompts in the document rather than
                 # returning a generic "Yes, I can help" style reply.
-                reply = _document_grounded_chat_response(message, doc_context)
+                reply = _document_grounded_chat_response(
+                    effective_message,
+                    doc_context,
+                    recent_history=recent_history,
+                    attachment_text=attachment_text,
+                )
                 reply = _sanitize_chat_reply(reply)
                 if not reply:
                     reply = "I reviewed the document and can provide a concise analysis or section-specific improvement."
             except Exception as exc:
                 had_error = True
                 error_detail = str(exc)
-                reply = (
-                    "I could not complete that response due to a network or model issue. "
-                    f"Details: {exc}."
-                )
+                _exc = str(exc)
+                if "429" in _exc or "rate limit" in _exc.lower() or "too many requests" in _exc.lower():
+                    reply = "The AI service is temporarily busy (rate limit reached). Please wait a moment and try again."
+                elif "api key" in _exc.lower() or "invalid" in _exc.lower() or "401" in _exc:
+                    reply = "The AI service could not authenticate. Please check your API key in the settings."
+                else:
+                    reply = "Something went wrong reaching the AI service. Please try again shortly."
             updated = False
             _all_done(plan)
     except Exception as exc:
@@ -2830,6 +3767,78 @@ def run_agent(document: Document, message: str, model_choice: str | None = None)
 
 
 # ── Action handlers ───────────────────────────────────────────────────────────
+
+def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Find all inline [Comment: ...] markers in the document and generate AI revisions to address them."""
+    import re as _re
+    sections = (document.content or {}).get("sections", [])
+    if not sections:
+        _all_done(plan)
+        return "The document has no sections yet.", False
+
+    _done(plan, 0)  # Scanning
+
+    comment_re = _re.compile(r'\[Comment:\s*([^\]]+)\]', _re.IGNORECASE)
+    affected: list[tuple[int, str, list[str]]] = []  # (idx, title, [comments])
+    for i, section in enumerate(sections):
+        body = section.get("content", "")
+        comments = [m.group(1).strip() for m in comment_re.finditer(body)]
+        if comments:
+            affected.append((i, section.get("title", f"Section {i+1}"), comments))
+
+    if not affected:
+        _all_done(plan)
+        return (
+            "No reviewer comments were found in the document. "
+            "Use the 'New Comment' button in the Review tab to add comments, "
+            "or type [Comment: your comment] inline in any section.",
+            False,
+        )
+
+    _done(plan, 1)  # Reading sections
+
+    count = 0
+    addressed: list[str] = []
+    for plan_idx, (sec_idx, sec_title, comments) in enumerate(affected):
+        original = sections[sec_idx].get("content", "")
+        comments_block = "\n".join(f"  - {c}" for c in comments)
+        prompt = (
+            f"You are an academic writing assistant. The following section has reviewer comments "
+            f"that need to be addressed.\n\n"
+            f"Section title: {sec_title}\n\n"
+            f"Current content:\n{original}\n\n"
+            f"Reviewer comments:\n{comments_block}\n\n"
+            f"Task:\n"
+            f"1. Revise the section content to address each reviewer comment.\n"
+            f"2. Remove all [Comment: ...] markers from the revised text.\n"
+            f"3. Keep the academic tone, structure, and length similar to the original.\n"
+            f"4. Return ONLY the revised section text with no extra labels or commentary."
+        )
+        try:
+            revised = generate_text(prompt).strip()
+            # Strip any residual [Comment: ...] markers the LLM may have left
+            revised = comment_re.sub("", revised).strip()
+            if revised:
+                sections[sec_idx]["content"] = revised
+                count += 1
+                addressed.append(f"• {sec_title} ({len(comments)} comment{'s' if len(comments)>1 else ''} addressed)")
+        except Exception as exc:
+            logger.warning("_address_comments: section %d failed: %s", sec_idx, exc)
+        if plan_idx + 2 < len(plan):
+            _done(plan, plan_idx + 2)
+
+    _all_done(plan)
+    if count:
+        document.content["sections"] = sections
+        _save(document, "address-comments")
+        summary = "\n".join(addressed)
+        return (
+            f"Addressed reviewer comments in {count} section(s):\n{summary}\n\n"
+            "All [Comment: ...] markers have been removed and the content revised accordingly.",
+            True,
+        )
+    return "Could not generate revisions for the found comments. Please try again.", False
+
 
 def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, bool]:
     sections = (document.content or {}).get("sections", [])
@@ -2901,7 +3910,7 @@ def _run_copilot_loop(
     3. read → edit for each relevant section  (plan steps 2+)
     4. save and return a reply summary
     """
-    from .tools import doc_list_sections, doc_read_section, doc_edit_section, find_section
+    from .tools import doc_list_sections, doc_read_section, doc_edit_section
 
     # Step 0: read document structure
     if plan:
@@ -3125,6 +4134,8 @@ def _write_section(
         "research hypothes", "hypothes", "background of the study", "background of study",
         "statement of the problem", "problem statement", "research objectives", "research questions",
         "significance of the study", "scope and delimitations", "definition of key terms", "key terms",
+        # single-word shorthands users commonly type
+        "objectives", "background", "significance", "delimitations",
     ]
     if chapter_hint is None and any(k in query_l for k in _CHAPTER1_KEYWORDS):
         chapter_hint = 1
@@ -3147,14 +4158,71 @@ def _write_section(
     if chapter_hint is None and any(k in query_l for k in _CHAPTER5_KEYWORDS):
         chapter_hint = 5
 
+    # Derive chapter hint from dotted numeric targets like "1.5" or "3.2" when no
+    # keyword was matched (e.g. user typed "redo 3.2" with no section name)
+    if chapter_hint is None:
+        dotted = re.match(r"^(\d+)\.", query_l)
+        if dotted:
+            inferred = int(dotted.group(1))
+            if 1 <= inferred <= 10:
+                chapter_hint = inferred
+
     # If request maps to a dissertation chapter structure, generate through nested to-do workflow.
     if chapter_hint is not None:
         design = _research_design(instruction, topic, document)
         objectives = _extract_objectives(document, topic)
         chapter_title = _chapter_title_from_number(chapter_hint)
-        chapter_nodes = _chapter_nodes_for_generation(chapter_hint, design, objectives)
+        chapter_nodes = _chapter_nodes_for_generation(chapter_hint, design, objectives, topic)
 
         selected_node = _find_matching_node(chapter_nodes, query) if query and not _is_generic_section_query(query) else None
+
+        # SAFETY NET: if the user asked for a specific subsection (e.g. "redo the objectives")
+        # but no matching node was found in the chapter template, do NOT fall back to
+        # rewriting the whole chapter.  Clear chapter_hint so the simple single-section
+        # path below handles the request instead.
+        if not selected_node and query and not _is_generic_section_query(query):
+            chapter_hint = None
+
+    if chapter_hint is not None:
+        # ── Explicit visual injection ───────────────────────────────────────────
+        # If the user said "add a table to the sampling section" (or similar),
+        # inject the appropriate visual node into the matched node's children so
+        # the TODO list and execution pipeline pick it up automatically.
+        _vis_req = _detect_visual_injection_request(instruction or "")
+        if _vis_req is None:
+            # Fallback: detect visual kind directly from instruction without requiring
+            # a preposition.  Handles e.g. "generate the conceptual framework image"
+            # where the target section is already resolved via routing.
+            _fl_text = (instruction or "").lower()
+            _fl_verbs = {"add", "put", "insert", "include", "place",
+                         "generate", "create", "make", "attach"}
+            _fl_kinds = [
+                ("table", "table"), ("chart", "chart"), ("graph", "chart"),
+                ("image", "chart"), ("figure", "chart"), ("diagram", "chart"),
+            ]
+            if any(v in _fl_text for v in _fl_verbs):
+                for _fl_kw, _fl_kind in _fl_kinds:
+                    if _fl_kw in _fl_text:
+                        _vis_req = (_fl_kind, query or "")
+                        break
+        if _vis_req:
+            _vis_kind, _vis_hint = _vis_req
+            _vis_title = f"Visual: {(_vis_hint or query or 'Data').title()}"
+            _visual_node = {
+                "title": _vis_title,
+                "kind": _vis_kind,
+                "children": [],
+                "meta": {},
+            }
+            if selected_node:
+                _existing_kinds = [ch.get("kind") for ch in selected_node.get("children", [])]
+                if _vis_kind not in _existing_kinds:
+                    selected_node.setdefault("children", []).append(_visual_node)
+            else:
+                # No specific subsection matched; append to the chapter node list
+                chapter_nodes.append(_visual_node)
+        # ───────────────────────────────────────────────────────────────────────
+
         nodes_to_write = [selected_node] if selected_node else chapter_nodes
         section_title = selected_node.get("title", chapter_title) if selected_node else chapter_title
 
@@ -3214,6 +4282,7 @@ def _write_section(
             table_counter=table_counter,
             on_node_completed=_persist_subsection_progress,
             default_word_count=word_count,
+            user_instruction=instruction or "",
         )
 
         if selected_node:
@@ -3257,6 +4326,7 @@ def _write_section(
         )
     except Exception:
         content = _fallback_subsection_text(topic, section_name, section_name)
+    content = _sanitize_body(content)
     _done(plan, 2)
 
     if idx is not None:
@@ -3299,7 +4369,7 @@ def _rewrite_chapter_batch(
     chapter_blueprints: list[dict[str, Any]] = []
     for chapter_number in chapter_numbers:
         chapter_title = _chapter_title_from_number(chapter_number)
-        nodes = _chapter_nodes_for_generation(chapter_number, design, objectives)
+        nodes = _chapter_nodes_for_generation(chapter_number, design, objectives, topic)
         chapter_blueprints.append({
             "number": chapter_number,
             "title": chapter_title,
@@ -3384,33 +4454,80 @@ def _rewrite_chapter_batch(
     return "No chapters were rewritten.", updated
 
 
+def build_dissertation_preview_plan(
+    document: "Document",
+    message: str,
+    topic: str,
+) -> list[dict[str, Any]]:
+    """Build a fast preview plan for the frontend TODO list.
+
+    Does NOT call the LLM — uses only research-design detection and the static template
+    (except for Chapter 4 which is adapted to quantitative/qualitative/mixed design).
+    Chapter 2 uses the static template here; the actual write pass replaces it with
+    LLM-generated topic-specific nodes via ``_chapter_nodes_for_generation``.
+    """
+    design = _research_design(message, topic, document)
+    plan: list[dict[str, Any]] = [{"step": "Creating dissertation to-do list", "status": "done"}]
+    first_chapter = True
+    for template in DISSERTATION_TEMPLATE:
+        title = template["title"]
+        ch_num = _chapter_number_from_title(title)
+        if ch_num == 4:
+            nodes = _chapter4_subsections(design, [])
+        else:
+            nodes = [_normalize_subsection_node(s) for s in template.get("subsections", [])]
+        status = "in_progress" if first_chapter else "pending"
+        first_chapter = False
+        plan.append({"step": f"Writing {title}", "status": status})
+        _append_node_plan_steps(plan, nodes, depth=1)
+    return plan
+
+
 def _write_dissertation(
     document: Document,
     topic: str,
     instruction: str,
     plan: list,
 ) -> tuple[str, bool]:
+    """Write a full dissertation.
+
+    Flow:
+    1. Call the LLM to generate a tailored chapter/section plan (no hardcoded template).
+    2. Convert that plan into the internal blueprint format.
+    3. Walk each chapter and subsection, writing content via LLM.
+    4. Persist progress after every subsection so the frontend polling sees live updates.
+    """
     plan.clear()
     plan.append({"step": "Creating dissertation to-do list", "status": "pending"})
 
     design = _research_design(instruction, topic, document)
-    objectives = _extract_objectives(document, topic)
 
-    chapter_blueprints: list[dict[str, Any]] = []
-    for template in DISSERTATION_TEMPLATE:
-        title = template["title"]
-        if "chapter 4" in title.lower():
-            nodes = _chapter4_subsections(design, objectives)
-        else:
-            nodes = [_normalize_subsection_node(s) for s in template.get("subsections", [])]
-        chapter_blueprints.append({"title": title, "nodes": nodes})
+    # ── Step 1: Generate the full plan via LLM ────────────────────────────
+    # Check if a plan was already generated by the DissertationPlanView and cached
+    stored_chapters: list | None = None
+    try:
+        stored_chapters = (document.content or {}).get("_dissertation_plan_chapters")
+    except Exception:
+        pass
 
+    if stored_chapters and isinstance(stored_chapters, list) and len(stored_chapters) >= 3:
+        llm_chapters = stored_chapters
+        logger.info("_write_dissertation: using pre-generated plan (%d chapters)", len(llm_chapters))
+    else:
+        logger.info("_write_dissertation: calling LLM to generate plan for topic=%s", topic[:80])
+        llm_chapters = generate_dissertation_plan_llm(topic, instruction, design)
+
+    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters)
+
+    # ── Step 2: Build the flat step list ─────────────────────────────────
     for chapter in chapter_blueprints:
         plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
         _append_node_plan_steps(plan, chapter["nodes"], depth=1)
 
-    _done(plan, 0)
+    _done(plan, 0)  # mark "Creating dissertation to-do list" done
 
+    # ── Step 3: Write each chapter ────────────────────────────────────────
+    objectives = _extract_objectives(document, topic)
     sections: list[dict[str, Any]] = []
     plan_cursor = [1]
     figure_counter = [_next_caption_number(document, "figure")]
@@ -3419,19 +4536,12 @@ def _write_dissertation(
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
         ch_num = _chapter_number_from_title(chapter_title)
-
-        # After Chapter 1 is written, re-extract objectives for Chapter 4
-        if ch_num == 4 and sections:
-            real_objectives = _extract_objectives(document, topic)
-            candidate_nodes = _chapter4_subsections(design, real_objectives)
-            # Only swap if top-level node count is unchanged (preserves plan cursor alignment)
-            if len(candidate_nodes) == len(chapter["nodes"]):
-                chapter["nodes"] = candidate_nodes
+        ch_word_count = 500 if ch_num == 2 else 220
 
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
 
-        # Add chapter placeholder first so subsection updates are persisted progressively.
+        # Add chapter placeholder so the frontend polling sees incremental progress.
         section_payload: dict[str, Any] = {"title": chapter_title, "content": ""}
         sections.append(section_payload)
         document.content = {
@@ -3444,13 +4554,11 @@ def _write_dissertation(
 
         def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
             safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
-            content = partial_text if partial_text.strip() else ""
-            section_payload["content"] = content
+            section_payload["content"] = partial_text if partial_text.strip() else ""
             if partial_blocks:
                 section_payload["blocks"] = partial_blocks
             elif "blocks" in section_payload:
                 section_payload.pop("blocks", None)
-
             document.content = {
                 "topic": topic,
                 "research_design": design,
@@ -3460,7 +4568,6 @@ def _write_dissertation(
             _save(document, f"dissertation-step:{chapter_title}:{safe_node}")
 
         current_context = _full_context_for_generation(document)
-        ch_word_count = 500 if ch_num == 2 else 220
         chapter_text, _, chapter_blocks = _execute_subsection_nodes(
             nodes=chapter["nodes"],
             document=document,
@@ -3476,9 +4583,7 @@ def _write_dissertation(
             default_word_count=ch_word_count,
         )
 
-        # chapter_text already contains subsection headings from _execute_subsection_nodes
-        chapter_content = chapter_text if chapter_text.strip() else ""
-        section_payload = {"title": chapter_title, "content": chapter_content}
+        section_payload["content"] = chapter_text if chapter_text.strip() else ""
         if chapter_blocks:
             section_payload["blocks"] = chapter_blocks
         elif "blocks" in section_payload:
@@ -3497,8 +4602,8 @@ def _write_dissertation(
     _all_done(plan)
 
     reply = (
-        f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design flow. "
-        "The agent executed chapter-level and nested subsection to-do lists with individual prompts per step."
+        f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "
+        "The AI generated a tailored chapter and section plan, then wrote each section sequentially."
     )
     return reply, True
 
@@ -3593,6 +4698,8 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
         series=_ai["series"],
         chart_type=_ai["chart_type"],
         title=_section_title,
+        x_labels=_ai.get("x_labels") or None,
+        unit=_ai.get("unit") or None,
     )
     section.setdefault("blocks", []).append(
         {"type": "chart", "src": chart_path, "caption": f"Chart for {section.get('title', 'section')}"}
