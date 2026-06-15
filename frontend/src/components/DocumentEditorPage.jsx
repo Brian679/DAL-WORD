@@ -3321,7 +3321,7 @@ export default function DocumentEditorPage({
               <div className="dap-composer-box">
                 <textarea
                   className="dap-composer-input"
-                  placeholder={groundedResearch ? 'Ask Copilot (research mode)…' : 'Ask anything — e.g. "check for AI", "humanise", "write a report on…"'}
+                  placeholder={groundedResearch ? 'Ask Copilot (research mode)…' : 'Ask Copilot…'}
                   rows={1}
                   value={inputValue}
                   onChange={(e) => {
