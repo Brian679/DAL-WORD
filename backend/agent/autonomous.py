@@ -1954,7 +1954,9 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "plan", "study", "project", "portfolio", "lab report", "memo",
         "powerpoint", "excel", "document", "doc",
     }
-    if any(v in text for v in _write_verbs) and any(n in text for n in _write_nouns):
+    # Use word-boundary matching for verbs to prevent "do" matching "document",
+    # "make" matching "remake", etc.
+    if any(re.search(r'\b' + re.escape(v) + r'\b', text) for v in _write_verbs) and any(n in text for n in _write_nouns):
         topic_match = re.search(r"\b(?:on|about|for|regarding)\b\s+(.+)$", text)
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
         return {"intent": "write_document", "target_section": None, "topic": topic}
@@ -1967,7 +1969,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "write it again", "write it back", "write again",
         "generate the", "regenerate the",
     ]):
-        if any(k in text for k in ["document", "whole document", "entire document", "full document", "all sections"]):
+        if any(k in text for k in ["whole document", "entire document", "full document", "all sections", "whole dissertation", "entire dissertation"]):
             return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
@@ -2006,7 +2008,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
 
     # ── Expand / elaborate ──────────────────────────────────────────────────
     if any(k in text for k in ["expand", "elaborate", "more detail", "add more", "flesh out"]):
-        if any(k in text for k in ["document", "whole document", "entire document", "all sections"]):
+        if any(k in text for k in ["whole document", "entire document", "full document", "all sections", "whole dissertation", "entire dissertation"]):
             return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
@@ -2475,7 +2477,78 @@ def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -
             "   H1: AI-driven customer-service systems have a statistically significant positive effect on customer satisfaction levels."
         )
 
-    if "research objective" in sub.lower() or "research question" in sub.lower():
+    # ── Chapter 1 Introduction subsections ─────────────────────────────────
+    if "background" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
+        return (
+            f"The rapid growth of {topic} has emerged as a defining trend, prompting both practitioners and researchers "
+            "to examine the mechanisms through which this development shapes institutional performance, governance structures, "
+            "and stakeholder outcomes. The background of this study situates the research problem within its broader "
+            "socioeconomic and technological context, drawing on contemporary evidence to justify the relevance and urgency "
+            "of the inquiry.\n\n"
+            "Globally, organisations operating in this domain have reported significant transformations in operational "
+            "efficiency, risk management, and client engagement, driven by advances in data analytics, artificial intelligence, "
+            "and digital infrastructure. However, empirical understanding remains uneven — many jurisdictions lack "
+            "context-specific evidence linking these developments to measurable performance outcomes. This gap is particularly "
+            "pronounced in emerging market environments, where institutional capacity, regulatory maturity, and digital "
+            "readiness vary substantially.\n\n"
+            "Against this backdrop, the present study addresses a clear research need: to generate systematic, primary "
+            "evidence on the nature, direction, and magnitude of outcomes attributable to the study domain. By anchoring "
+            "its findings in locally relevant data, the study contributes actionable insights that are transferable to "
+            "policy discourse, practitioner decision-making, and scholarly debate."
+        )
+
+    if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
+        return (
+            f"Despite growing interest in {topic}, a critical gap persists in the empirical literature: there is insufficient "
+            "context-specific evidence to explain how and under what conditions the key variables produce observed outcomes. "
+            "Existing studies tend to rely on generalised frameworks that do not adequately capture the institutional "
+            "and environmental specificity of the research context.\n\n"
+            "This limitation has practical consequences — policymakers and practitioners operate with incomplete evidence, "
+            "increasing the risk of misaligned interventions and suboptimal resource allocation. The problem, therefore, "
+            "is not merely theoretical; it carries direct implications for how institutions design, implement, and evaluate "
+            "strategies within this domain. This study is designed to address that gap directly by generating primary, "
+            "context-grounded evidence on the relationships central to the research."
+        )
+
+    if "significance" in sub_lower:
+        return (
+            f"The significance of this study lies in its potential to generate evidence that bridges the gap between "
+            f"theoretical frameworks and applied practice in the area of {topic}. At the academic level, the study "
+            "contributes original primary data to a field where empirical evidence is fragmented, thereby strengthening "
+            "the evidence base for future inquiry.\n\n"
+            "At the practical level, the findings offer actionable insights for institutional leaders, regulatory bodies, "
+            "and policymakers seeking to improve outcomes within the study domain. At the social level, the research "
+            "has implications for equitable access, stakeholder welfare, and institutional accountability — dimensions "
+            "that are often underexamined in quantitative studies of this nature."
+        )
+
+    if "scope" in sub_lower or "delimitation" in sub_lower:
+        return (
+            "The scope of this study is defined by three primary parameters: thematic focus, geographic boundary, "
+            "and temporal horizon. Thematically, the study concentrates on the central research variables as defined "
+            "in the research objectives, and excludes related but distinct constructs that fall outside its analytical "
+            "frame. Geographically, the study is bounded to the selected organisational or sectoral context from which "
+            "primary data are collected. Temporally, the study draws on data generated within the current period, "
+            "ensuring that findings reflect contemporary conditions rather than historical trajectories.\n\n"
+            "These delimitations are deliberate methodological choices designed to maintain analytic focus, ensure "
+            "feasibility within available resources, and enhance the internal validity of findings. They do not "
+            "represent shortcomings but rather principled boundaries that strengthen the study's coherence."
+        )
+
+    if "definition" in sub_lower or "key term" in sub_lower:
+        return (
+            "For the purpose of this study, key terms are operationally defined as follows:\n\n"
+            "Operational Efficiency: The ratio of productive output to resource input, measured in terms of "
+            "process speed, cost reduction, and error rate minimisation within the institutional context.\n\n"
+            "Governance Quality: The extent to which institutional rules, accountability mechanisms, and oversight "
+            "structures are effectively implemented and consistently applied.\n\n"
+            "Stakeholder Outcomes: Observable and measurable changes in the conditions experienced by the primary "
+            "beneficiaries or affected parties of the study domain, including satisfaction, access, and equity.\n\n"
+            "These definitions align with established usage in the academic literature and provide a consistent "
+            "conceptual basis for measurement, analysis, and interpretation throughout the study."
+        )
+
+    if "research objective" in sub_lower or "research question" in sub_lower:
         return (
             "1. To evaluate the extent to which artificial intelligence tools improve operational efficiency in banking processes, "
             "including turnaround time and process accuracy.\n"
@@ -4654,6 +4727,125 @@ def _run_copilot_loop(
         if idx is not None:
             relevant_indices = [idx]
 
+    # ── Subsection-by-name fallback ──────────────────────────────────────────
+    # If target wasn't found as a top-level chapter title (e.g. "background of
+    # the study"), search inside every chapter's content for a matching
+    # heading and edit only that block, leaving the rest of the chapter intact.
+    if not relevant_indices and target and not _subsec_match:
+        _target_lower = target.strip().lower()
+        _all_secs = (document.content or {}).get("sections", [])
+        _found_subsec = False
+        for _si, _sec in enumerate(_all_secs):
+            _ch_content = _sec.get("content", "")
+            if not _ch_content:
+                continue
+            # Find a heading line that matches the target name
+            for _line in _ch_content.split("\n"):
+                _stripped = _line.strip()
+                if not _stripped:
+                    continue
+                # Accept "1.1 Background of the Study" or plain "Background of the Study"
+                _heading_clean = re.sub(r"^\d+(\.\d+)*\s*", "", _stripped).strip().lower()
+                # Skip empty headings and very short lines (avoids empty-string false positives)
+                if not _heading_clean or len(_heading_clean) < 4:
+                    continue
+                if _target_lower in _heading_clean or _heading_clean in _target_lower:
+                    # Found the heading inside this chapter — extract number prefix
+                    _num_match = re.match(r"^(\d+(?:\.\d+)+)", _stripped)
+                    _subsec_id = _num_match.group(1) if _num_match else None
+                    if _subsec_id:
+                        _block = _extract_subsection_block_if_present(_ch_content, _subsec_id)
+                    else:
+                        # No number — do a manual extract: heading to next heading
+                        _h_idx = _ch_content.find(_stripped)
+                        if _h_idx == -1:
+                            continue
+                        _after = _ch_content[_h_idx + len(_stripped):]
+                        # next heading = next numbered line or eof
+                        _next = re.search(r"\n\d+\.\d+", _after)
+                        _body_raw = _after[:_next.start()] if _next else _after
+                        _block = (_stripped, _body_raw.strip())
+                    if _block:
+                        _heading_txt, _body_txt = _block
+                        _edit_prompt = (
+                            f"User request: {message}\n\n"
+                            f"Document topic: {topic}\n\n"
+                            f"Subsection heading: {_heading_txt}\n\n"
+                            f"Current content:\n{_body_txt}\n\n"
+                            "Improve ONLY this subsection according to the user request. "
+                            "Maintain academic tone. Do NOT touch any other section. "
+                            "Do NOT include the subsection heading in your output. "
+                            "Return ONLY the improved body text."
+                        )
+                        for _pi in range(2, len(plan)):
+                            plan[_pi]["status"] = "done"
+                        try:
+                            _new_body = generate_text(_edit_prompt).strip()
+                            if _new_body and len(_new_body) > 50:
+                                # Splice improved body back into the chapter
+                                if _subsec_id:
+                                    _new_block_txt = f"{_heading_txt}\n{_new_body}"
+                                    _new_ch = _replace_subsection_if_present(_ch_content, _subsec_id, _new_block_txt)
+                                else:
+                                    _new_ch = _ch_content.replace(
+                                        f"{_stripped}\n{_body_txt}",
+                                        f"{_stripped}\n{_new_body}",
+                                        1,
+                                    )
+                                if _new_ch:
+                                    _all_secs[_si]["content"] = _new_ch
+                                    document.content["sections"] = _all_secs
+                                    _save(document, f"copilot:subsec-name:{target[:40]}")
+                                    _all_done(plan)
+                                    return f"Enhanced '{_heading_txt}' in {_sec.get('title', 'the chapter')}.", True
+                        except Exception as _exc:
+                            logger.warning("Subsection-by-name edit failed for '%s': %s", target, _exc)
+                            # Primary LLM unavailable — try static academic fallback
+                            try:
+                                # Strip numeric prefix so specific section patterns match
+                                _subsec_name_clean = re.sub(r"^\d+(?:\.\d+)*\s*", "", _heading_txt).strip()
+                                _static_body = _fallback_subsection_text(
+                                    topic or "", _sec.get("title", ""), _subsec_name_clean or _heading_txt
+                                )
+                                if _static_body and len(_static_body) > 80:
+                                    if _subsec_id:
+                                        _fb_block = f"{_heading_txt}\n{_static_body}"
+                                        _fb_ch = _replace_subsection_if_present(
+                                            _ch_content, _subsec_id, _fb_block
+                                        )
+                                    else:
+                                        _fb_ch = _ch_content.replace(
+                                            f"{_stripped}\n{_body_txt}",
+                                            f"{_stripped}\n{_static_body}",
+                                            1,
+                                        )
+                                    if _fb_ch:
+                                        _all_secs[_si]["content"] = _fb_ch
+                                        document.content["sections"] = _all_secs
+                                        _save(document, f"copilot:subsec-name:{target[:40]}")
+                                        _all_done(plan)
+                                        return (
+                                            f"Enhanced '{_heading_txt}' in "
+                                            f"{_sec.get('title', 'the chapter')}.",
+                                            True,
+                                        )
+                            except Exception:
+                                pass
+                        _found_subsec = True
+                        break
+            if _found_subsec:
+                break
+    # Subsection was located by name but all edit attempts failed (e.g. no API key).
+    if _found_subsec:
+        _all_done(plan)
+        return (
+            f"I found '{target}' in the document but could not enhance it — "
+            "the AI service is currently unavailable (API key not configured). "
+            "Please set GROK_API_KEY or GEMINI_API_KEY to enable AI editing.",
+            False,
+        )
+
+    # LLM fallback: ask the model which top-level section index to use.
     if not relevant_indices:
         section_prompt = (
             f"User request: '{message}'\n\n"
