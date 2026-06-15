@@ -3085,13 +3085,12 @@ export default function DocumentEditorPage({
                   type="button"
                   className="dap-ai-action-btn"
                   title="Rewrite AI-detected passages to sound more natural and human-written"
-                  disabled={isThinking}
-                  onClick={() => {
-                    const flagged = aiDetectResult?.sentences?.filter(s => s.label !== 'likely_human') || [];
-                    const prompt = flagged.length > 0
-                      ? `Humanise these AI-detected passages to sound more natural and personal — remove clichéd AI phrases and rewrite in a clear, authentic academic voice:\n\n${flagged.map(s => `• "${s.text}"`).join('\n')}`
-                      : 'Rewrite the document to sound more natural and human-written. Remove repetitive AI phrases like "It is important to note", "In today\'s world", "holistic approach", "paradigm shift", "delve into", "comprehensive overview" and replace them with direct, authentic phrasing.';
-                    sendMessage(prompt);
+                  disabled={isThinking || aiDetecting}
+                  onClick={async () => {
+                    // Always use the dedicated humanise intent — backend will detect + rewrite
+                    await sendMessage('Humanise the document — rewrite any AI-detected passages to sound natural and human-written');
+                    // After the agent rewrites, re-run AI detection to show the score improved
+                    setTimeout(() => runAiDetect(), 2000);
                   }}
                 >
                   <Wand2 size={12} />

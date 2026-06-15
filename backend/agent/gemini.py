@@ -65,6 +65,7 @@ User message: \"{message}\"
 Choose ONE intent:
 - enhance_document
 - enhance_section
+- humanise_ai_sections
 - write_section
 - write_dissertation
 - create_outline
@@ -77,6 +78,7 @@ Choose ONE intent:
 - chat
 
 Guidance:
+- If user says "humanise", "humanize", "make it sound human", "remove AI", "bypass AI detection", "make less AI", "sound more natural", "rewrite AI passages", "human-like" -> humanise_ai_sections.
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
 - If user says "improve 2.7" or "fix 3.4" (subsection number) -> enhance_section with that exact number as target_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
@@ -107,6 +109,13 @@ Return JSON exactly:
 
 def create_execution_plan(intent: str) -> list[str]:
     plans = {
+        "humanise_ai_sections": [
+            "Running AI content detection across all sections",
+            "Identifying AI-detected sentences (high perplexity / low burstiness)",
+            "Rewriting flagged passages with authentic human voice",
+            "Varying sentence length and structure for natural burstiness",
+            "Saving humanised document",
+        ],
         "enhance_document": [
             "Reading and analysing document structure",
             "Identifying weak sections",
@@ -205,6 +214,37 @@ def chat_with_document(message: str, doc_context: str) -> str:
         "- Do NOT include labels like 'User:' or 'Assistant:'.\n"
         "- Do NOT output prompt templates unless the user explicitly asked for one.\n"
         "- Write the answer immediately, starting with the actual content."
+    )
+    return generate_text(prompt)
+
+
+def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) -> str:
+    """Rewrite text to reduce AI-detection signals: remove stock phrases, add burstiness."""
+    phrase_list = ""
+    if ai_phrases:
+        phrase_list = (
+            "\n\nAvoid or replace these detected AI phrases:\n"
+            + "\n".join(f"  • {p}" for p in ai_phrases[:12])
+        )
+    prompt = (
+        f"You are an expert academic editor helping a student humanise their writing on '{topic}'.\n\n"
+        "Your goal: rewrite the passage so it reads like a real person wrote it — not an AI.\n\n"
+        "Rules:\n"
+        "1. VARY sentence length dramatically — mix very short sentences with longer ones. "
+        "   Abrupt stops. Then a longer, more reflective sentence that develops the idea further.\n"
+        "2. Use concrete, specific details and first-person perspective where natural "
+        "   (e.g. 'I found', 'The data showed', 'Three participants said').\n"
+        "3. Avoid these AI clichés entirely: 'it is important to note', 'in today's world', "
+        "   'holistic approach', 'paradigm shift', 'delve into', 'comprehensive overview', "
+        "   'it is crucial', 'furthermore', 'moreover', 'it is evident that', "
+        "   'the realm of', 'seamlessly', 'robust framework', 'plays a crucial role'.\n"
+        "4. Passive voice sparingly — prefer active constructions.\n"
+        "5. Let opinions or observations show. Real writers hedge naturally ('I think', 'It seemed').\n"
+        "6. Preserve ALL factual claims, citations, and core argument — only the phrasing changes.\n"
+        "7. Do NOT add new claims or fabricate data.\n"
+        f"{phrase_list}\n\n"
+        f"TEXT TO REWRITE:\n{text[:4000]}\n\n"
+        "Return ONLY the rewritten text. No explanations, no markdown, no labels."
     )
     return generate_text(prompt)
 

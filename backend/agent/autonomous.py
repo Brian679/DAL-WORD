@@ -13,6 +13,7 @@ from typing import Any
 from documents.models import Document, DocumentVersion
 
 from .llm import (
+    humanise_text,
     chat_with_document,
     classify_intent,
     create_execution_plan,
@@ -43,6 +44,7 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_dissertation",
     "enhance_section",
     "enhance_document",
+    "humanise_ai_sections",
     "address_comments",
     "create_outline",
     "write_report",
@@ -71,6 +73,7 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "write_spreadsheet": "Generate a structured spreadsheet layout",
         "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
+        "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
     }
     return _descriptions.get(intent, "Execute the requested task")
 
@@ -1801,6 +1804,17 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     _grammar_kw = {"grammar", "spelling", "spell", "typo", "typos", "proofread", "spellcheck", "spell check"}
     if any(k in text for k in _grammar_kw):
         return {"intent": "enhance_section", "target_section": target, "topic": "grammar_and_style"}
+
+    # ── Humanise / de-AI ────────────────────────────────────────────────────
+    _humanise_kw = {
+        "humanise", "humanize", "humanise the", "humanize the",
+        "make it sound human", "sound more human", "more human-like",
+        "remove ai", "less ai", "bypass ai", "avoid ai detection",
+        "rewrite ai", "humanise ai", "humanize ai",
+        "natural voice", "natural writing", "make more natural",
+    }
+    if any(k in text for k in _humanise_kw):
+        return {"intent": "humanise_ai_sections", "target_section": None, "topic": None}
 
     # ── Rephrase / reword / formality ───────────────────────────────────────
     _rephrase_kw = {"rephrase", "reword", "restate", "paraphrase"}
@@ -3728,6 +3742,8 @@ def run_agent(
             reply, updated = _add_chart(document, target_section, plan)
         elif intent == "add_image":
             reply, updated = _add_image(document, target_section, generation_message, plan)
+        elif intent == "humanise_ai_sections":
+            reply, updated = _humanise_ai_sections(document, topic or "", plan)
         else:
             try:
                 # Always ground unknown/vague prompts in the document rather than
@@ -3918,6 +3934,71 @@ def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, 
             True,
         )
     return "Could not generate revisions for the found comments. Please try again.", False
+
+
+def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Detect AI-generated sentences per section and rewrite them to sound human-written."""
+    from .ai_detector import detect_ai_content
+
+    sections = (document.content or {}).get("sections", [])
+    if not sections:
+        _all_done(plan)
+        return "The document has no sections yet.", False
+
+    _done(plan, 0)  # Running AI detection
+
+    humanised = 0
+    for i, section in enumerate(sections):
+        content = (section.get("content") or "").strip()
+        if not content:
+            continue
+
+        detection = detect_ai_content(content)
+        flagged = [s for s in detection.get("sentences", []) if s.get("label") != "likely_human"]
+        if not flagged:
+            continue
+
+        _done(plan, 1)  # Identifying AI passages
+
+        # Extract the specific AI phrases found so the LLM can target them
+        ai_phrase_snippets = [s["text"][:80] for s in flagged if s.get("ai_probability", 0) >= 0.45]
+
+        try:
+            new_content = humanise_text(content, topic or document.title, ai_phrase_snippets)
+            if new_content and len(new_content.strip()) > 50:
+                sections[i]["content"] = new_content.strip()
+                humanised += 1
+        except Exception as exc:
+            logger.warning("Humanise section %d failed: %s", i, exc)
+
+        _done(plan, 2)  # Rewriting with human voice
+
+    _done(plan, 3)  # Varying sentence structure
+    _all_done(plan)
+
+    if humanised:
+        document.content["sections"] = sections
+        _save(document, "humanise-ai-sections")
+        # Report with before/after AI %
+        try:
+            from .ai_detector import detect_ai_content as _detect
+            full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
+            after_pct = _detect(full_text).get("overall_ai_percentage", 0)
+        except Exception:
+            after_pct = None
+
+        after_msg = f" Document AI score is now ~{after_pct}%." if after_pct is not None else ""
+        return (
+            f"Humanised {humanised} section(s) — removed AI clichés, varied sentence rhythm, "
+            f"and added authentic voice.{after_msg} Run **Detect AI** again to see the improvement.",
+            True,
+        )
+
+    return (
+        "No strongly AI-detected passages were found — your document already reads naturally. "
+        "Try running **Detect AI** first to scan for flagged sentences.",
+        False,
+    )
 
 
 def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, bool]:

@@ -51,6 +51,10 @@ def enhance_text(text: str, topic: str, instruction: str = "") -> str:
     return _provider_module().enhance_text(text, topic, instruction)
 
 
+def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) -> str:
+    return _provider_module().humanise_text(text, topic, ai_phrases)
+
+
 def generate_outline_sections(topic: str) -> list[dict[str, Any]]:
     return _provider_module().generate_outline_sections(topic)
 
