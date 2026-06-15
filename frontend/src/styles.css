@@ -3540,53 +3540,29 @@ ul {
 }
 
 /* ── Ghost inline highlight for AI-updated sections ── */
-@keyframes agent-update-pulse {
-    0%   { background-color: rgba(59, 130, 246, 0.22); box-shadow: inset 4px 0 0 #3b82f6; }
-    60%  { background-color: rgba(59, 130, 246, 0.12); box-shadow: inset 4px 0 0 #3b82f6; }
-    100% { background-color: rgba(59, 130, 246, 0.08); box-shadow: inset 4px 0 0 rgba(59,130,246,0.6); }
+@keyframes agent-update-in {
+    from { background-color: rgba(99, 102, 241, 0.18); box-shadow: inset 3px 0 0 #6366f1; }
+    to   { background-color: rgba(99, 102, 241, 0.08); box-shadow: inset 3px 0 0 #818cf8; }
 }
-@keyframes agent-update-badge-in {
-    from { opacity: 0; transform: translateY(-4px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes ghost-fade-out {
-    from { background-color: rgba(59, 130, 246, 0.08); box-shadow: inset 4px 0 0 rgba(59,130,246,0.6); }
+@keyframes agent-update-out {
+    from { background-color: rgba(99, 102, 241, 0.08); box-shadow: inset 3px 0 0 #818cf8; }
     to   { background-color: transparent; box-shadow: none; }
 }
 
 .doc-rich-editor [data-ghost-highlight="true"] {
-    position: relative;
-    padding-left: 14px;
-    border-radius: 0 4px 0 0;
-    background-color: rgba(59, 130, 246, 0.12);
-    box-shadow: inset 4px 0 0 #3b82f6;
-    animation: agent-update-pulse 0.5s ease forwards,
-               ghost-fade-out 1.5s ease 7s forwards;
-}
-
-/* "Updated" badge injected via ::before on the heading */
-.doc-rich-editor [data-ghost-highlight="true"]::before {
-    content: 'Updated';
-    display: inline-block;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #fff;
-    background: #3b82f6;
-    border-radius: 3px;
-    padding: 1px 5px;
-    margin-right: 8px;
-    vertical-align: middle;
-    line-height: 1.6;
-    animation: agent-update-badge-in 0.3s ease 0.1s both;
+    padding-left: 12px;
+    border-radius: 0 3px 0 0;
+    background-color: rgba(99, 102, 241, 0.1);
+    box-shadow: inset 3px 0 0 #6366f1;
+    animation: agent-update-in 0.35s ease forwards,
+               agent-update-out 1.2s ease 7.5s forwards;
 }
 
 .doc-rich-editor [data-ghost-highlight="content"] {
-    padding-left: 14px;
-    background-color: rgba(59, 130, 246, 0.06);
-    box-shadow: inset 4px 0 0 rgba(59,130,246,0.35);
-    animation: ghost-fade-out 1.5s ease 7s forwards;
+    padding-left: 12px;
+    background-color: rgba(99, 102, 241, 0.05);
+    box-shadow: inset 3px 0 0 rgba(99, 102, 241, 0.3);
+    animation: agent-update-out 1.2s ease 7.5s forwards;
 }
 
 
