@@ -161,15 +161,109 @@ def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) ->
     return generate_text(prompt)
 
 
-def enhance_text(text: str, topic: str, instruction: str = "") -> str:
+def _classify_section_type(hint: str) -> str:
+    h = hint.lower()
+    if any(k in h for k in ["introduction", "background", "problem statement", "objective", "scope", "significance"]):
+        return "introduction"
+    if any(k in h for k in ["literature", "theoretical", "conceptual", "empirical", "related work", "review"]):
+        return "literature_review"
+    if any(k in h for k in ["methodology", "research design", "sampling", "data collection", "validity", "reliability"]):
+        return "methodology"
+    if any(k in h for k in ["result", "finding", "analysis", "data present"]):
+        return "results"
+    if any(k in h for k in ["discussion", "interpretation"]):
+        return "discussion"
+    if any(k in h for k in ["conclusion", "recommendation", "limitation", "future research"]):
+        return "conclusion"
+    return "general"
+
+
+_SECTION_GUIDES: dict[str, str] = {
+    "introduction": (
+        "Section type: INTRODUCTION\n"
+        "• Open with a precise, contextualised problem statement — not a generic claim.\n"
+        "• Define the research gap clearly: what is unknown or contested?\n"
+        "• State objectives/research questions in specific, measurable language.\n"
+        "• Signal scope: what is included and what is excluded.\n"
+        "• Use signpost phrases: 'This study investigates…', 'The aim is to…'.\n"
+        "• Avoid clichés: 'In today's world', 'Since time immemorial', 'It is a fact that'."
+    ),
+    "literature_review": (
+        "Section type: LITERATURE REVIEW\n"
+        "• Synthesise sources thematically — do NOT merely summarise each source in sequence.\n"
+        "• Use attribution: 'According to Smith (2020)…', 'As argued by Jones (2019)…'.\n"
+        "• Compare and contrast positions: highlight agreements, contradictions, and gaps.\n"
+        "• Conclude with a clear statement of the gap this study fills.\n"
+        "• Use hedging appropriately: 'suggests', 'indicates', 'argues' — not 'proves'.\n"
+        "• Vary sentence openings — avoid starting every sentence with an author name."
+    ),
+    "methodology": (
+        "Section type: METHODOLOGY\n"
+        "• Justify every methodological choice with explicit reasoning (WHY, not just WHAT).\n"
+        "• Follow logical order: design → population → sampling → instruments → procedures → analysis.\n"
+        "• Be precise: sample sizes, instrument names, timeframes, software used.\n"
+        "• Address validity and reliability explicitly.\n"
+        "• Cite established frameworks where appropriate (e.g. Creswell, 2014; Bryman, 2016).\n"
+        "• Use past tense for completed procedures."
+    ),
+    "results": (
+        "Section type: RESULTS / FINDINGS\n"
+        "• Report findings objectively — describe data, do not interpret here.\n"
+        "• Reference tables and figures precisely ('As shown in Table 3…').\n"
+        "• Use precise quantitative language ('78% of respondents…', 'mean = 4.2, SD = 0.8').\n"
+        "• Organise by research question or theme, not chronologically.\n"
+        "• Do NOT introduce new literature or sweeping interpretation here.\n"
+        "• Use past tense for findings; present tense for tables and figures."
+    ),
+    "discussion": (
+        "Section type: DISCUSSION\n"
+        "• Open with the most significant finding, then explain its importance.\n"
+        "• Link every major finding to the literature — agree, contrast, or extend prior work.\n"
+        "• Use hedged interpretation: 'This suggests…', 'These results may indicate…'.\n"
+        "• Address unexpected or contradictory findings candidly.\n"
+        "• Show how findings advance the field — avoid over-claiming.\n"
+        "• Do not introduce new data."
+    ),
+    "conclusion": (
+        "Section type: CONCLUSION\n"
+        "• Synthesise key findings — do NOT simply restate them.\n"
+        "• Show how the study met its research objectives.\n"
+        "• Acknowledge limitations with professional candour.\n"
+        "• Offer specific, actionable recommendations (practice, policy, future research).\n"
+        "• End with a strong closing statement on the study's contribution.\n"
+        "• Do NOT introduce new information."
+    ),
+    "general": (
+        "Academic writing standards:\n"
+        "• Use precise, formal vocabulary — replace vague words (very, quite, things, basically) "
+        "with specific academic terms.\n"
+        "• Build PEEL paragraphs: Point → Evidence → Explanation → Link.\n"
+        "• Vary sentence length — mix short analytical punches with longer elaborations.\n"
+        "• Prefer active voice; use passive only when the agent is unknown or unimportant.\n"
+        "• Each paragraph needs a clear topic sentence and logical internal progression.\n"
+        "• Use precise transitions: 'However', 'In contrast', 'Building on this', 'Consequently'.\n"
+        "• Remove filler: 'it should be noted that', 'needless to say', 'as previously mentioned'."
+    ),
+}
+
+
+def enhance_text(text: str, topic: str, instruction: str = "", section_title: str = "") -> str:
+    section_type = _classify_section_type(section_title or instruction or "")
+    guide = _SECTION_GUIDES.get(section_type, _SECTION_GUIDES["general"])
+    instr_block = ("USER INSTRUCTION: " + instruction.strip() + "\n\n") if instruction.strip() else ""
     prompt = (
-        f"Improve this academic text about '{topic}'.\n"
-        f"{'Instruction: ' + instruction + chr(10) if instruction else ''}"
-        "Requirements: clearer sentences, better structure, professional tone, "
-        "no jargon, keep original meaning. Avoid generic AI disclaimers and robotic phrasing. "
-        "Use varied sentence rhythm and specific details where appropriate.\n\n"
-        f"TEXT:\n{text[:3000]}\n\n"
-        "Return ONLY the improved text, nothing else."
+        f"You are an expert academic editor improving a dissertation on '{topic}'.\n\n"
+        f"{guide}\n\n"
+        f"{instr_block}"
+        "EDITING TASKS — apply ALL of the following:\n"
+        "1. Strengthen argument — every claim must be supported or clearly signposted.\n"
+        "2. Improve sentence variety — break monotonous rhythms, vary length and structure.\n"
+        "3. Sharpen vocabulary — replace vague words with precise academic terms.\n"
+        "4. Fix transitions — each sentence must flow logically from the previous.\n"
+        "5. Remove redundancy — cut phrases that add no meaning.\n"
+        "6. Preserve ALL factual content, data, citations, and specific details.\n\n"
+        f"TEXT TO IMPROVE:\n{text[:3500]}\n\n"
+        "Return ONLY the improved text. No explanations, no markdown, no headings."
     )
     return generate_text(prompt)
 
@@ -180,15 +274,26 @@ def generate_section_content(
     context: str = "",
     word_count: int = 220,
 ) -> str:
+    section_type = _classify_section_type(title)
+    guide = _SECTION_GUIDES.get(section_type, _SECTION_GUIDES["general"])
+    ctx_block = ("Context and instructions:\n" + context[:3000] + "\n\n") if context else ""
     prompt = (
-        f"Write a detailed academic section (~{word_count} words) titled '{title}' "
-        f"for a research paper about: '{topic}'.\n"
-        f"{'Additional context: ' + context[:2000] if context else ''}\n"
-        "Use clear, formal academic language. Be specific, substantive, and analytical. "
-        "Write with natural human flow: varied sentence lengths, precise claims, and grounded examples. "
-        "Avoid filler, repeated sentence templates, and AI-sounding phrases such as 'in today's world', "
-        "'it is important to note', or meta references to being an AI. "
-        f"Aim for approximately {word_count} words — do not stop early."
+        f"You are writing a formal academic dissertation section.\n"
+        f"Section: '{title}'\n"
+        f"Study topic: '{topic}'\n\n"
+        f"{guide}\n\n"
+        f"{ctx_block}"
+        f"Write ~{word_count} words of scholarly content for this section.\n"
+        "Requirements:\n"
+        "• Write SPECIFICALLY about this topic — not generic filler that fits any study.\n"
+        "• Ground claims in the context provided (objectives, methodology, findings).\n"
+        "• Use varied sentence rhythm — short punchy sentences alongside longer analyses.\n"
+        "• Include precise claims, concrete examples, and academic evidence language.\n"
+        "• Do NOT include the section heading in your response.\n"
+        "• Do NOT use HTML tags — plain text with blank lines between paragraphs.\n"
+        "• Avoid AI clichés: 'in today's world', 'it is important to note', 'this section will…'.\n"
+        f"• Aim for ~{word_count} words — do not stop early.\n\n"
+        "Begin writing now:"
     )
     return generate_text(prompt)
 

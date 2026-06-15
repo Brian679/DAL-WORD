@@ -47,8 +47,8 @@ def generate_text(prompt: str) -> str:
     return _provider_module().generate_text(prompt)
 
 
-def enhance_text(text: str, topic: str, instruction: str = "") -> str:
-    return _provider_module().enhance_text(text, topic, instruction)
+def enhance_text(text: str, topic: str, instruction: str = "", section_title: str = "") -> str:
+    return _provider_module().enhance_text(text, topic, instruction, section_title)
 
 
 def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) -> str:

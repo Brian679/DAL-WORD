@@ -264,3 +264,171 @@ def rule_based_humanise(text: str) -> str:
     result = re.sub(r"\.\s+,\s+", ". ", result)
     result = re.sub(r"^\s*,\s*", "", result, flags=re.MULTILINE)
     return result.strip()
+
+
+# ── Academic writing quality checker ──────────────────────────────────────────
+
+_WEAK_WORDS = frozenset([
+    "very", "quite", "rather", "somewhat", "stuff", "things", "basically",
+    "pretty", "really", "nice", "fine", "big", "small", "good", "bad",
+    "lots", "a lot", "got", "get", "kind of", "sort of",
+])
+
+_EVIDENCE_CUE_RE = re.compile(
+    r"\b(?:according to|as (?:noted|argued|shown|stated|demonstrated|found) by|"
+    r"studies (?:show|suggest|indicate|demonstrate)|research (?:shows?|suggests?|finds?|indicates?)|"
+    r"\(\d{4}\)|\[\d+\]|et al\b|cited in|evidence (?:shows?|suggests?)|"
+    r"(?:scholars?|researchers?|authors?) (?:argue|suggest|note|claim|find|report))\b",
+    re.IGNORECASE,
+)
+
+_INFORMAL_FP_RE = re.compile(
+    r"\bI (?:think|feel|believe|know|want|am\b|don't|didn't|cannot|can't)\b",
+    re.IGNORECASE,
+)
+
+
+def academic_quality_check(text: str) -> dict[str, Any]:
+    """
+    Rule-based academic writing quality analysis — no LLM required.
+    Returns a score (0–100), verdict, and a list of actionable issues.
+    """
+    from collections import Counter
+
+    if not (text or "").strip():
+        return {"quality_score": 0, "verdict": "insufficient_text", "issues": [], "word_count": 0}
+
+    sentences = _split_sentences(text)
+    if len(sentences) < 2:
+        return {"quality_score": 0, "verdict": "insufficient_text", "issues": [], "word_count": len(text.split())}
+
+    words_lower = re.findall(r"\b\w+\b", text.lower())
+    word_count = len(words_lower)
+    issues: list[dict[str, Any]] = []
+
+    # 1. Weak / vague language
+    weak_hits = [w for w in words_lower if w in _WEAK_WORDS]
+    if len(weak_hits) > 3:
+        sample = ", ".join(f'"{w}"' for w in dict.fromkeys(weak_hits[:5]))
+        issues.append({
+            "type": "weak_language",
+            "severity": "medium",
+            "message": (
+                f"Found {len(weak_hits)} vague or informal words ({sample}). "
+                "Replace with precise academic vocabulary (e.g. 'very large' → 'substantial')."
+            ),
+        })
+
+    # 2. Passive voice overuse
+    passive_count = sum(1 for s in sentences if _PASSIVE_RE.search(s))
+    passive_ratio = passive_count / len(sentences)
+    if passive_ratio > 0.5:
+        issues.append({
+            "type": "passive_overuse",
+            "severity": "medium",
+            "message": (
+                f"{int(passive_ratio * 100)}% of sentences use passive voice. "
+                "Prefer active constructions for clarity ('The study found…' not 'It was found that…')."
+            ),
+        })
+
+    # 3. Underdeveloped paragraphs
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if len(p.strip()) > 10]
+    if paragraphs:
+        thin = sum(1 for p in paragraphs if len(p.split()) < 40)
+        if thin > max(1, len(paragraphs) * 0.4):
+            issues.append({
+                "type": "thin_paragraphs",
+                "severity": "medium",
+                "message": (
+                    f"{thin} paragraph(s) appear underdeveloped (< 40 words). "
+                    "Build full PEEL paragraphs: Point → Evidence → Explanation → Link."
+                ),
+            })
+
+    # 4. Repetitive sentence starters
+    starters = [s.split()[0].lower().rstrip(",.;:") for s in sentences if s.split()]
+    starter_counts = Counter(starters)
+    repeated = [(w, c) for w, c in starter_counts.items() if c >= 3 and w not in {"the", "a", "an", "this", "these"}]
+    if repeated:
+        reps = ", ".join(f'"{w}" (×{c})' for w, c in sorted(repeated, key=lambda x: -x[1])[:3])
+        issues.append({
+            "type": "repetitive_starters",
+            "severity": "low",
+            "message": f"Repeated sentence openers detected: {reps}. Vary structure to improve flow and readability.",
+        })
+
+    # 5. Missing evidence / citation cues
+    evidence_count = len(_EVIDENCE_CUE_RE.findall(text))
+    if word_count > 150 and evidence_count < 2:
+        issues.append({
+            "type": "missing_evidence",
+            "severity": "high",
+            "message": (
+                "No citation or evidence cues detected. Academic writing requires referenced support — "
+                "add citations (Author, Year) or attribution phrases ('Research by X indicates…')."
+            ),
+        })
+
+    # 6. Hedge word overuse
+    hedge_count = sum(1 for w in words_lower if w in _HEDGE_WORDS)
+    hedge_ratio = hedge_count / max(word_count, 1)
+    if hedge_ratio > 0.06:
+        issues.append({
+            "type": "hedge_overuse",
+            "severity": "low",
+            "message": (
+                f"High density of filler connectors ({int(hedge_ratio * 100)}% of words). "
+                "Words like 'furthermore', 'additionally', 'essentially' inflate length without adding meaning."
+            ),
+        })
+
+    # 7. Informal first-person
+    fp_matches = _INFORMAL_FP_RE.findall(text)
+    if len(fp_matches) > 2:
+        issues.append({
+            "type": "informal_register",
+            "severity": "low",
+            "message": (
+                f"Found {len(fp_matches)} informal first-person phrases (e.g. 'I think', 'I feel'). "
+                "In formal academic writing prefer 'This study argues…' or 'The evidence suggests…'."
+            ),
+        })
+
+    # 8. Sentence length monotony (all sentences similar length)
+    sent_lengths = [len(s.split()) for s in sentences]
+    if len(sent_lengths) >= 5:
+        mean_len = statistics.mean(sent_lengths)
+        std_len = statistics.stdev(sent_lengths) if len(sent_lengths) > 1 else 0
+        cv = std_len / mean_len if mean_len > 0 else 0
+        if cv < 0.25:
+            issues.append({
+                "type": "monotonous_rhythm",
+                "severity": "low",
+                "message": (
+                    "Sentence lengths are very uniform — the text may feel monotonous. "
+                    "Mix short, punchy sentences with longer analytical ones for better rhythm."
+                ),
+            })
+
+    # Compute overall quality score
+    severity_weights = {"high": 25, "medium": 15, "low": 7}
+    penalty = sum(severity_weights.get(i["severity"], 10) for i in issues)
+    score = max(0, 100 - penalty)
+
+    verdict = (
+        "strong" if score >= 80
+        else "adequate" if score >= 60
+        else "needs_improvement" if score >= 40
+        else "poor"
+    )
+
+    return {
+        "quality_score": score,
+        "verdict": verdict,
+        "word_count": word_count,
+        "sentence_count": len(sentences),
+        "passive_ratio": round(passive_ratio, 2),
+        "evidence_cues": evidence_count,
+        "issues": issues,
+    }

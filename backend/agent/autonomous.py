@@ -74,6 +74,7 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
+        "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
     }
     return _descriptions.get(intent, "Execute the requested task")
 
@@ -1815,6 +1816,17 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     }
     if any(k in text for k in _humanise_kw):
         return {"intent": "humanise_ai_sections", "target_section": None, "topic": None}
+
+    # ── Academic quality check ───────────────────────────────────────────────
+    _quality_kw = {
+        "check academic", "academic quality", "writing quality", "check my writing",
+        "review my writing", "improve academic", "academic check", "writing check",
+        "check the writing", "assess the writing", "grade my writing",
+        "feedback on writing", "critique the writing", "writing feedback",
+        "check writing quality", "academic writing check",
+    }
+    if any(k in text for k in _quality_kw):
+        return {"intent": "check_academic_quality", "target_section": None, "topic": None}
 
     # ── Rephrase / reword / formality ───────────────────────────────────────
     _rephrase_kw = {"rephrase", "reword", "restate", "paraphrase"}
@@ -3744,6 +3756,8 @@ def run_agent(
             reply, updated = _add_image(document, target_section, generation_message, plan)
         elif intent == "humanise_ai_sections":
             reply, updated = _humanise_ai_sections(document, topic or "", plan)
+        elif intent == "check_academic_quality":
+            reply, updated = _check_academic_quality(document, plan)
         else:
             try:
                 # Always ground unknown/vague prompts in the document rather than
@@ -4016,6 +4030,61 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
     )
 
 
+def _check_academic_quality(document: Document, plan: list) -> tuple[str, bool]:
+    """
+    Run rule-based academic quality analysis per section and return a
+    structured report without modifying the document.
+    """
+    from .ai_detector import academic_quality_check
+
+    sections = (document.content or {}).get("sections", [])
+    if not sections:
+        _all_done(plan)
+        return ("The document has no content to analyse.", False)
+
+    _done(plan, 0)
+
+    section_reports: list[str] = []
+    total_issues = 0
+    total_words = 0
+
+    for section in sections:
+        content = (section.get("content") or "").strip()
+        if not content:
+            continue
+        title = section.get("title") or "Untitled section"
+        result = academic_quality_check(content)
+        score = result["quality_score"]
+        verdict = result["verdict"].replace("_", " ")
+        issues = result.get("issues", [])
+        total_issues += len(issues)
+        total_words += result.get("word_count", 0)
+
+        score_icon = "✅" if score >= 80 else "⚠️" if score >= 60 else "❌"
+        line = f"{score_icon} **{title}** — quality score **{score}/100** ({verdict})"
+        if issues:
+            issue_lines = [f"  - *{iss['severity'].upper()}* {iss['message']}" for iss in issues]
+            line += "\n" + "\n".join(issue_lines)
+        section_reports.append(line)
+
+    _done(plan, 1)
+    _all_done(plan)
+
+    if not section_reports:
+        return ("No section content found to analyse.", False)
+
+    header = (
+        f"**Academic Writing Quality Report** — {total_words} words analysed, "
+        f"{total_issues} issue(s) found across {len(section_reports)} section(s).\n\n"
+    )
+    guide_tip = (
+        "\n\n---\n"
+        "**Quick fixes:** Run **Humanise** to reduce AI-detection signals, "
+        "or ask 'enhance [section name]' to improve a specific section's clarity and argument."
+    )
+    return (header + "\n\n".join(section_reports) + guide_tip, False)
+
+
 def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, bool]:
     sections = (document.content or {}).get("sections", [])
     if not sections:
@@ -4032,8 +4101,9 @@ def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, 
         original = section.get("content", "").strip()
         if not original:
             continue
+        section_title = section.get("title", "")
         try:
-            sections[i]["content"] = enhance_text(original, topic)
+            sections[i]["content"] = enhance_text(original, topic, section_title=section_title)
             count += 1
         except Exception as exc:
             logger.warning("Enhance section %d failed: %s", i, exc)
@@ -4044,8 +4114,8 @@ def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, 
         document.content["sections"] = sections
         _save(document, "enhance-document")
         return (
-            f"Enhanced {count} section(s) across the document — improved clarity, "
-            "academic tone, and readability.",
+            f"Enhanced {count} section(s) across the document — improved vocabulary, "
+            "argument structure, evidence cues, and academic tone.",
             True,
         )
     return "No existing content found to enhance. Add text to sections first.", False
@@ -4306,18 +4376,20 @@ def _enhance_section(
         subsection_block = _extract_subsection_block_if_present(original, query)
 
     _done(plan, 1)
+    sec_title = section.get("title") or query
     enhance_instruction = (
         f"{instruction}\n\n"
-        "Improve this section: fix grammar, strengthen academic tone, improve argument clarity "
-        "and structure. Preserve all factual claims and headings. "
+        "Improve this section: fix grammar, strengthen academic tone, sharpen vocabulary, "
+        "improve argument clarity and paragraph structure. Add evidence signposting where appropriate. "
+        "Preserve all factual claims and headings. "
         "Return ONLY the improved text with no meta-commentary."
     )
 
     source_text = subsection_block[1] if subsection_block and subsection_block[1] else original
     try:
-        enhanced = enhance_text(source_text, topic, enhance_instruction)
+        enhanced = enhance_text(source_text, topic, enhance_instruction, section_title=sec_title)
     except Exception:
-        enhanced = _fallback_subsection_text(topic, section.get("title", query), query)
+        enhanced = _fallback_subsection_text(topic, sec_title, query)
 
     if subsection_block:
         heading = subsection_block[0]

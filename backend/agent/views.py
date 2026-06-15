@@ -317,3 +317,42 @@ class AIDetectView(APIView):
 
         result = detect_ai_content(full_text)
         return Response(result)
+
+
+class AcademicQualityView(APIView):
+    """
+    Rule-based academic writing quality check per section.
+    Returns per-section scores and actionable issue list.
+    """
+
+    def post(self, request, document_id: int):
+        try:
+            document = Document.objects.get(pk=document_id)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        from .ai_detector import academic_quality_check
+
+        custom_text = (request.data.get("text") or "").strip()
+        if custom_text:
+            result = academic_quality_check(custom_text)
+            return Response({"sections": [{"title": "Selection", "result": result}], "overall": result})
+
+        content = document.content or {}
+        sections_out = []
+        all_text_parts = []
+        for section in content.get("sections", []):
+            body = (section.get("content") or "").strip()
+            if not body:
+                continue
+            all_text_parts.append(body)
+            result = academic_quality_check(body)
+            sections_out.append({
+                "title": section.get("title") or "Untitled",
+                "result": result,
+            })
+
+        overall = academic_quality_check("\n\n".join(all_text_parts)) if all_text_parts else {
+            "quality_score": 0, "verdict": "insufficient_text", "issues": [], "word_count": 0
+        }
+        return Response({"sections": sections_out, "overall": overall})

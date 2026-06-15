@@ -753,6 +753,9 @@ export default function DocumentEditorPage({
   const [showAiDetectPanel, setShowAiDetectPanel] = useState(false);
   const [aiDetecting, setAiDetecting] = useState(false);
   const [aiDetectResult, setAiDetectResult] = useState(null);
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualityResult, setQualityResult] = useState(null);
+  const [showQualityPanel, setShowQualityPanel] = useState(false);
   // Ribbon state
   const [activeRibbonTab, setActiveRibbonTab] = useState('Home');
   // View state
@@ -1483,6 +1486,30 @@ export default function DocumentEditorPage({
     editor.normalize();
     setAiDetectResult(null);
     setShowAiDetectPanel(false);
+  }
+
+  async function runQualityCheck() {
+    const docId = document?.id;
+    if (!docId) return;
+    setQualityChecking(true);
+    setShowQualityPanel(true);
+    setShowAiDetectPanel(false);
+    setShowCommentsPanel(false);
+    setAiPanelOpen(true);
+    try {
+      const apiBase = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api').replace(/\/$/, '');
+      const res = await fetch(`${apiBase}/agent/${docId}/academic-quality/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      setQualityResult(data);
+    } catch (err) {
+      setQualityResult({ error: String(err?.message || 'Quality check failed') });
+    } finally {
+      setQualityChecking(false);
+    }
   }
 
   async function sendMessage(text) {
@@ -2723,14 +2750,14 @@ export default function DocumentEditorPage({
               <div className="dap-header-logo">
                 <Wand2 size={14} />
               </div>
-              <span className="dap-title">{showAiDetectPanel ? 'AI Detection' : showCommentsPanel ? 'Comments' : 'Copilot'}</span>
+              <span className="dap-title">{showQualityPanel ? 'Writing Check' : showAiDetectPanel ? 'AI Detection' : showCommentsPanel ? 'Comments' : 'Copilot'}</span>
             </div>
             <div className="dap-header-right">
               <button
                 type="button"
                 className={`dap-head-icon-btn${showAiDetectPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title="AI Detection results"
-                onClick={() => { setShowAiDetectPanel(p => !p); setShowCommentsPanel(false); }}
+                onClick={() => { setShowAiDetectPanel(p => !p); setShowCommentsPanel(false); setShowQualityPanel(false); }}
               >
                 <ShieldCheck size={13} className="dap-icon-btn" />
                 {aiDetectResult && !showAiDetectPanel && (
@@ -2739,9 +2766,22 @@ export default function DocumentEditorPage({
               </button>
               <button
                 type="button"
+                className={`dap-head-icon-btn${showQualityPanel ? ' dap-head-icon-btn--active' : ''}`}
+                title="Academic writing quality report"
+                onClick={() => { setShowQualityPanel(p => !p); setShowAiDetectPanel(false); setShowCommentsPanel(false); }}
+              >
+                <BookOpen size={13} className="dap-icon-btn" />
+                {qualityResult && !qualityResult.error && !showQualityPanel && (
+                  <span className="dap-comment-badge" style={{background: (qualityResult.overall?.quality_score ?? 100) >= 80 ? '#16a34a' : (qualityResult.overall?.quality_score ?? 100) >= 60 ? '#ca8a04' : '#ef4444'}}>
+                    {qualityResult.overall?.quality_score ?? '?'}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 className={`dap-head-icon-btn${showCommentsPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title={showCommentsPanel ? 'Back to Chat' : `Comments${docComments.length ? ` (${docComments.length})` : ''}`}
-                onClick={() => { setShowCommentsPanel(p => !p); setShowAiDetectPanel(false); }}
+                onClick={() => { setShowCommentsPanel(p => !p); setShowAiDetectPanel(false); setShowQualityPanel(false); }}
               >
                 <MessageCircle size={13} className="dap-icon-btn" />
                 {docComments.length > 0 && !showCommentsPanel && (
@@ -2855,8 +2895,99 @@ export default function DocumentEditorPage({
             </div>
           ) : null}
 
-          {/* ── Comments panel ── */}
-          {!showAiDetectPanel && showCommentsPanel ? (
+          {/* ── Academic Quality panel ── */}
+          {showQualityPanel && !showAiDetectPanel ? (
+            <div className="dap-comments-panel" style={{padding:'12px 14px',overflowY:'auto'}}>
+              {qualityChecking ? (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:'32px 0',color:'#6b7280'}}>
+                  <BookOpen size={32} strokeWidth={1.5} style={{animation:'spin 1.5s linear infinite'}}/>
+                  <span style={{fontSize:13}}>Analysing academic writing quality…</span>
+                </div>
+              ) : qualityResult?.error ? (
+                <div style={{color:'#ef4444',fontSize:12,padding:8}}>{qualityResult.error}</div>
+              ) : qualityResult ? (
+                <>
+                  {/* Overall score gauge */}
+                  {(() => {
+                    const score = qualityResult.overall?.quality_score ?? 0;
+                    const verdict = qualityResult.overall?.verdict ?? '';
+                    const color = score >= 80 ? '#16a34a' : score >= 60 ? '#ca8a04' : '#ef4444';
+                    const label = verdict === 'strong' ? 'Strong Academic Writing'
+                      : verdict === 'adequate' ? 'Adequate — Some Improvements Needed'
+                      : verdict === 'needs_improvement' ? 'Needs Improvement'
+                      : 'Poor — Significant Issues Found';
+                    return (
+                      <div style={{textAlign:'center',marginBottom:14}}>
+                        <BookOpen size={26} color={color} strokeWidth={1.8} style={{marginBottom:6}}/>
+                        <div style={{fontSize:28,fontWeight:700,color,lineHeight:1}}>{score}/100</div>
+                        <div style={{fontSize:11,color:'#6b7280',marginTop:3}}>Academic Quality Score</div>
+                        <div style={{fontSize:12,fontWeight:600,color,marginTop:4}}>{label}</div>
+                        <div style={{marginTop:8,height:6,borderRadius:4,background:'#e5e7eb',overflow:'hidden'}}>
+                          <div style={{height:'100%',width:`${score}%`,background:color,transition:'width 0.6s ease',borderRadius:4}}/>
+                        </div>
+                        <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'#9ca3af',marginTop:3}}>
+                          <span>Poor</span><span>Strong</span>
+                        </div>
+                        <div style={{fontSize:11,color:'#6b7280',marginTop:8}}>
+                          {qualityResult.overall?.word_count ?? 0} words · {qualityResult.overall?.sentence_count ?? 0} sentences
+                          {qualityResult.overall?.evidence_cues != null && (
+                            <span> · {qualityResult.overall.evidence_cues} citation cue{qualityResult.overall.evidence_cues !== 1 ? 's' : ''}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {/* Per-section breakdown */}
+                  {qualityResult.sections?.length > 0 && (
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:'#374151',marginBottom:8}}>Section Breakdown</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                        {qualityResult.sections.map((sec, si) => {
+                          const s = sec.result;
+                          const c = s.quality_score >= 80 ? '#16a34a' : s.quality_score >= 60 ? '#ca8a04' : '#ef4444';
+                          const sev_colors = {high:'#ef4444',medium:'#ca8a04',low:'#6b7280'};
+                          return (
+                            <div key={si} style={{border:`1px solid ${c}33`,borderRadius:6,overflow:'hidden'}}>
+                              <div style={{background:`${c}11`,padding:'6px 10px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                                <span style={{fontSize:11,fontWeight:600,color:'#374151'}}>{sec.title}</span>
+                                <span style={{fontSize:12,fontWeight:700,color:c}}>{s.quality_score}/100</span>
+                              </div>
+                              {s.issues?.length > 0 && (
+                                <div style={{padding:'6px 10px',display:'flex',flexDirection:'column',gap:5}}>
+                                  {s.issues.map((iss, ii) => (
+                                    <div key={ii} style={{fontSize:10,color:'#374151',lineHeight:1.5}}>
+                                      <span style={{display:'inline-block',fontSize:9,fontWeight:700,color:sev_colors[iss.severity]||'#6b7280',background:`${sev_colors[iss.severity]||'#6b7280'}15`,borderRadius:3,padding:'1px 4px',marginRight:5,textTransform:'uppercase'}}>
+                                        {iss.severity}
+                                      </span>
+                                      {iss.message}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {(!s.issues || s.issues.length === 0) && (
+                                <div style={{padding:'6px 10px',fontSize:10,color:'#16a34a'}}>✅ No issues detected</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{marginTop:12,padding:'8px 10px',background:'#f0f9ff',borderRadius:6,fontSize:10,color:'#0369a1',lineHeight:1.6}}>
+                    <strong>Quick fix:</strong> Type <em>"enhance [section name]"</em> to improve a specific section, or <em>"humanise"</em> to reduce AI-detection signals.
+                  </div>
+                </>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'32px 0',color:'#9ca3af'}}>
+                  <BookOpen size={28} strokeWidth={1.5}/>
+                  <span style={{fontSize:12,textAlign:'center'}}>Click <strong>Writing Check</strong> below to analyse academic quality.</span>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* ── Comments panel / Main Chat ── */}
+          {!showAiDetectPanel && !showQualityPanel && showCommentsPanel ? (
             <div className="dap-comments-panel">
               {docComments.length === 0 ? (
                 <div className="dap-comments-empty">
@@ -2907,7 +3038,7 @@ export default function DocumentEditorPage({
                 </>
               )}
             </div>
-          ) : (
+          ) : !showQualityPanel ? (
           <>
           {/* ── Messages area ── */}
           <div className="dap-messages">
@@ -3096,6 +3227,16 @@ export default function DocumentEditorPage({
                   <Wand2 size={12} />
                   <span>Humanise</span>
                 </button>
+                <button
+                  type="button"
+                  className={`dap-ai-action-btn${qualityResult && !qualityChecking ? ' active' : ''}`}
+                  title="Check academic writing quality — vocabulary, evidence, structure"
+                  disabled={qualityChecking}
+                  onClick={runQualityCheck}
+                >
+                  <BookOpen size={12} />
+                  <span>{qualityChecking ? 'Checking…' : 'Writing Check'}</span>
+                </button>
                 {aiDetectResult && !aiDetecting && (
                   <button
                     type="button"
@@ -3172,7 +3313,7 @@ export default function DocumentEditorPage({
             </div>
           )}
           </>
-          )}
+          ) : null}
         </aside>}
       </div>
 
