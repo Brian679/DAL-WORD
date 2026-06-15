@@ -1512,12 +1512,97 @@ export default function DocumentEditorPage({
     }
   }
 
+  // Keywords that trigger AI detection directly from chat input
+  const AI_DETECT_PHRASES = [
+    'check for ai', 'check ai', 'detect ai', 'ai detection', 'ai percentage',
+    'what is the ai', 'ai score', 'how much ai', 'scan for ai', 'ai check',
+    'is this ai', 'check if ai', 'ai content', 'turnitin', 'ai detect',
+    'check for artificial intelligence', 'scan ai', 'ai scan',
+  ];
+
+  // Keywords that trigger academic quality check from chat input
+  const QUALITY_CHECK_PHRASES = [
+    'check writing', 'writing check', 'academic quality', 'check academic',
+    'writing quality', 'check my writing', 'review my writing', 'grade my writing',
+    'academic check', 'writing feedback', 'critique the writing',
+  ];
+
+  function _isAiDetectRequest(text) {
+    const lower = text.toLowerCase();
+    return AI_DETECT_PHRASES.some(p => lower.includes(p));
+  }
+
+  function _isQualityCheckRequest(text) {
+    const lower = text.toLowerCase();
+    return QUALITY_CHECK_PHRASES.some(p => lower.includes(p));
+  }
+
   async function sendMessage(text) {
     if (!text.trim() && (!attachedFile)) return;
     if (isThinking) return;
     const userText = text.trim();
-    // If a file is attached, the message text should reflect the file, not the internal content
-    let displayText = userText;
+
+    // ── Intercept: AI detection request ──────────────────────────────────────
+    if (_isAiDetectRequest(userText) && !attachedFile) {
+      const userMsg = { id: Date.now(), role: 'user', text: userText };
+      const currentChatId = activeChatId;
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : { ...c, messages: [...c.messages, userMsg] }
+      ));
+      setInputValue('');
+      await runAiDetect();
+      // runAiDetect opens the panel and applies highlights; add a brief chat reply
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : {
+          ...c,
+          messages: [
+            ...c.messages,
+            {
+              id: Date.now() + 2,
+              role: 'assistant',
+              text: aiDetectResultRef.current?.error
+                ? `AI detection failed: ${aiDetectResultRef.current.error}`
+                : `AI detection complete. Overall AI score: **${(aiDetectResultRef.current?.overall_ai_percentage ?? 0).toFixed(1)}%** — ${
+                    aiDetectResultRef.current?.verdict === 'likely_ai' ? 'Likely AI-generated. Consider humanising the flagged passages.'
+                    : aiDetectResultRef.current?.verdict === 'mixed' ? 'Mixed content detected. Some passages show AI signals — review the highlighted sections.'
+                    : 'Content reads as human-written. No significant AI signals detected.'
+                  } Flagged sentences are highlighted in the document.`,
+              plan: [],
+            },
+          ],
+        }
+      ));
+      return;
+    }
+
+    // ── Intercept: Writing quality check request ──────────────────────────────
+    if (_isQualityCheckRequest(userText) && !attachedFile) {
+      const userMsg = { id: Date.now(), role: 'user', text: userText };
+      const currentChatId = activeChatId;
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : { ...c, messages: [...c.messages, userMsg] }
+      ));
+      setInputValue('');
+      await runQualityCheck();
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : {
+          ...c,
+          messages: [
+            ...c.messages,
+            {
+              id: Date.now() + 2,
+              role: 'assistant',
+              text: qualityResult?.error
+                ? `Writing check failed: ${qualityResult.error}`
+                : `Writing quality checked. Overall score: **${qualityResult?.overall?.quality_score ?? '?'}/100** — ${qualityResult?.overall?.verdict ?? ''}. See the Writing Check panel for a section-by-section breakdown.`,
+              plan: [],
+            },
+          ],
+        }
+      ));
+      return;
+    }
+
     if (attachedFile) {
         if (!displayText) {
              displayText = `Uploaded file: ${attachedFile.name}`;
@@ -1665,6 +1750,11 @@ export default function DocumentEditorPage({
       }
       if (result.document_updated) {
         onDocumentChanged?.();
+        // After humanising, auto re-run AI detection so the score updates in place
+        const wasHumanise = /humanis|humaniz/i.test(userText);
+        if (wasHumanise) {
+          setTimeout(() => runAiDetect(), 1800);
+        }
       }
     } catch (err) {
       clearProgressPolling();
@@ -2889,7 +2979,7 @@ export default function DocumentEditorPage({
               ) : (
                 <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'32px 0',color:'#9ca3af'}}>
                   <ShieldCheck size={28} strokeWidth={1.5}/>
-                  <span style={{fontSize:12}}>Click <strong>Detect AI</strong> in the WPS AI tab to scan the document.</span>
+                  <span style={{fontSize:12}}>Type <strong>"check for AI"</strong> or <strong>"AI percentage"</strong> in the chat to scan the document.</span>
                 </div>
               )}
             </div>
@@ -2980,7 +3070,7 @@ export default function DocumentEditorPage({
               ) : (
                 <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'32px 0',color:'#9ca3af'}}>
                   <BookOpen size={28} strokeWidth={1.5}/>
-                  <span style={{fontSize:12,textAlign:'center'}}>Click <strong>Writing Check</strong> below to analyse academic quality.</span>
+                  <span style={{fontSize:12,textAlign:'center'}}>Type <strong>"check writing quality"</strong> or <strong>"academic quality"</strong> in the chat to analyse the document.</span>
                 </div>
               )}
             </div>
@@ -3201,54 +3291,19 @@ export default function DocumentEditorPage({
                 }}
               />
               {/* AI quick-action row */}
-              <div className="dap-ai-actions-row">
-                <button
-                  type="button"
-                  className={`dap-ai-action-btn${aiDetectResult && !aiDetecting ? ' active' : ''}`}
-                  title="Detect AI-generated content (perplexity + burstiness)"
-                  disabled={aiDetecting}
-                  onClick={runAiDetect}
-                >
-                  <ShieldCheck size={12} />
-                  <span>{aiDetecting ? 'Scanning…' : 'Detect AI'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="dap-ai-action-btn"
-                  title="Rewrite AI-detected passages to sound more natural and human-written"
-                  disabled={isThinking || aiDetecting}
-                  onClick={async () => {
-                    // Always use the dedicated humanise intent — backend will detect + rewrite
-                    await sendMessage('Humanise the document — rewrite any AI-detected passages to sound natural and human-written');
-                    // After the agent rewrites, re-run AI detection to show the score improved
-                    setTimeout(() => runAiDetect(), 2000);
-                  }}
-                >
-                  <Wand2 size={12} />
-                  <span>Humanise</span>
-                </button>
-                <button
-                  type="button"
-                  className={`dap-ai-action-btn${qualityResult && !qualityChecking ? ' active' : ''}`}
-                  title="Check academic writing quality — vocabulary, evidence, structure"
-                  disabled={qualityChecking}
-                  onClick={runQualityCheck}
-                >
-                  <BookOpen size={12} />
-                  <span>{qualityChecking ? 'Checking…' : 'Writing Check'}</span>
-                </button>
-                {aiDetectResult && !aiDetecting && (
+              {aiDetectResult && !aiDetecting && (
+                <div className="dap-ai-actions-row">
                   <button
                     type="button"
                     className="dap-ai-action-btn dap-ai-action-btn--clear"
-                    title="Clear AI highlights"
+                    title="Clear AI highlights from document"
                     onClick={clearAiHighlights}
                   >
                     <X size={12} />
-                    <span>Clear</span>
+                    <span>Clear highlights</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
               {attachedFile && (
                 <div className="dap-attachment-chip">
                   <Paperclip size={11} />
@@ -3266,7 +3321,7 @@ export default function DocumentEditorPage({
               <div className="dap-composer-box">
                 <textarea
                   className="dap-composer-input"
-                  placeholder={groundedResearch ? 'Ask Copilot (research mode)…' : 'Ask Copilot…'}
+                  placeholder={groundedResearch ? 'Ask Copilot (research mode)…' : 'Ask anything — e.g. "check for AI", "humanise", "write a report on…"'}
                   rows={1}
                   value={inputValue}
                   onChange={(e) => {
