@@ -1103,6 +1103,7 @@ def generate_dissertation_plan_llm(
     message: str,
     research_design: str = "quantitative",
     objectives: list[str] | None = None,
+    guidelines: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Ask the LLM to produce the complete dissertation chapter and section plan.
 
@@ -1116,6 +1117,22 @@ def generate_dissertation_plan_llm(
         obj_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(objectives[:6]))
         obj_block = f"Existing research objectives (must be reflected in the plan):\n{obj_lines}\n\n"
 
+    # Build a guidelines block from parsed user requirements
+    guide = guidelines or {}
+    guideline_lines = []
+    if guide.get("citation_style"):
+        guideline_lines.append(f"- Citation style: {guide['citation_style']}")
+    if guide.get("academic_level"):
+        guideline_lines.append(f"- Academic level: {guide['academic_level']}")
+    if guide.get("target_words"):
+        guideline_lines.append(f"- Target word count: ~{guide['target_words']:,} words (plan sections accordingly)")
+    if guide.get("focus_notes"):
+        guideline_lines.append(f"- Student-specified requirements:\n  {guide['focus_notes'][:400]}")
+    guidelines_block = (
+        "Student guidelines to honour in the chapter structure:\n"
+        + "\n".join(guideline_lines) + "\n\n"
+    ) if guideline_lines else ""
+
     prompt = (
         "You are an expert academic dissertation planner.\n"
         "A student has asked you to help write a dissertation. Your task is to generate a detailed, "
@@ -1123,6 +1140,7 @@ def generate_dissertation_plan_llm(
         f"Topic: {topic or message[:300]}\n"
         f"Research type: {research_design}\n"
         f"Student request: {message[:500]}\n"
+        f"{guidelines_block}"
         f"{obj_block}\n"
         "Return ONLY valid JSON — no markdown fences, no explanation. Use this exact schema:\n"
         "[\n"
@@ -2889,6 +2907,82 @@ def _requested_page_target(instruction: str) -> int | None:
     if single:
         return int(single.group(1))
     return None
+
+
+def _requested_word_target(instruction: str) -> int | None:
+    """Parse an explicit word count from the user's instruction."""
+    text = (instruction or "").lower()
+    # "15000 words", "15,000 words", "15k words"
+    m = re.search(r"(\d[\d,]*)\s*k?\s*words?\b", text)
+    if m:
+        raw = m.group(1).replace(",", "")
+        val = int(raw)
+        # detect "15k words" — if the original had a "k" before "word"
+        if re.search(r"\d+\s*k\s*words?\b", text):
+            val *= 1000
+        return val
+    # "15k" standalone — in a writing request context, treat as 15,000 words
+    m = re.search(r"\b(\d+)\s*k\b", text)
+    if m:
+        return int(m.group(1)) * 1000
+    # derive from pages
+    pages = _requested_page_target(instruction)
+    return pages * 500 if pages else None
+
+
+def _parse_user_guidelines(instruction: str) -> dict[str, Any]:
+    """Extract structured writing guidelines from a free-form user instruction.
+
+    Returns a dict with:
+      citation_style  — "APA" | "Harvard" | "MLA" | "Chicago" | "Vancouver"
+      academic_level  — "Undergraduate" | "Masters" | "PhD"
+      target_words    — int | None
+      focus_notes     — any free-text guidelines the LLM should follow
+    """
+    text = (instruction or "").lower()
+
+    # Citation / referencing style — search full original instruction (not just lowercased)
+    citation_style = "APA"
+    if "harvard" in text:
+        citation_style = "Harvard"
+    elif "chicago" in text:
+        citation_style = "Chicago"
+    elif "ieee" in text:
+        citation_style = "IEEE"
+    elif "mla" in text:
+        citation_style = "MLA"
+    elif "vancouver" in text:
+        citation_style = "Vancouver"
+    elif "apa" in text:
+        citation_style = "APA"
+
+    # Academic level
+    academic_level = "Masters"
+    if any(k in text for k in ["phd", "doctoral", "doctorate", "d.phil"]):
+        academic_level = "PhD"
+    elif any(k in text for k in ["undergrad", "bachelor", "bsc", "ba ", "first year", "second year", "third year"]):
+        academic_level = "Undergraduate"
+    elif any(k in text for k in ["master", "msc", "mba", "postgrad", "pgce"]):
+        academic_level = "Masters"
+
+    # Word count target
+    target_words = _requested_word_target(instruction)
+
+    # Capture any explicit "guidelines:" or "requirements:" block
+    focus_notes = ""
+    for marker in ("guidelines:", "requirements:", "instructions:", "notes:", "format:", "please note:"):
+        idx = text.find(marker)
+        if idx != -1:
+            focus_notes = instruction[idx:idx + 800].strip()
+            break
+
+    return {
+        "citation_style": citation_style,
+        "academic_level": academic_level,
+        "target_words": target_words,
+        "focus_notes": focus_notes,
+        "raw": instruction,
+    }
 
 
 def _chapter_word_count_target(chapter_number: int | None, instruction: str, nodes: list[dict[str, Any]]) -> int:
@@ -5124,10 +5218,26 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
         f"\nExisting document context (for continuity):\n{doc_context[-2000:]}\n"
         if doc_context.strip() else ""
     )
+    # Extract guidelines to honour in the plan
+    user_guidelines = _parse_user_guidelines(instruction)
+    guideline_lines = []
+    if user_guidelines.get("citation_style"):
+        guideline_lines.append(f"- Citation style: {user_guidelines['citation_style']}")
+    if user_guidelines.get("academic_level"):
+        guideline_lines.append(f"- Academic level: {user_guidelines['academic_level']}")
+    if user_guidelines.get("target_words"):
+        guideline_lines.append(f"- Target word count: ~{user_guidelines['target_words']:,} words")
+    if user_guidelines.get("focus_notes"):
+        guideline_lines.append(f"- Additional requirements: {user_guidelines['focus_notes'][:300]}")
+    guidelines_block = (
+        "USER GUIDELINES TO HONOUR:\n" + "\n".join(guideline_lines) + "\n\n"
+    ) if guideline_lines else ""
+
     prompt = (
         "You are an expert academic writer. A user has made the following writing request.\n\n"
         f"REQUEST: {instruction[:800]}\n"
         f"TOPIC: {topic or '(infer from the request)'}\n"
+        f"{guidelines_block}"
         f"{ctx_block}\n"
         "Design a COMPLETE writing plan for exactly what the user asked. "
         "Do not apply a generic template — let the request determine structure, length, and type.\n\n"
@@ -5143,6 +5253,7 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
         "  ]\n"
         "}\n\n"
         "Rules:\n"
+        "- Honour ALL user guidelines above — especially citation style, academic level, and word count.\n"
         "- Section titles must name the actual topic content — NOT generic labels. "
         "If about climate finance, write '2. Green Bond Market Failures', not '2. Background'.\n"
         "- Adapt structure completely to the request: "
@@ -5223,6 +5334,15 @@ def _plan_and_write_document(
 
     doc_context = _full_context_for_generation(document)
 
+    # Parse user-provided guidelines to pass into every section
+    user_guidelines = _parse_user_guidelines(instruction)
+    _style_note = (
+        f"Citation style: {user_guidelines['citation_style']}. "
+        f"Academic level: {user_guidelines['academic_level']}. "
+    )
+    if user_guidelines.get("focus_notes"):
+        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
+
     # ── Step 1: Let the LLM design the entire plan ────────────────────────────
     writing_plan = _llm_writing_plan(instruction, topic, doc_context)
 
@@ -5233,8 +5353,9 @@ def _plan_and_write_document(
     estimated_words = writing_plan["estimated_words"]
 
     logger.info(
-        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s sections=%d",
+        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s sections=%d level=%s style=%s",
         doc_type, estimated_words, needs_todo, len(sections_plan),
+        user_guidelines["academic_level"], user_guidelines["citation_style"],
     )
 
     # Build the to-do list — always show section steps so the user sees progress
@@ -5262,7 +5383,8 @@ def _plan_and_write_document(
                     f"Document type: {doc_type}\n"
                     f"Full user request: {instruction[:600]}\n"
                     f"Research design: {design}\n"
-                    f"Writing note for this section: {notes}\n\n"
+                    f"Writing note for this section: {notes}\n"
+                    f"GUIDELINES TO FOLLOW: {_style_note}\n\n"
                     f"Document written so far:\n{context_so_far[-3500:]}"
                 ),
                 word_count=wc,
@@ -5342,6 +5464,15 @@ def _write_dissertation(
 
     design = _research_design(instruction, topic, document)
 
+    # ── Parse user-provided guidelines (style, level, word count, notes) ─
+    user_guidelines = _parse_user_guidelines(instruction)
+    logger.info(
+        "_write_dissertation: guidelines — level=%s style=%s target_words=%s",
+        user_guidelines["academic_level"],
+        user_guidelines["citation_style"],
+        user_guidelines.get("target_words"),
+    )
+
     # ── Step 0: Intent parsing via PlannerAgent ───────────────────────────
     from .planner import PlannerAgent as _PlannerAgent
     _planner = _PlannerAgent()
@@ -5371,7 +5502,11 @@ def _write_dissertation(
         logger.info("_write_dissertation: using pre-generated plan (%d chapters)", len(llm_chapters))
     else:
         logger.info("_write_dissertation: calling LLM to generate plan for topic=%s", topic[:80])
-        llm_chapters = generate_dissertation_plan_llm(topic, instruction, design, objectives=objectives_early)
+        llm_chapters = generate_dissertation_plan_llm(
+            topic, instruction, design,
+            objectives=objectives_early,
+            guidelines=user_guidelines,
+        )
 
     chapter_blueprints = llm_chapters_to_blueprints(llm_chapters)
 
@@ -5389,10 +5524,21 @@ def _write_dissertation(
     figure_counter = [_next_caption_number(document, "figure")]
     table_counter = [_next_caption_number(document, "table")]
 
+    # Build a compact guidelines string to inject into each subsection prompt
+    _style_note = (
+        f"Citation style: {user_guidelines['citation_style']}. "
+        f"Academic level: {user_guidelines['academic_level']}. "
+    )
+    if user_guidelines.get("focus_notes"):
+        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
+    # Prepend to the raw instruction so ContentGenerator sees it
+    enriched_instruction = f"{_style_note}\n\n{instruction}"
+
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
         ch_num = _chapter_number_from_title(chapter_title)
-        ch_word_count = _chapter_default_word_count(ch_num)
+        # Respect user's word count target; fall back to chapter defaults
+        ch_word_count = _chapter_word_count_target(ch_num, instruction, chapter["nodes"])
 
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
@@ -5437,6 +5583,7 @@ def _write_dissertation(
             table_counter=table_counter,
             on_node_completed=_persist_subsection_progress,
             default_word_count=ch_word_count,
+            user_instruction=enriched_instruction,
         )
 
         section_payload["content"] = chapter_text if chapter_text.strip() else ""
