@@ -3938,7 +3938,7 @@ def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, 
 
 def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
     """Detect AI-generated sentences per section and rewrite them to sound human-written."""
-    from .ai_detector import detect_ai_content
+    from .ai_detector import detect_ai_content, rule_based_humanise
 
     sections = (document.content or {}).get("sections", [])
     if not sections:
@@ -3948,6 +3948,7 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
     _done(plan, 0)  # Running AI detection
 
     humanised = 0
+    llm_used = False
     for i, section in enumerate(sections):
         content = (section.get("content") or "").strip()
         if not content:
@@ -3963,13 +3964,23 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
         # Extract the specific AI phrases found so the LLM can target them
         ai_phrase_snippets = [s["text"][:80] for s in flagged if s.get("ai_probability", 0) >= 0.45]
 
+        new_content = None
+        # Try LLM first; fall back to rule-based substitution if unavailable
         try:
             new_content = humanise_text(content, topic or document.title, ai_phrase_snippets)
             if new_content and len(new_content.strip()) > 50:
-                sections[i]["content"] = new_content.strip()
-                humanised += 1
+                llm_used = True
+            else:
+                new_content = None
         except Exception as exc:
-            logger.warning("Humanise section %d failed: %s", i, exc)
+            logger.info("LLM humanise unavailable (%s), using rule-based fallback.", exc)
+
+        if not new_content:
+            new_content = rule_based_humanise(content)
+
+        if new_content and new_content.strip() != content:
+            sections[i]["content"] = new_content.strip()
+            humanised += 1
 
         _done(plan, 2)  # Rewriting with human voice
 
@@ -3979,18 +3990,22 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
     if humanised:
         document.content["sections"] = sections
         _save(document, "humanise-ai-sections")
-        # Report with before/after AI %
+        # Compute after score for the reply
         try:
-            from .ai_detector import detect_ai_content as _detect
             full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
-            after_pct = _detect(full_text).get("overall_ai_percentage", 0)
+            after_result = detect_ai_content(full_text)
+            after_pct = after_result.get("overall_ai_percentage", 0)
+            after_verdict = after_result.get("verdict", "")
         except Exception:
             after_pct = None
+            after_verdict = ""
 
-        after_msg = f" Document AI score is now ~{after_pct}%." if after_pct is not None else ""
+        method = "AI model" if llm_used else "rule-based phrase substitution"
+        after_msg = f" AI score dropped to **{after_pct}%** ({after_verdict.replace('_',' ')})." if after_pct is not None else ""
         return (
-            f"Humanised {humanised} section(s) — removed AI clichés, varied sentence rhythm, "
-            f"and added authentic voice.{after_msg} Run **Detect AI** again to see the improvement.",
+            f"Humanised {humanised} section(s) using {method} — replaced AI clichés, "
+            f"varied sentence structure, and added authentic voice.{after_msg} "
+            "Click **Detect AI** to see the highlighted improvement.",
             True,
         )
 

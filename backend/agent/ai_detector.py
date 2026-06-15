@@ -180,3 +180,87 @@ def detect_ai_content(text: str) -> dict[str, Any]:
         "verdict": verdict,
         "sentences": sentence_results,
     }
+
+
+# ── Rule-based humaniser ───────────────────────────────────────────────────
+# Applied when no LLM key is available, or as a pre-pass before LLM polish.
+# Each entry: (compiled_regex, replacement_string)
+
+_HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
+    # Hedge openers
+    (re.compile(r"\bIt is important to note that\b", re.I), "Note that"),
+    (re.compile(r"\bIt is worth noting that\b", re.I), "Worth noting:"),
+    (re.compile(r"\bIt is (?:crucial|essential|vital) to\b", re.I), "To"),
+    (re.compile(r"\bIt is evident that\b", re.I), "Clearly,"),
+    (re.compile(r"\bIt (?:is|can be) (?:argued|said|noted|observed) that\b", re.I), "I would argue that"),
+    (re.compile(r"\bNeedless to say,?\s*", re.I), ""),
+    (re.compile(r"\bIt goes without saying that\b", re.I), "Obviously,"),
+    (re.compile(r"\bHaving said that,?\s*", re.I), "That said, "),
+    (re.compile(r"\bWithout (?:a )?(?:doubt|question|reservation)\b", re.I), "Clearly"),
+    (re.compile(r"\bBy and large\b", re.I), "Overall"),
+    (re.compile(r"\bBy no means\b", re.I), "Not"),
+    # Time/world clichés
+    (re.compile(r"\bIn today['’]?s (?:world|society|age|era|landscape)\b", re.I), "Today"),
+    (re.compile(r"\bThroughout history\b", re.I), "Historically"),
+    (re.compile(r"\bThroughout the ages\b", re.I), "Over the years"),
+    # Meta-essay phrases
+    (re.compile(r"\bThis (?:essay|paper|study|section|chapter|report) (?:will|aims to|seeks to|endeavours? to)\b", re.I), "This study"),
+    (re.compile(r"\bThis (?:essay|paper|study|section|report) (?:will|aims to) (?:provide|offer|present) a (?:comprehensive|detailed)\b", re.I), "This paper presents"),
+    (re.compile(r"\bThis (?:highlights?|underscores?|demonstrates?|showcases?|illuminates?) the\b", re.I), "This shows the"),
+    (re.compile(r"\bIn (?:conclusion|summary),? (?:it is|we can|this study|this paper)\b", re.I), "In short,"),
+    # Buzzwords
+    (re.compile(r"\bdelve(?:s|d)?\s+into\b", re.I), "explore"),
+    (re.compile(r"\bcomprehensive (?:overview|analysis|examination|understanding)\b", re.I), "overview"),
+    (re.compile(r"\bholistic approach\b", re.I), "broad approach"),
+    (re.compile(r"\bparadigm shift\b", re.I), "major change"),
+    (re.compile(r"\binextricably linked\b", re.I), "closely connected"),
+    (re.compile(r"\bseamlessly integrat\b", re.I), "integrat"),
+    (re.compile(r"\brobust (?:framework|methodology|approach|solution|system)\b", re.I), lambda m: m.group().split()[-1]),
+    (re.compile(r"\bthe (?:realm|landscape|domain) of\b", re.I), "the field of"),
+    (re.compile(r"\bthe aforementioned\b", re.I), "these"),
+    (re.compile(r"\baforementioned\b", re.I), "above-mentioned"),
+    (re.compile(r"\bever-?(?:evolving|changing|growing)\b", re.I), "changing"),
+    (re.compile(r"\bmyriad(?:\s+of)?\b", re.I), "many"),
+    (re.compile(r"\bintricacies? of\b", re.I), "details of"),
+    (re.compile(r"\bfoster(?:s|ed|ing)? (?:a )?(?:deeper|better|greater|more nuanced) understanding\b", re.I), "build understanding"),
+    (re.compile(r"\bunderscores? the (?:importance|significance|need|necessity)\b", re.I), "highlights the importance"),
+    (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), "highlights the importance"),
+    (re.compile(r"\bplays? (?:a )?(?:crucial|pivotal|significant|vital|key) role\b", re.I), "plays a key role"),
+    (re.compile(r"\bsignificantly impacts?\b", re.I), "affects"),
+    (re.compile(r"\bpotential (?:benefits?|implications?|challenges?)\b", re.I), lambda m: m.group().split()[-1]),
+    # Connective filler
+    (re.compile(r"\bFurthermore,?\s+", re.I), "Also, "),
+    (re.compile(r"\bMoreover,?\s+", re.I), "And "),
+    (re.compile(r"\bConsequently,?\s+", re.I), "So "),
+    (re.compile(r"\bAdditionally,?\s+", re.I), "Also, "),
+    (re.compile(r"\bNotably,?\s+", re.I), ""),
+    (re.compile(r"\bImportantly,?\s+", re.I), ""),
+    (re.compile(r"\bEssentially,?\s+", re.I), ""),
+    (re.compile(r"\bFundamentally,?\s+", re.I), ""),
+    (re.compile(r"\bUltimately,?\s+", re.I), "In the end, "),
+    (re.compile(r"\bthe importance of (.{3,40}) cannot be (?:overstated|understated|emphasised|emphasized)\b", re.I), lambda m: f"{m.group(1)} matters a great deal"),
+    # Passive constructions (common AI pattern)
+    (re.compile(r"\bIt (?:has|have) been (?:noted|observed|suggested|argued) that\b", re.I), "Research suggests that"),
+    (re.compile(r"\bit is (?:widely )?(?:recognised|recognized|acknowledged|accepted) that\b", re.I), "Most researchers agree that"),
+]
+
+
+def rule_based_humanise(text: str) -> str:
+    """
+    Apply deterministic phrase substitutions to reduce AI-detection scores.
+    Works without any LLM — replaces known AI clichés with plainer alternatives.
+    """
+    result = text
+    for pattern, repl in _HUMANISE_RULES:
+        if callable(repl):
+            result = pattern.sub(repl, result)
+        else:
+            result = pattern.sub(repl, result)
+    # Collapse accidental double-spaces
+    result = re.sub(r"  +", " ", result)
+    # Fix 'Also, Also,' chains
+    result = re.sub(r"\bAlso, Also,?\s+", "Also, ", result)
+    # Remove stray leading commas after blank substitutions
+    result = re.sub(r"\.\s+,\s+", ". ", result)
+    result = re.sub(r"^\s*,\s*", "", result, flags=re.MULTILINE)
+    return result.strip()
