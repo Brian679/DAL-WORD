@@ -3069,6 +3069,46 @@ export default function DocumentEditorPage({
                   e.target.value = '';
                 }}
               />
+              {/* AI quick-action row */}
+              <div className="dap-ai-actions-row">
+                <button
+                  type="button"
+                  className={`dap-ai-action-btn${aiDetectResult && !aiDetecting ? ' active' : ''}`}
+                  title="Detect AI-generated content (perplexity + burstiness)"
+                  disabled={aiDetecting}
+                  onClick={runAiDetect}
+                >
+                  <ShieldCheck size={12} />
+                  <span>{aiDetecting ? 'Scanning…' : 'Detect AI'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="dap-ai-action-btn"
+                  title="Rewrite AI-detected passages to sound more natural and human-written"
+                  disabled={isThinking}
+                  onClick={() => {
+                    const flagged = aiDetectResult?.sentences?.filter(s => s.label !== 'likely_human') || [];
+                    const prompt = flagged.length > 0
+                      ? `Humanise these AI-detected passages to sound more natural and personal — remove clichéd AI phrases and rewrite in a clear, authentic academic voice:\n\n${flagged.map(s => `• "${s.text}"`).join('\n')}`
+                      : 'Rewrite the document to sound more natural and human-written. Remove repetitive AI phrases like "It is important to note", "In today\'s world", "holistic approach", "paradigm shift", "delve into", "comprehensive overview" and replace them with direct, authentic phrasing.';
+                    sendMessage(prompt);
+                  }}
+                >
+                  <Wand2 size={12} />
+                  <span>Humanise</span>
+                </button>
+                {aiDetectResult && !aiDetecting && (
+                  <button
+                    type="button"
+                    className="dap-ai-action-btn dap-ai-action-btn--clear"
+                    title="Clear AI highlights"
+                    onClick={clearAiHighlights}
+                  >
+                    <X size={12} />
+                    <span>Clear</span>
+                  </button>
+                )}
+              </div>
               {attachedFile && (
                 <div className="dap-attachment-chip">
                   <Paperclip size={11} />

@@ -2563,6 +2563,32 @@ ul {
     background: #ffffff;
 }
 
+.dap-ai-actions-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 7px;
+    flex-wrap: wrap;
+}
+.dap-ai-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 9px;
+    border-radius: 14px;
+    border: 1px solid #d0d7de;
+    background: #f6f8fa;
+    color: #444;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.dap-ai-action-btn:hover:not(:disabled) { background: #e8f0fe; border-color: #a8c4f8; color: #1a73e8; }
+.dap-ai-action-btn.active { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; }
+.dap-ai-action-btn--clear { color: #6b7280; }
+.dap-ai-action-btn--clear:hover:not(:disabled) { background: #fef2f2; border-color: #fca5a5; color: #dc2626; }
+.dap-ai-action-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
 .dap-attachment-chip {
     display: inline-flex;
     align-items: center;
