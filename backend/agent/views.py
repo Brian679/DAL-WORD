@@ -1,4 +1,4 @@
-﻿import io
+import io
 import logging
 
 from rest_framework import status
@@ -283,3 +283,37 @@ class DissertationPlanView(APIView):
         # Convert to the flat step format the frontend uses
         flat_steps = llm_chapters_to_flat_steps(llm_chapters)
         return Response({"plan": flat_steps, "chapters": llm_chapters})
+
+
+class AIDetectView(APIView):
+    """
+    Detect AI-generated content in a document.
+
+    Uses perplexity approximation + burstiness analysis, mirroring the
+    two-signal methodology documented in Turnitin's AI writing detector.
+    """
+
+    def post(self, request, document_id: int):
+        try:
+            document = Document.objects.get(pk=document_id)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        from .ai_detector import detect_ai_content
+
+        # Caller may pass raw text directly (e.g. selected passage).
+        # Otherwise we flatten all document sections.
+        custom_text = (request.data.get("text") or "").strip()
+        if custom_text:
+            full_text = custom_text
+        else:
+            content = document.content or {}
+            parts = []
+            for section in content.get("sections", []):
+                body = (section.get("content") or "").strip()
+                if body:
+                    parts.append(body)
+            full_text = "\n\n".join(parts)
+
+        result = detect_ai_content(full_text)
+        return Response(result)

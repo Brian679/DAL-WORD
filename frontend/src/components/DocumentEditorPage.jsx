@@ -68,8 +68,11 @@ import {
   MoreHorizontal,
   MessageCircle,
   CheckCircle2,
+  ShieldCheck,
+  AlertTriangle,
+  ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -746,6 +749,10 @@ export default function DocumentEditorPage({
   const [aiPanelOpen, setAiPanelOpen] = useState(true);
   // Comments panel (shown inside the AI panel)
   const [showCommentsPanel, setShowCommentsPanel] = useState(false);
+  // AI detection panel
+  const [showAiDetectPanel, setShowAiDetectPanel] = useState(false);
+  const [aiDetecting, setAiDetecting] = useState(false);
+  const [aiDetectResult, setAiDetectResult] = useState(null);
   // Ribbon state
   const [activeRibbonTab, setActiveRibbonTab] = useState('Home');
   // View state
@@ -1365,6 +1372,63 @@ export default function DocumentEditorPage({
         beforeSections: cloneSections(beforeSections),
       },
     }));
+  }
+
+  function _applyAiHighlights(result) {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    // Clear previous AI highlights
+    editor.querySelectorAll('[data-ai-sent]').forEach((el) => {
+      const parent = el.parentNode;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    });
+    if (!result?.sentences?.length) return;
+    result.sentences
+      .filter((s) => s.label !== 'likely_human')
+      .forEach(({ text, label, ai_probability }) => {
+        const bg = label === 'likely_ai' ? 'rgba(239,68,68,0.15)' : 'rgba(234,179,8,0.15)';
+        const border = label === 'likely_ai' ? '#ef4444' : '#ca8a04';
+        const pct = Math.round(ai_probability * 100);
+        const safe = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        try {
+          editor.innerHTML = editor.innerHTML.replace(
+            new RegExp(safe, 'g'),
+            `<span data-ai-sent="${label}" style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;cursor:help" title="AI probability: ${pct}% (${label.replace('_', ' ')})">${text}</span>`,
+          );
+        } catch {
+          // Regex may fail for unusual sentence content — skip silently
+        }
+      });
+  }
+
+  async function runAiDetect() {
+    if (!documentId) return;
+    setAiDetecting(true);
+    setShowAiDetectPanel(true);
+    setShowCommentsPanel(false);
+    setAiPanelOpen(true);
+    try {
+      const result = await detectAIContent(documentId);
+      setAiDetectResult(result);
+      _applyAiHighlights(result);
+    } catch (err) {
+      setAiDetectResult({ error: String(err?.message || 'Detection failed') });
+    } finally {
+      setAiDetecting(false);
+    }
+  }
+
+  function clearAiHighlights() {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.querySelectorAll('[data-ai-sent]').forEach((el) => {
+      const parent = el.parentNode;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+    });
+    setAiDetectResult(null);
+    setShowAiDetectPanel(false);
   }
 
   async function sendMessage(text) {
@@ -2508,6 +2572,34 @@ export default function DocumentEditorPage({
                   </div>
                   <span className="doc-tool-group-label">Grammar</span>
                 </div>
+                {/* AI Detection */}
+                <div className="doc-tool-group">
+                  <div className="doc-tool-group-rows">
+                    <div className="doc-tool-group-row">
+                      <button
+                        className={`doc-tool-btn doc-tool-btn--labeled${aiDetectResult && !aiDetecting ? ' doc-tool-btn--active' : ''}`}
+                        title="Detect AI-generated content (perplexity + burstiness analysis)"
+                        disabled={aiDetecting}
+                        onClick={runAiDetect}
+                      >
+                        <ShieldCheck size={13}/>
+                        <span>{aiDetecting ? 'Scanning…' : 'Detect AI'}</span>
+                      </button>
+                    </div>
+                    <div className="doc-tool-group-row">
+                      <button
+                        className="doc-tool-btn doc-tool-btn--labeled"
+                        title="Clear AI detection highlights"
+                        disabled={!aiDetectResult}
+                        onClick={clearAiHighlights}
+                      >
+                        <X size={13}/>
+                        <span>Clear</span>
+                      </button>
+                    </div>
+                  </div>
+                  <span className="doc-tool-group-label">AI Detection</span>
+                </div>
                 {/* Tone */}
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
@@ -2577,14 +2669,25 @@ export default function DocumentEditorPage({
               <div className="dap-header-logo">
                 <Wand2 size={14} />
               </div>
-              <span className="dap-title">{showCommentsPanel ? 'Comments' : 'Copilot'}</span>
+              <span className="dap-title">{showAiDetectPanel ? 'AI Detection' : showCommentsPanel ? 'Comments' : 'Copilot'}</span>
             </div>
             <div className="dap-header-right">
               <button
                 type="button"
+                className={`dap-head-icon-btn${showAiDetectPanel ? ' dap-head-icon-btn--active' : ''}`}
+                title="AI Detection results"
+                onClick={() => { setShowAiDetectPanel(p => !p); setShowCommentsPanel(false); }}
+              >
+                <ShieldCheck size={13} className="dap-icon-btn" />
+                {aiDetectResult && !showAiDetectPanel && (
+                  <span className="dap-comment-badge" style={{background: aiDetectResult.verdict === 'likely_ai' ? '#ef4444' : aiDetectResult.verdict === 'mixed' ? '#ca8a04' : '#16a34a'}}>!</span>
+                )}
+              </button>
+              <button
+                type="button"
                 className={`dap-head-icon-btn${showCommentsPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title={showCommentsPanel ? 'Back to Chat' : `Comments${docComments.length ? ` (${docComments.length})` : ''}`}
-                onClick={() => setShowCommentsPanel(p => !p)}
+                onClick={() => { setShowCommentsPanel(p => !p); setShowAiDetectPanel(false); }}
               >
                 <MessageCircle size={13} className="dap-icon-btn" />
                 {docComments.length > 0 && !showCommentsPanel && (
@@ -2608,8 +2711,98 @@ export default function DocumentEditorPage({
             </div>
           </div>
 
+          {/* ── AI Detection panel ── */}
+          {showAiDetectPanel ? (
+            <div className="dap-comments-panel" style={{padding:'12px 14px',overflowY:'auto'}}>
+              {aiDetecting ? (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:'32px 0',color:'#6b7280'}}>
+                  <ShieldCheck size={32} strokeWidth={1.5} style={{animation:'spin 1.5s linear infinite'}}/>
+                  <span style={{fontSize:13}}>Scanning for AI content…</span>
+                </div>
+              ) : aiDetectResult?.error ? (
+                <div style={{color:'#ef4444',fontSize:12,padding:8}}>{aiDetectResult.error}</div>
+              ) : aiDetectResult ? (
+                <>
+                  {/* Score gauge */}
+                  <div style={{textAlign:'center',marginBottom:14}}>
+                    {(() => {
+                      const pct = aiDetectResult.overall_ai_percentage ?? 0;
+                      const color = pct >= 65 ? '#ef4444' : pct >= 30 ? '#ca8a04' : '#16a34a';
+                      const label = aiDetectResult.verdict === 'likely_ai' ? 'Likely AI-Generated'
+                        : aiDetectResult.verdict === 'mixed' ? 'Mixed (Human + AI)'
+                        : 'Likely Human-Written';
+                      const Icon = aiDetectResult.verdict === 'likely_ai' ? ShieldAlert
+                        : aiDetectResult.verdict === 'mixed' ? AlertTriangle
+                        : ShieldCheck;
+                      return (
+                        <>
+                          <Icon size={28} color={color} strokeWidth={1.8} style={{marginBottom:6}}/>
+                          <div style={{fontSize:28,fontWeight:700,color,lineHeight:1}}>{pct}%</div>
+                          <div style={{fontSize:11,color:'#6b7280',marginTop:3}}>AI Probability</div>
+                          <div style={{fontSize:12,fontWeight:600,color,marginTop:4}}>{label}</div>
+                          <div style={{marginTop:8,height:6,borderRadius:4,background:'#e5e7eb',overflow:'hidden'}}>
+                            <div style={{height:'100%',width:`${pct}%`,background:color,transition:'width 0.6s ease',borderRadius:4}}/>
+                          </div>
+                          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'#9ca3af',marginTop:3}}>
+                            <span>Human</span><span>AI</span>
+                          </div>
+                          <div style={{fontSize:11,color:'#6b7280',marginTop:8}}>
+                            Burstiness: <strong>{aiDetectResult.burstiness?.toFixed(2)}</strong>
+                            <span style={{marginLeft:6,color:'#9ca3af'}}>(low = uniform = AI)</span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                  {/* Legend */}
+                  <div style={{display:'flex',gap:10,fontSize:10,color:'#6b7280',marginBottom:10,flexWrap:'wrap'}}>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'rgba(239,68,68,0.3)',border:'1px solid #ef4444',display:'inline-block'}}/> Likely AI</span>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'rgba(234,179,8,0.3)',border:'1px solid #ca8a04',display:'inline-block'}}/> Uncertain</span>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'transparent',border:'1px solid #d1d5db',display:'inline-block'}}/> Human</span>
+                  </div>
+                  {/* Flagged sentences */}
+                  {aiDetectResult.sentences?.filter(s => s.label !== 'likely_human').length > 0 ? (
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:'#374151',marginBottom:6}}>
+                        Flagged passages ({aiDetectResult.sentences.filter(s=>s.label!=='likely_human').length})
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                        {aiDetectResult.sentences.filter(s=>s.label!=='likely_human').map((s,i)=>{
+                          const c = s.label==='likely_ai' ? '#ef4444' : '#ca8a04';
+                          const bg = s.label==='likely_ai' ? 'rgba(239,68,68,0.07)' : 'rgba(234,179,8,0.07)';
+                          return (
+                            <div key={i} style={{background:bg,border:`1px solid ${c}33`,borderRadius:5,padding:'6px 8px'}}>
+                              <div style={{fontSize:10,color:c,fontWeight:600,marginBottom:2}}>
+                                {Math.round(s.ai_probability*100)}% AI · {s.label==='likely_ai'?'Likely AI':'Uncertain'}
+                              </div>
+                              <div style={{fontSize:11,color:'#374151',lineHeight:1.5}}>
+                                {s.text.length > 140 ? s.text.slice(0,140)+'…' : s.text}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{fontSize:12,color:'#16a34a',textAlign:'center',padding:'12px 0'}}>
+                      <ShieldCheck size={20} style={{marginBottom:4}}/><br/>No AI passages flagged
+                    </div>
+                  )}
+                  <div style={{fontSize:10,color:'#9ca3af',marginTop:12,lineHeight:1.5}}>
+                    Uses perplexity approximation + burstiness analysis, mirroring Turnitin's published AI detection methodology.
+                  </div>
+                </>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'32px 0',color:'#9ca3af'}}>
+                  <ShieldCheck size={28} strokeWidth={1.5}/>
+                  <span style={{fontSize:12}}>Click <strong>Detect AI</strong> in the WPS AI tab to scan the document.</span>
+                </div>
+              )}
+            </div>
+          ) : null}
+
           {/* ── Comments panel ── */}
-          {showCommentsPanel ? (
+          {!showAiDetectPanel && showCommentsPanel ? (
             <div className="dap-comments-panel">
               {docComments.length === 0 ? (
                 <div className="dap-comments-empty">
