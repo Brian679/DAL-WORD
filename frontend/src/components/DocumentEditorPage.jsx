@@ -781,6 +781,7 @@ export default function DocumentEditorPage({
   const editorTextareaRef = useRef(null);
   const progressPollBusyRef = useRef(false);
   const workflowStateRef = useRef({});
+  const aiDetectResultRef = useRef(null);
 
   function clearProgressPolling() {
     if (progressPollRef.current) {
@@ -1107,6 +1108,10 @@ export default function DocumentEditorPage({
     const editor = richEditorRef.current;
     if (!editor) return;
     editor.innerHTML = sectionsToHtml(draftSections);
+    // Re-apply AI highlights after editor reset so they survive section updates
+    if (aiDetectResultRef.current) {
+      setTimeout(() => _applyAiHighlights(aiDetectResultRef.current), 0);
+    }
   }, [draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ghost-highlight updated sections inline in the editor
@@ -1377,42 +1382,90 @@ export default function DocumentEditorPage({
   function _applyAiHighlights(result) {
     const editor = richEditorRef.current;
     if (!editor) return;
-    // Clear previous AI highlights
+
+    // Remove any existing AI highlight spans (unwrap them back to plain text)
+    // Note: `document` prop shadows the global; use window.document for DOM APIs.
+    const doc = window.document;
     editor.querySelectorAll('[data-ai-sent]').forEach((el) => {
-      const parent = el.parentNode;
-      while (el.firstChild) parent.insertBefore(el.firstChild, el);
-      parent.removeChild(el);
+      const txt = doc.createTextNode(el.textContent);
+      el.parentNode.replaceChild(txt, el);
     });
+    editor.normalize(); // merge adjacent text nodes
+
     if (!result?.sentences?.length) return;
-    result.sentences
-      .filter((s) => s.label !== 'likely_human')
-      .forEach(({ text, label, ai_probability }) => {
-        const bg = label === 'likely_ai' ? 'rgba(239,68,68,0.15)' : 'rgba(234,179,8,0.15)';
-        const border = label === 'likely_ai' ? '#ef4444' : '#ca8a04';
+    const flagged = result.sentences.filter((s) => s.label !== 'likely_human');
+    if (!flagged.length) return;
+
+    // TreeWalker approach: find text nodes and wrap matching sentences in-place.
+    // This avoids innerHTML.replace() which breaks on HTML tag boundaries and
+    // gets wiped by React reconciliation.
+    let appliedCount = 0;
+    for (const { text, label, ai_probability } of flagged) {
+      try {
+        const bg = label === 'likely_ai' ? 'rgba(239,68,68,0.28)' : 'rgba(251,191,36,0.35)';
+        const borderColor = label === 'likely_ai' ? '#dc2626' : '#d97706';
         const pct = Math.round(ai_probability * 100);
-        const safe = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        try {
-          editor.innerHTML = editor.innerHTML.replace(
-            new RegExp(safe, 'g'),
-            `<span data-ai-sent="${label}" style="background:${bg};border-bottom:2px solid ${border};border-radius:2px;cursor:help" title="AI probability: ${pct}% (${label.replace('_', ' ')})">${text}</span>`,
-          );
-        } catch {
-          // Regex may fail for unusual sentence content — skip silently
+
+        const walker = doc.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const idx = node.textContent.indexOf(text);
+          if (idx === -1) continue;
+
+          const before = node.textContent.slice(0, idx);
+          const after  = node.textContent.slice(idx + text.length);
+          const parent = node.parentNode;
+
+          const span = doc.createElement('span');
+          span.setAttribute('data-ai-sent', label);
+          span.style.cssText = [
+            `background:${bg}`,
+            `border-bottom:2px solid ${borderColor}`,
+            'border-radius:3px',
+            'padding:0 1px',
+            'cursor:help',
+          ].join(';');
+          span.title = `AI probability: ${pct}% — ${label === 'likely_ai' ? 'Likely AI-generated' : 'Uncertain'}`;
+          span.textContent = text;
+
+          if (before) parent.insertBefore(doc.createTextNode(before), node);
+          parent.insertBefore(span, node);
+          if (after)  parent.insertBefore(doc.createTextNode(after), node);
+          parent.removeChild(node);
+          appliedCount++;
+          break; // only first occurrence per sentence
         }
-      });
+      } catch (e) {
+        console.error('[AI-HIGHLIGHT] error applying sentence highlight:', e, text?.slice(0, 40));
+      }
+    }
   }
 
+  // Re-apply highlights after every React render when detection result is live.
+  // Must be a useEffect so it runs AFTER React finishes reconciling the DOM.
+  useEffect(() => {
+    if (aiDetectResult && !aiDetecting && !aiDetectResult.error) {
+      // Small defer so any concurrent DOM sync effects settle first
+      const id = setTimeout(() => _applyAiHighlights(aiDetectResult), 80);
+      return () => clearTimeout(id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiDetectResult, aiDetecting, draftSections]);
+
   async function runAiDetect() {
-    if (!documentId) return;
+    const docId = document?.id;
+    if (!docId) return;
     setAiDetecting(true);
     setShowAiDetectPanel(true);
     setShowCommentsPanel(false);
     setAiPanelOpen(true);
     try {
-      const result = await detectAIContent(documentId);
+      const result = await detectAIContent(docId);
+      aiDetectResultRef.current = result;
       setAiDetectResult(result);
-      _applyAiHighlights(result);
+      // highlights applied by useEffect above after re-render
     } catch (err) {
+      aiDetectResultRef.current = null;
       setAiDetectResult({ error: String(err?.message || 'Detection failed') });
     } finally {
       setAiDetecting(false);
@@ -1420,13 +1473,14 @@ export default function DocumentEditorPage({
   }
 
   function clearAiHighlights() {
+    aiDetectResultRef.current = null;
     const editor = richEditorRef.current;
     if (!editor) return;
     editor.querySelectorAll('[data-ai-sent]').forEach((el) => {
-      const parent = el.parentNode;
-      while (el.firstChild) parent.insertBefore(el.firstChild, el);
-      parent.removeChild(el);
+      const txt = window.document.createTextNode(el.textContent);
+      el.parentNode.replaceChild(txt, el);
     });
+    editor.normalize();
     setAiDetectResult(null);
     setShowAiDetectPanel(false);
   }
