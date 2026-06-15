@@ -92,6 +92,8 @@ Choose ONE intent:
 - write_assignment
 - write_presentation
 - write_spreadsheet
+- write_article
+- check_academic_quality
 - chat
 
 Guidance:
@@ -101,10 +103,12 @@ Guidance:
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
 - CRITICAL: "improve 2.7", "fix section 2.7", "enhance 3.4" mean improve ONLY that subsection — set intent=enhance_section and target_section="2.7". Do NOT set intent=write_dissertation or write_section.
 - If user says "write full dissertation", "write thesis", or "write project on <topic>" -> write_dissertation.
+- If user says "write article", "write a journal article", "write research paper", "write a paper" -> write_article.
 - If user asks for report/assignment/powerpoint/excel -> map to the matching write_* intent.
 - If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.
 - If user asks to generate substantial new document content, do NOT return chat.
 - If user asks for a full/complete/entire project or long-form deliverable, do NOT return chat; choose the closest write_* intent.
+- If user asks about "academic quality", "writing quality", "check writing", "writing check" -> check_academic_quality.
 - IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as write_section or any write intent even if X sounds like a topic.
 - IMPORTANT: Any message that ends with "?" is a question and should be classified as chat.
 - IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document (e.g., "write the background section", "add a conclusion", "redo the methodology").

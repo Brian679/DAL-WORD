@@ -51,6 +51,7 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_assignment",
     "write_presentation",
     "write_spreadsheet",
+    "write_article",
     "add_chart",
     "add_image",
 })
@@ -75,6 +76,7 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
+        "write_article":  f"Write a complete academic journal article on **{tp or 'the topic'}**",
     }
     return _descriptions.get(intent, "Execute the requested task")
 
@@ -229,9 +231,143 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
             "Cite a source for each definition where possible."
         )
 
+    # ── Article / Journal sections ───────────────────────────────────────────
+    if "executive summary" in lowered:
+        return (
+            "Write a professional Executive Summary (300–400 words) that captures: "
+            "(1) the purpose and context of the report, "
+            "(2) the key findings or results in concrete terms, "
+            "(3) the most important recommendations, and "
+            "(4) the expected impact or next steps. "
+            "Write in plain, authoritative prose for a senior audience. "
+            "No jargon. No bullet points — use coherent paragraphs."
+        )
+
+    if "recommendation" in lowered and "area" not in lowered and "future" not in lowered:
+        return (
+            "Write the Recommendations section as a clearly structured list. "
+            "Open with 1 paragraph explaining the basis for these recommendations (what findings led here). "
+            "Then present 5–8 specific, actionable recommendations using numbered sub-headings. "
+            "Each recommendation must: name the action, specify WHO should take it, "
+            "explain WHY (link back to a finding), and describe the expected outcome. "
+            "Be direct, concrete, and feasible — avoid vague generalities like 'organisations should improve'."
+        )
+
+    if "swot" in lowered:
+        return (
+            "Write a SWOT Analysis for the topic. "
+            "Use four clearly labelled sub-sections: Strengths, Weaknesses, Opportunities, Threats. "
+            "Each sub-section should contain 4–6 bullet points with brief explanations (1–2 sentences each). "
+            "Ground each point in the specific context of the study or organisation being analysed."
+        )
+
+    if "pest" in lowered or "pestle" in lowered:
+        return (
+            "Write a PESTLE Analysis. Use six labelled sub-sections: Political, Economic, Social, "
+            "Technological, Legal, Environmental. Each sub-section: 3–5 bullets with brief explanations. "
+            "Be specific to the topic/industry/country context of the study."
+        )
+
+    if "critical analysis" in lowered or "critical evaluation" in lowered or "critical review" in lowered:
+        return (
+            "Write a Critical Analysis/Evaluation that: "
+            "(1) Opens with a clear thesis — your evaluative position on the topic. "
+            "(2) Analyses the topic systematically, presenting strengths and weaknesses with evidence. "
+            "(3) Compares and contrasts different perspectives or approaches from the literature. "
+            "(4) Identifies gaps, contradictions, or unresolved tensions. "
+            "(5) Draws a well-reasoned conclusion about the overall quality or merit. "
+            "Use hedged academic language ('appears to', 'suggests', 'arguably'). "
+            "Write in formal analytical prose — no bullet points."
+        )
+
+    if "findings" in lowered and "summary" not in lowered and "key" not in lowered:
+        return (
+            "Write the Findings section presenting the data/results clearly and objectively. "
+            "Organise by theme or research question — NOT by method. "
+            "For each finding: state it clearly, provide supporting data or evidence, "
+            "and note its significance. Do NOT interpret or discuss here — report only. "
+            "Use past tense ('Respondents indicated…', 'The data showed…'). "
+            "Use precise quantitative or qualitative evidence where available."
+        )
+
+    if "method" in lowered and "research" not in lowered and "data collection" not in lowered:
+        return (
+            "Write the Methods section with full procedural clarity. "
+            "Cover: (1) study design and rationale, (2) participants/sample with inclusion criteria, "
+            "(3) data collection instruments (name them, describe them, justify them), "
+            "(4) data collection procedure (step-by-step), "
+            "(5) data analysis approach (specific technique, software if used), "
+            "(6) ethical considerations. "
+            "Use past tense for completed studies. Be precise enough for replication."
+        )
+
+    if "introduction" in lowered and "chapter" not in lowered:
+        return (
+            "Write a concise article/report Introduction (300–500 words) that: "
+            "(1) Opens with a compelling hook grounded in the research context. "
+            "(2) Establishes the problem or knowledge gap with specific evidence. "
+            "(3) States the purpose of the study/report in one clear sentence. "
+            "(4) Briefly previews the structure of the document. "
+            "Write in active voice, present tense for established facts, past tense for this study."
+        )
+
+    if "main discussion" in lowered or "main body" in lowered or "main argument" in lowered:
+        return (
+            "Write the Main Discussion/Body covering the central argument or analysis in depth. "
+            "Structure with clear sub-headings for each major point. "
+            "For each point: state the claim → provide evidence (data, citation, example) → "
+            "analyse and interpret it → link to the broader argument. "
+            "Use the PEEL structure (Point → Evidence → Explanation → Link) for each paragraph. "
+            "Engage critically with multiple perspectives where relevant."
+        )
+
+    if "literature review" in lowered or "review of literature" in lowered or "related work" in lowered:
+        return (
+            "Write a thematic Literature Review that: "
+            "(1) Groups related works by theme or concept — NOT by author or chronology. "
+            "(2) For each theme: synthesise what the literature collectively shows, "
+            "identify agreements and contradictions, and note limitations. "
+            "(3) Uses precise attribution ('According to Smith (2020)…', 'Several studies report…'). "
+            "(4) Maintains a critical stance — do not merely describe, but evaluate the quality/relevance. "
+            "(5) Ends by identifying the specific gap this study addresses. "
+            "Avoid starting sentences with author names. Vary citation patterns."
+        )
+
+    if "conclusion" in lowered and "chapter" not in lowered:
+        return (
+            "Write a strong Conclusion (250–400 words) that: "
+            "(1) Synthesises the key findings — do NOT just restate them. "
+            "(2) States clearly what the study/report has contributed or shown. "
+            "(3) Addresses the research questions or objectives directly. "
+            "(4) Acknowledges limitations briefly and honestly. "
+            "(5) Ends with a forward-looking closing statement about implications or future work. "
+            "Write in past tense for what was found; present tense for implications."
+        )
+
+    if "references" in lowered or "bibliography" in lowered:
+        return (
+            "Write a note explaining that the References section will list all cited works in the "
+            "appropriate citation format (APA, Harvard, or Vancouver as specified). "
+            "Then provide 8–12 sample plausible references in APA 7th edition format "
+            "relevant to the research topic, covering recent literature (2015–2024) "
+            "from a mix of journals, books, and reports."
+        )
+
+    if "appendix" in lowered or "appendices" in lowered:
+        return (
+            "Write a placeholder Appendices section explaining that supporting materials "
+            "(survey instruments, interview guides, raw data tables, ethical clearance, "
+            "informed consent forms) will be attached here. "
+            "Provide a labelled outline: Appendix A: [Survey Questionnaire], "
+            "Appendix B: [Interview Guide], Appendix C: [Data Tables], etc."
+        )
+
     return (
-        f"Adapt your writing style naturally and intelligently to fit the purpose of the '{title}' section. "
-        "Do not rigidly follow a fixed, hardcoded template. Write comprehensively and organically."
+        f"Write the '{title}' section with clarity, depth, and academic rigour. "
+        f"Ground the content specifically in the research topic. "
+        "Structure your writing with clear topic sentences, supporting evidence, "
+        "and logical transitions. Aim for substantive, specific content — "
+        "not generic filler. Use formal academic prose."
     )
 
 
@@ -962,6 +1098,7 @@ def generate_dissertation_plan_llm(
     topic: str,
     message: str,
     research_design: str = "quantitative",
+    objectives: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Ask the LLM to produce the complete dissertation chapter and section plan.
 
@@ -970,13 +1107,19 @@ def generate_dissertation_plan_llm(
 
     Falls back to a minimal generic structure if the LLM call fails.
     """
+    obj_block = ""
+    if objectives:
+        obj_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(objectives[:6]))
+        obj_block = f"Existing research objectives (must be reflected in the plan):\n{obj_lines}\n\n"
+
     prompt = (
         "You are an expert academic dissertation planner.\n"
         "A student has asked you to help write a dissertation. Your task is to generate a detailed, "
         "academically appropriate chapter plan tailored to their specific topic and research type.\n\n"
         f"Topic: {topic or message[:300]}\n"
         f"Research type: {research_design}\n"
-        f"Student request: {message[:500]}\n\n"
+        f"Student request: {message[:500]}\n"
+        f"{obj_block}\n"
         "Return ONLY valid JSON — no markdown fences, no explanation. Use this exact schema:\n"
         "[\n"
         "  {\n"
@@ -1539,13 +1682,16 @@ def _execute_subsection_nodes(
             )
             wc = 120 if is_pointform else default_word_count
 
+            # Provide a rich context window: prefer the final 4000 chars of the
+            # accumulated document so each subsection can reference prior content.
+            context_hint = (local_context or current_document_context)[-4000:]
             task_spec = PipelineTaskSpec(
                 id=re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60],
                 title=title,
                 kind="text",
                 word_count=wc,
                 guidelines=guidelines,
-                context_hint=current_document_context[-2000:],
+                context_hint=context_hint,
                 chapter_title=section_title,
                 chapter_num=0,
                 topic=topic,
@@ -1776,6 +1922,22 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
 
     if "image" in text or "figure" in text or "diagram" in text:
         return {"intent": "add_image", "target_section": target, "topic": None}
+
+    # ── Article / journal paper ──────────────────────────────────────────────
+    _article_triggers = [
+        "write article", "write an article", "write a journal article",
+        "write me an article", "create article", "create an article",
+        "generate article", "write paper", "write a paper", "write research paper",
+        "write a research paper", "journal article", "academic article",
+        "research article", "write me a paper",
+    ]
+    if any(t in text for t in _article_triggers) or (
+        "article" in text
+        and any(k in text for k in ["write", "create", "generate", "draft", "produce"])
+    ):
+        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
+        topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
+        return {"intent": "write_article", "target_section": None, "topic": topic}
 
     if "report" in text:
         return {"intent": "write_report", "target_section": None, "topic": None}
@@ -2550,11 +2712,17 @@ def _leaf_node_count(nodes: list[dict[str, Any]]) -> int:
 
 
 def _chapter_default_word_count(chapter_number: int | None) -> int:
-    if chapter_number == 2:
-        return 500
-    if chapter_number == 4:
-        return 280
-    return 220
+    """Return a sensible per-subsection word-count target for each dissertation chapter."""
+    chapter_wc = {
+        0: 100,   # Preliminary pages — short frontmatter items
+        1: 380,   # Introduction — contextualising + objectives
+        2: 550,   # Literature Review — thematic synthesis, densest chapter
+        3: 420,   # Methodology — justified choices + procedures
+        4: 450,   # Results/Analysis — findings + discussion per objective
+        5: 320,   # Discussion — integrated interpretation
+        6: 280,   # Conclusion + Recommendations
+    }
+    return chapter_wc.get(chapter_number, 280)
 
 
 def _requested_page_target(instruction: str) -> int | None:
@@ -3740,6 +3908,8 @@ def run_agent(
             reply, updated = _write_section(document, target_section, topic, generation_message, plan)
         elif intent == "write_dissertation":
             reply, updated = _write_dissertation(document, topic, generation_message, plan)
+        elif intent == "write_article":
+            reply, updated = _write_article(document, topic, generation_message, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "write_report":
@@ -4788,6 +4958,74 @@ def build_dissertation_preview_plan(
     return plan
 
 
+_ARTICLE_TEMPLATE: list[tuple[str, int]] = [
+    ("Abstract", 250),
+    ("1. Introduction", 420),
+    ("2. Literature Review", 520),
+    ("3. Methodology", 380),
+    ("4. Results and Findings", 430),
+    ("5. Discussion", 420),
+    ("6. Conclusion", 300),
+    ("References", 140),
+]
+
+
+def _write_article(
+    document: Document,
+    topic: str,
+    instruction: str,
+    plan: list,
+) -> tuple[str, bool]:
+    """Write a complete academic journal article with standard IMRaD structure."""
+    plan.clear()
+    plan.append({"step": "Creating article structure", "status": "pending"})
+    for title, _ in _ARTICLE_TEMPLATE:
+        plan.append({"step": f"Writing {title}", "status": "pending"})
+
+    _done(plan, 0)
+
+    design = _research_design(instruction, topic, document)
+    sections: list[dict[str, Any]] = []
+
+    for idx, (title, wc) in enumerate(_ARTICLE_TEMPLATE, start=1):
+        context_so_far = _full_context_for_generation(document)
+        section_guide = _subsection_guidelines(title, topic)
+        try:
+            text = generate_section_content(
+                title=title,
+                topic=topic,
+                context=(
+                    f"{section_guide}\n\n"
+                    f"Research design: {design}\n"
+                    f"Full study topic: {topic}\n"
+                    f"User instruction: {instruction[:400]}\n\n"
+                    f"Current document context:\n{context_so_far[:3000]}"
+                ),
+                word_count=wc,
+            )
+        except Exception:
+            text = _fallback_subsection_text(topic, "Article", title)
+
+        sections.append({"title": title, "content": text})
+        document.content = {"topic": topic, "sections": sections, "document_type": "article"}
+        _save(document, f"article-step:{title}")
+        _done(plan, idx)
+
+    document.content = {"topic": topic, "sections": sections, "document_type": "article"}
+    document.title = f"Article: {topic}"
+    document.save(update_fields=["content", "title", "updated_at"])
+    DocumentVersion.objects.create(document=document, content=document.content, note="article-generated")
+    _all_done(plan)
+
+    total_words = sum(len(s["content"].split()) for s in sections)
+    reply = (
+        f"Academic article written for '{topic}' (~{total_words:,} words across {len(sections)} sections). "
+        f"Structure follows IMRaD format with Abstract, Introduction, Literature Review, "
+        f"Methodology, Results, Discussion, Conclusion, and References."
+    )
+    return reply, True
+
+
 def _write_dissertation(
     document: Document,
     topic: str,
@@ -4836,7 +5074,7 @@ def _write_dissertation(
         logger.info("_write_dissertation: using pre-generated plan (%d chapters)", len(llm_chapters))
     else:
         logger.info("_write_dissertation: calling LLM to generate plan for topic=%s", topic[:80])
-        llm_chapters = generate_dissertation_plan_llm(topic, instruction, design)
+        llm_chapters = generate_dissertation_plan_llm(topic, instruction, design, objectives=objectives_early)
 
     chapter_blueprints = llm_chapters_to_blueprints(llm_chapters)
 
@@ -4857,7 +5095,7 @@ def _write_dissertation(
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
         ch_num = _chapter_number_from_title(chapter_title)
-        ch_word_count = 500 if ch_num == 2 else 220
+        ch_word_count = _chapter_default_word_count(ch_num)
 
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
@@ -4946,44 +5184,79 @@ def _create_outline(document: Document, topic: str, plan: list) -> tuple[str, bo
     return f"Created outline with {len(sections)} chapters:\n{titles}", True
 
 
+_STRUCTURED_DOC_TEMPLATES: dict[str, list[tuple[str, int]]] = {
+    "report": [
+        ("Executive Summary", 280),
+        ("1. Introduction", 350),
+        ("2. Background and Context", 380),
+        ("3. Methodology", 320),
+        ("4. Findings and Analysis", 420),
+        ("5. Discussion", 380),
+        ("6. Recommendations", 300),
+        ("7. Conclusion", 280),
+        ("References", 120),
+    ],
+    "assignment": [
+        ("Introduction", 320),
+        ("1. Literature Review", 420),
+        ("2. Main Discussion", 450),
+        ("3. Critical Analysis", 400),
+        ("4. Conclusion", 280),
+        ("References", 120),
+    ],
+    "presentation": [
+        ("Slide 1: Title and Overview", 120),
+        ("Slide 2: Problem Statement and Context", 160),
+        ("Slide 3: Literature Review Summary", 160),
+        ("Slide 4: Methodology", 160),
+        ("Slide 5: Key Findings", 180),
+        ("Slide 6: Discussion and Implications", 180),
+        ("Slide 7: Recommendations", 160),
+        ("Slide 8: Conclusion", 140),
+    ],
+    "spreadsheet": [
+        ("Dataset Overview", 200),
+        ("Key Metrics and Indicators", 220),
+        ("Data Summary Table", 200),
+        ("Trend Analysis", 250),
+        ("Insights and Observations", 280),
+        ("Recommendations", 220),
+    ],
+}
+
+
 def _write_structured_document(
     document: Document,
     topic: str,
     kind: str,
     plan: list,
 ) -> tuple[str, bool]:
-    kind_map = {
-        "report": ["Executive Summary", "Introduction", "Findings", "Recommendations", "Conclusion"],
-        "assignment": ["Introduction", "Main Discussion", "Analysis", "Conclusion", "References"],
-        "presentation": ["Slide 1: Title", "Slide 2: Problem", "Slide 3: Approach", "Slide 4: Findings", "Slide 5: Conclusion"],
-        "spreadsheet": ["Dataset Overview", "Key Metrics", "Summary Table", "Insights", "Recommendations"],
-    }
-    structure = kind_map.get(kind, kind_map["report"])
+    template = _STRUCTURED_DOC_TEMPLATES.get(kind, _STRUCTURED_DOC_TEMPLATES["report"])
 
     plan.clear()
     plan.append({"step": f"Creating {kind} to-do list", "status": "pending"})
-    for title in structure:
+    for title, _ in template:
         plan.append({"step": f"Writing {title}", "status": "pending"})
 
     _done(plan, 0)
 
     sections: list[dict[str, str]] = []
-    for idx, title in enumerate(structure, start=1):
+    for idx, (title, wc) in enumerate(template, start=1):
         try:
             text = generate_section_content(
                 title=title,
                 topic=topic,
                 context=(
                     f"Document type: {kind}.\n"
-                    f"Current draft context:\n{_full_context_for_generation(document)[:2200]}"
+                    f"Full topic: {topic}.\n"
+                    f"Current draft context:\n{_full_context_for_generation(document)[:3000]}"
                 ),
-                word_count=170,
+                word_count=wc,
             )
         except Exception:
             text = _fallback_subsection_text(topic, kind.capitalize(), title)
         sections.append({"title": title, "content": text})
 
-        # Persist after each step so generation behaves like an executing agent.
         document.content = {"topic": topic, "sections": sections, "document_type": kind}
         _save(document, f"{kind}-step:{title}")
         _done(plan, idx)
@@ -4993,8 +5266,9 @@ def _write_structured_document(
     document.save(update_fields=["content", "title", "updated_at"])
     DocumentVersion.objects.create(document=document, content=document.content, note=f"{kind}-generated")
 
+    total_words = sum(len(s["content"].split()) for s in sections)
     reply = (
-        f"Generated a complete {kind} for '{topic}'. "
+        f"Generated a complete {kind} for '{topic}' ({len(sections)} sections, ~{total_words:,} words). "
         "The content has been written directly into the current document."
     )
     return reply, True
