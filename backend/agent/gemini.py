@@ -239,7 +239,7 @@ def generate_section_content(
         f"You are writing a section of a formal academic dissertation.\n"
         f"Section title: '{title}'\n"
         f"Research study topic: '{topic}'\n\n"
-        f"{'Context and instructions:\n' + context[:5000] + chr(10) + chr(10) if context else ''}"
+        f"{'Context and instructions:' + chr(10) + context[:5000] + chr(10) + chr(10) if context else ''}"
         f"Write the content for this section (~{word_count} words).\n"
         f"Requirements:\n"
         f"- Write SPECIFICALLY about '{topic}' — not generic academic filler that could apply to any study\n"
