@@ -73,32 +73,79 @@ class HierarchicalMemory:
 class CoherenceChecker:
     """Heuristic critic loop for contradictions, redundancy, unsupported claims."""
 
+    # Patterns for strong assertions that should be backed by citations
+    _STRONG_CLAIM_RE = re.compile(
+        r"\b(proves?|it is (clear|evident|obvious)|clearly (shows?|demonstrates?)"
+        r"|always|never|undeniable|without (a )?doubt|scientifically proven"
+        r"|has been proven|universally (accepted|agreed)|all studies|no studies"
+        r"|every (researcher|study|expert))\b",
+        re.IGNORECASE,
+    )
+    # Patterns that constitute an in-text citation
+    _CITATION_RE = re.compile(
+        r"\([A-Z][a-z]+(?:[,&]\s*[A-Z][a-z]+)*(?:\s+et\s+al\.?)?,\s*(?:19|20)\d{2}[a-z]?\)"  # APA
+        r"|\[\d+(?:,\s*\d+)*\]"  # Numeric [1] or [1,2]
+        r"|doi:\s*10\.\d{4}"  # DOI
+        r"|\b10\.\d{4}/\S+",  # bare DOI
+        re.IGNORECASE,
+    )
+    _TRANSITIONS = [
+        "however", "therefore", "moreover", "in contrast", "furthermore",
+        "consequently", "nevertheless", "in addition", "as a result",
+        "on the other hand", "although", "despite", "whereas", "thus",
+        "nonetheless", "accordingly", "subsequently",
+    ]
+    _RESEARCH_TERMS = re.compile(
+        r"\b(stud(y|ies)|research|evidence|find(ing)?s|data|result|"
+        r"analysis|survey|experiment|investigat|literature)\b",
+        re.IGNORECASE,
+    )
+
+    def _has_citation(self, sent: str) -> bool:
+        return bool(self._CITATION_RE.search(sent))
+
     def check(self, text: str) -> dict[str, Any]:
-        lines = [l.strip() for l in re.split(r"[\n\.]+", text or "") if l.strip()]
-        low = (text or "").lower()
+        if not (text or "").strip():
+            return {
+                "contradictions": [],
+                "unsupported_claims": [],
+                "redundancy_ratio": 0.0,
+                "transition_score": 0.0,
+                "missing_citations": 0,
+            }
 
-        unsupported = []
-        for sent in lines:
-            if any(k in sent.lower() for k in ["proves", "always", "never", "undeniable"]):
-                if "doi" not in sent.lower() and "(" not in sent:
-                    unsupported.append(sent)
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n", text) if s.strip()]
+        low = text.lower()
 
+        # Unsupported claims: strong assertions with no citation in the same sentence
+        unsupported = [
+            s for s in sentences
+            if self._STRONG_CLAIM_RE.search(s) and not self._has_citation(s)
+        ]
+
+        # Redundancy: type-token ratio on content words (4+ chars)
         tokens = re.findall(r"\b[a-z]{4,}\b", low)
         redundancy = 0.0
         if tokens:
-            uniq = len(set(tokens))
-            redundancy = max(0.0, 1.0 - (uniq / len(tokens)))
+            redundancy = max(0.0, 1.0 - len(set(tokens)) / len(tokens))
 
-        transitions = ["however", "therefore", "moreover", "in contrast", "furthermore"]
-        transition_hits = sum(low.count(t) for t in transitions)
-        coherence = min(1.0, 0.2 + transition_hits / 10.0)
+        # Coherence: transition-word density relative to word count
+        word_count = max(len(low.split()), 1)
+        transition_hits = sum(low.count(t) for t in self._TRANSITIONS)
+        coherence = min(1.0, 0.15 + (transition_hits / word_count) * 40)
+
+        # Missing citations: research-term sentences with no citation
+        missing_cit = sum(
+            1 for s in sentences
+            if self._RESEARCH_TERMS.search(s) and not self._has_citation(s)
+        )
 
         return {
             "contradictions": [],
             "unsupported_claims": unsupported[:8],
             "redundancy_ratio": round(redundancy, 4),
             "transition_score": round(coherence, 4),
-            "missing_citations": sum(1 for s in lines if any(k in s.lower() for k in ["study", "research", "evidence"]) and "(" not in s),
+            "missing_citations": missing_cit,
         }
 
 
@@ -169,7 +216,14 @@ class AcademicIntegrityGuard:
 class EvaluationEngine:
     def score(self, text: str, methodology: str = "mixed") -> QualityMetrics:
         sentences = [s for s in re.split(r"[.!?]", text or "") if s.strip()]
-        citations = len(re.findall(r"\([^)]+,\s*(19|20)\d{2}\)", text or "")) + len(re.findall(r"doi", (text or "").lower()))
+        _cit_re = re.compile(
+            r"\([A-Z][a-z]+(?:[,&]\s*[A-Z][a-z]+)*(?:\s+et\s+al\.?)?,\s*(?:19|20)\d{2}[a-z]?\)"
+            r"|\[\d+(?:,\s*\d+)*\]"
+            r"|doi:\s*10\.\d{4}"
+            r"|\b10\.\d{4}/\S+",
+            re.IGNORECASE,
+        )
+        citations = len(_cit_re.findall(text or ""))
         citation_density = citations / max(len(sentences), 1)
 
         checker = CoherenceChecker().check(text)

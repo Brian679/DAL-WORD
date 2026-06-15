@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import requests
@@ -21,16 +22,11 @@ def get_model_label() -> str:
 
 def _strip_fences(text: str) -> str:
     text = text.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            if part.startswith("json"):
-                part = part[4:].strip()
-            if part:
-                return part
+    # Extract the first JSON object or array from inside a code fence
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+    if m:
+        return m.group(1).strip()
+    # No fence - return as-is so json.loads can try it directly
     return text
 
 
@@ -79,7 +75,7 @@ def classify_intent(message: str, doc_context: str) -> dict[str, Any]:
     prompt = f"""You are an AI document assistant. Classify the user's intent.
 
 Document excerpt:
-{doc_context[:2000]}
+{doc_context[:4000]}
 
 User message: \"{message}\"
 
@@ -99,11 +95,17 @@ Choose ONE intent:
 
 Guidance:
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
+- If user says "improve 2.7" or "fix 3.4" (subsection number) -> enhance_section with that exact number as target_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
+- CRITICAL: "improve 2.7", "fix section 2.7", "enhance 3.4" mean improve ONLY that subsection — set intent=enhance_section and target_section="2.7". Do NOT set intent=write_dissertation or write_section.
 - If user says "write full dissertation", "write thesis", or "write project on <topic>" -> write_dissertation.
 - If user asks for report/assignment/powerpoint/excel -> map to the matching write_* intent.
 - If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.
 - If user asks to generate substantial new document content, do NOT return chat.
+- If user asks for a full/complete/entire project or long-form deliverable, do NOT return chat; choose the closest write_* intent.
+- IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as write_section or any write intent even if X sounds like a topic.
+- IMPORTANT: Any message that ends with "?" is a question and should be classified as chat.
+- IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document (e.g., "write the background section", "add a conclusion", "redo the methodology").
 
 Return JSON exactly:
 {{"intent": "<intent>", "target_section": "<section name or null>", "topic": "<main topic or null>"}}"""

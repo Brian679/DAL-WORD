@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import google.generativeai as genai
@@ -27,16 +28,11 @@ def get_model_label() -> str:
 
 def _strip_fences(text: str) -> str:
     text = text.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            if part.startswith("json"):
-                part = part[4:].strip()
-            if part:
-                return part
+    # Extract the first JSON object or array from inside a code fence
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```", text)
+    if m:
+        return m.group(1).strip()
+    # No fence - return as-is so json.loads can try it directly
     return text
 
 
@@ -62,7 +58,7 @@ def classify_intent(message: str, doc_context: str) -> dict[str, Any]:
     prompt = f"""You are an AI document assistant. Classify the user's intent.
 
 Document excerpt:
-{doc_context[:2000]}
+{doc_context[:4000]}
 
 User message: \"{message}\"
 
