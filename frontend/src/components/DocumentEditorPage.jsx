@@ -1121,7 +1121,6 @@ export default function DocumentEditorPage({
   useEffect(() => {
     const editor = richEditorRef.current;
     if (!editor || !highlightedSections.length) {
-      // Clear any existing highlights when list is empty
       editor?.querySelectorAll('[data-ghost-highlight]').forEach((el) => {
         el.removeAttribute('data-ghost-highlight');
       });
@@ -1131,23 +1130,37 @@ export default function DocumentEditorPage({
     editor.querySelectorAll('[data-ghost-highlight]').forEach((el) => {
       el.removeAttribute('data-ghost-highlight');
     });
-    const headings = editor.querySelectorAll('h1,h2,h3');
+
+    const headings = editor.querySelectorAll('h1,h2,h3,h4');
+    let firstHighlightedEl = null;
+
     headings.forEach((heading) => {
       const titleText = heading.textContent.trim().toLowerCase();
       const matched = highlightedSections.some(
         (t) => titleText.includes(t.trim().toLowerCase()) || t.trim().toLowerCase().includes(titleText)
       );
       if (!matched) return;
+
       heading.setAttribute('data-ghost-highlight', 'true');
-      // Also mark sibling paragraphs that follow this heading (until next heading)
+      if (!firstHighlightedEl) firstHighlightedEl = heading;
+
+      // Mark all sibling paragraphs until the next heading
       let sib = heading.nextElementSibling;
-      while (sib && !['H1', 'H2', 'H3'].includes(sib.tagName)) {
+      while (sib && !['H1', 'H2', 'H3', 'H4'].includes(sib.tagName)) {
         sib.setAttribute('data-ghost-highlight', 'content');
         sib = sib.nextElementSibling;
       }
     });
-    // Auto-clear after 6 seconds
-    const timer = setTimeout(() => setHighlightedSections([]), 6000);
+
+    // Scroll to the first updated section so the user sees the change
+    if (firstHighlightedEl) {
+      setTimeout(() => {
+        firstHighlightedEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 120);
+    }
+
+    // Auto-clear highlights after 9 seconds (badge + highlight visible long enough to notice)
+    const timer = setTimeout(() => setHighlightedSections([]), 9000);
     return () => clearTimeout(timer);
   }, [highlightedSections, draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
