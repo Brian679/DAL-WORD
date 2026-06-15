@@ -68,14 +68,10 @@ Choose ONE intent:
 - humanise_ai_sections
 - write_section
 - write_dissertation
+- write_document
 - create_outline
 - add_chart
 - add_image
-- write_report
-- write_assignment
-- write_presentation
-- write_spreadsheet
-- write_article
 - check_academic_quality
 - chat
 
@@ -85,16 +81,14 @@ Guidance:
 - If user says "improve 2.7" or "fix 3.4" (subsection number) -> enhance_section with that exact number as target_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
 - CRITICAL: "improve 2.7", "fix section 2.7", "enhance 3.4" mean improve ONLY that subsection — set intent=enhance_section and target_section="2.7" (the number). Do NOT set intent=write_dissertation or write_section.
-- If user says "write full dissertation", "write thesis", or "write project on <topic>" -> write_dissertation.
-- If user says "write article", "write a journal article", "write research paper", "write a paper" -> write_article.
-- If user asks for report/assignment/powerpoint/excel -> map to the matching write_* intent.
-- If user asks for a full/complete/entire project deliverable with chapters, treat it as write_dissertation.
-- If user asks to generate substantial new document content, do NOT return chat.
-- If user asks for a full/complete/entire project or long-form deliverable, do NOT return chat; choose the closest write_* intent.
+- If user says "write full dissertation", "write thesis", "write project on <topic>", "full dissertation", "complete thesis" -> write_dissertation.
+- If user asks to write ANY kind of document (article, report, assignment, essay, paper, presentation, proposal, case study, brief, plan, etc.) -> write_document. The AI planner will decide the structure, length, and to-do list automatically.
+- If user asks for a full/complete/entire project with multiple chapters -> write_dissertation.
+- If user asks to generate substantial new document content, do NOT return chat; use write_document.
 - If user asks about "academic quality", "writing quality", "check writing", "writing check" -> check_academic_quality.
-- IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as write_section or any write intent even if X sounds like a topic.
+- IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as any write intent.
 - IMPORTANT: Any message that ends with "?" is a question and should be classified as chat.
-- IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document (e.g., "write the background section", "add a conclusion", "redo the methodology").
+- IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document.
 
 Return JSON exactly:
 {{"intent": "<intent>", "target_section": "<section name or null>", "topic": "<main topic or null>"}}"""
@@ -154,37 +148,18 @@ def create_execution_plan(intent: str) -> list[str]:
             "Creating section entries",
             "Saving outline to document",
         ],
-        "write_report": [
-            "Building report structure",
-            "Writing each report section",
-            "Saving report document",
+        "write_document": [
+            "Reading your request and planning the document",
+            "AI designing section structure and word targets",
+            "Writing each section in sequence",
+            "Saving complete document",
         ],
-        "write_assignment": [
-            "Building assignment structure",
-            "Writing each assignment section",
-            "Saving assignment document",
-        ],
-        "write_presentation": [
-            "Building slide outline",
-            "Writing slide-by-slide content",
-            "Saving presentation draft",
-        ],
-        "write_spreadsheet": [
-            "Designing worksheet structure",
-            "Generating table-ready content",
-            "Saving spreadsheet draft",
-        ],
-        "write_article": [
-            "Structuring journal article (IMRaD format)",
-            "Writing Abstract",
-            "Writing Introduction",
-            "Writing Literature Review",
-            "Writing Methodology",
-            "Writing Results and Findings",
-            "Writing Discussion",
-            "Writing Conclusion and References",
-            "Saving article document",
-        ],
+        # Legacy aliases — route through write_document at runtime
+        "write_report": ["Planning and writing report based on your request"],
+        "write_assignment": ["Planning and writing assignment based on your request"],
+        "write_presentation": ["Planning and writing presentation based on your request"],
+        "write_spreadsheet": ["Planning and writing spreadsheet based on your request"],
+        "write_article": ["Planning and writing article based on your request"],
         "check_academic_quality": [
             "Scanning document for academic writing quality",
             "Checking vocabulary, evidence, and argument strength",

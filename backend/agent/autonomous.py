@@ -42,18 +42,20 @@ logger = logging.getLogger(__name__)
 DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_section",
     "write_dissertation",
+    "write_document",
     "enhance_section",
     "enhance_document",
     "humanise_ai_sections",
     "address_comments",
     "create_outline",
+    "add_chart",
+    "add_image",
+    # Legacy aliases kept so old LLM classifications still route correctly
     "write_report",
     "write_assignment",
     "write_presentation",
     "write_spreadsheet",
     "write_article",
-    "add_chart",
-    "add_image",
 })
 
 
@@ -64,19 +66,21 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
     _descriptions: dict[str, str] = {
         "write_section":    f"Write the **{t or 'target'}** section",
         "write_dissertation": f"Write the full dissertation on **{tp}**",
+        "write_document":   f"Plan and write a complete document on **{tp or 'the topic'}**",
         "enhance_section":  f"Improve and polish {'the **' + t + '** section' if t else 'the document content'}",
         "enhance_document": "Improve the entire document — structure, clarity, and academic quality",
         "address_comments": "Read all inline reviewer comments and address each one in the document",
         "create_outline":   f"Generate a structured outline for **{tp or 'the document'}**",
-        "write_report":     "Write a structured report",
-        "write_assignment": "Write a formatted assignment",
-        "write_presentation": "Generate a presentation outline with slide content",
-        "write_spreadsheet": "Generate a structured spreadsheet layout",
         "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
-        "write_article":  f"Write a complete academic journal article on **{tp or 'the topic'}**",
+        # Legacy aliases
+        "write_report":     "Plan and write a report based on the request",
+        "write_assignment": "Plan and write an assignment based on the request",
+        "write_presentation": "Plan and write a presentation based on the request",
+        "write_spreadsheet": "Plan and write a spreadsheet layout based on the request",
+        "write_article":    "Plan and write an article based on the request",
     }
     return _descriptions.get(intent, "Execute the requested task")
 
@@ -1923,33 +1927,19 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     if "image" in text or "figure" in text or "diagram" in text:
         return {"intent": "add_image", "target_section": target, "topic": None}
 
-    # ── Article / journal paper ──────────────────────────────────────────────
-    _article_triggers = [
-        "write article", "write an article", "write a journal article",
-        "write me an article", "create article", "create an article",
-        "generate article", "write paper", "write a paper", "write research paper",
-        "write a research paper", "journal article", "academic article",
-        "research article", "write me a paper",
-    ]
-    if any(t in text for t in _article_triggers) or (
-        "article" in text
-        and any(k in text for k in ["write", "create", "generate", "draft", "produce"])
-    ):
-        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
+    # ── Generic document-writing catch-all ──────────────────────────────────
+    # The AI planner decides structure; no need for separate per-type intents.
+    _write_verbs = {"write", "create", "draft", "generate", "produce", "make", "build", "prepare", "compose", "do"}
+    _write_nouns = {
+        "report", "article", "assignment", "essay", "paper", "presentation",
+        "slides", "spreadsheet", "proposal", "brief", "case study", "review",
+        "plan", "study", "project", "portfolio", "lab report", "memo",
+        "powerpoint", "excel", "document", "doc",
+    }
+    if any(v in text for v in _write_verbs) and any(n in text for n in _write_nouns):
+        topic_match = re.search(r"\b(?:on|about|for|regarding)\b\s+(.+)$", text)
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
-        return {"intent": "write_article", "target_section": None, "topic": topic}
-
-    if "report" in text:
-        return {"intent": "write_report", "target_section": None, "topic": None}
-
-    if "assignment" in text:
-        return {"intent": "write_assignment", "target_section": None, "topic": None}
-
-    if "powerpoint" in text or "presentation" in text or "slides" in text:
-        return {"intent": "write_presentation", "target_section": None, "topic": None}
-
-    if "excel" in text or "spreadsheet" in text:
-        return {"intent": "write_spreadsheet", "target_section": None, "topic": None}
+        return {"intent": "write_document", "target_section": None, "topic": topic}
 
     if any(k in text for k in [
         "correct", "improve", "enhance", "fix", "expand", "add to",
@@ -3908,18 +3898,12 @@ def run_agent(
             reply, updated = _write_section(document, target_section, topic, generation_message, plan)
         elif intent == "write_dissertation":
             reply, updated = _write_dissertation(document, topic, generation_message, plan)
-        elif intent == "write_article":
-            reply, updated = _write_article(document, topic, generation_message, plan)
+        elif intent in ("write_document", "write_article", "write_report",
+                        "write_assignment", "write_presentation", "write_spreadsheet"):
+            # All non-dissertation document writing funnels through the unified AI planner
+            reply, updated = _plan_and_write_document(document, topic, generation_message, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
-        elif intent == "write_report":
-            reply, updated = _write_structured_document(document, topic, "report", plan, generation_message)
-        elif intent == "write_assignment":
-            reply, updated = _write_structured_document(document, topic, "assignment", plan, generation_message)
-        elif intent == "write_presentation":
-            reply, updated = _write_structured_document(document, topic, "presentation", plan, generation_message)
-        elif intent == "write_spreadsheet":
-            reply, updated = _write_structured_document(document, topic, "spreadsheet", plan, generation_message)
         elif intent == "add_chart":
             reply, updated = _add_chart(document, target_section, plan)
         elif intent == "add_image":
@@ -4958,38 +4942,55 @@ def build_dissertation_preview_plan(
     return plan
 
 
-def _ai_document_structure(
-    topic: str,
-    instruction: str,
-    doc_type: str,
-) -> list[dict[str, Any]]:
-    """Ask the LLM to design a bespoke document structure for the user's specific request.
+def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> dict[str, Any]:
+    """Ask the LLM to design a complete writing plan from the user's raw request.
 
-    Returns a list of dicts with keys: title (str), word_count (int), notes (str).
-    Falls back to a sensible type-appropriate skeleton if the LLM call fails.
+    The LLM decides:
+      - What kind of document it is
+      - How many sections, their titles and word counts (specific to the topic)
+      - Whether a to-do list is warranted (i.e. is this a long piece of work?)
+      - The document title
+
+    Returns a dict with keys:
+      document_title, document_type, estimated_words, needs_todo, sections
+    where each section has: title, word_count, notes
     """
+    ctx_block = (
+        f"\nExisting document context (for continuity):\n{doc_context[-2000:]}\n"
+        if doc_context.strip() else ""
+    )
     prompt = (
-        f"You are an expert academic writer. A user has asked you to produce the following:\n\n"
-        f"REQUEST: {instruction[:600]}\n"
-        f"TOPIC: {topic}\n"
-        f"DOCUMENT TYPE: {doc_type}\n\n"
-        "Design the COMPLETE section structure for this specific document. "
-        "Make every section title SPECIFIC to the topic and request — not generic placeholders.\n\n"
-        "Return ONLY valid JSON (no markdown, no explanation):\n"
-        "[\n"
-        '  {"title": "Section title", "word_count": 350, "notes": "brief writing note for this section"},\n'
-        '  ...\n'
-        "]\n\n"
+        "You are an expert academic writer. A user has made the following writing request.\n\n"
+        f"REQUEST: {instruction[:800]}\n"
+        f"TOPIC: {topic or '(infer from the request)'}\n"
+        f"{ctx_block}\n"
+        "Design a COMPLETE writing plan for exactly what the user asked. "
+        "Do not apply a generic template — let the request determine structure, length, and type.\n\n"
+        "Return ONLY valid JSON (no markdown):\n"
+        "{\n"
+        '  "document_title": "A precise, specific title",\n'
+        '  "document_type": "essay|report|article|assignment|proposal|case_study|lab_report|review|presentation|plan|brief|other",\n'
+        '  "estimated_words": 2500,\n'
+        '  "needs_todo": true,\n'
+        '  "sections": [\n'
+        '    {"title": "Specific section title", "word_count": 350, "notes": "one-sentence writing guide"},\n'
+        "    ...\n"
+        "  ]\n"
+        "}\n\n"
         "Rules:\n"
-        "- Generate 5 to 12 sections that exactly fit the user's request.\n"
-        "- Section titles must be SPECIFIC to the topic (e.g. if about climate change, use "
-        "'2. Drivers of Arctic Sea-Ice Loss', not '2. Background').\n"
-        "- Word counts: 120-200 for short items (abstract, references, dedication), "
-        "300-500 for body sections. Total document 1800-4000 words.\n"
-        "- The 'notes' field gives 1 sentence of writing guidance for that section.\n"
-        "- Adapt structure to what the user actually asked for: an essay has no 'methodology'; "
-        "a lab report has no 'literature review'; a proposal has an 'objectives' section.\n"
-        "- Return ONLY the JSON array."
+        "- Section titles must name the actual topic content — NOT generic labels. "
+        "If about climate finance, write '2. Green Bond Market Failures', not '2. Background'.\n"
+        "- Adapt structure completely to the request: "
+        "a short 500-word essay → 3 sections; a 15-page assignment → 8-10 sections with a to-do list; "
+        "a lab report → Abstract/Introduction/Methods/Results/Discussion/Conclusion; "
+        "a business proposal → Executive Summary/Problem/Solution/Budget/Timeline/Appendix.\n"
+        "- If the user says 'X pages', convert: 1 page ≈ 500 words. "
+        "If they say 'X words', use that directly.\n"
+        "- needs_todo = true when estimated_words > 1500 OR the user explicitly asks for something substantial.\n"
+        "- Short items (Abstract, References, Dedication) → word_count 120-200. "
+        "Core body sections → 300-600 words each.\n"
+        "- Do NOT include a to-do list in the sections themselves.\n"
+        "- Return ONLY the JSON object."
     )
     raw = ""
     try:
@@ -4997,91 +4998,90 @@ def _ai_document_structure(
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned).rstrip("`").strip()
-        start = cleaned.find("[")
-        end = cleaned.rfind("]")
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
         if start != -1 and end != -1 and end > start:
             parsed = json.loads(cleaned[start: end + 1])
-            if isinstance(parsed, list) and parsed:
-                result = []
-                for item in parsed:
+            if isinstance(parsed, dict) and parsed.get("sections"):
+                sections = []
+                for item in parsed["sections"]:
                     if isinstance(item, dict) and item.get("title"):
-                        result.append({
+                        sections.append({
                             "title": str(item["title"]),
-                            "word_count": int(item.get("word_count") or 350),
+                            "word_count": max(80, int(item.get("word_count") or 300)),
                             "notes": str(item.get("notes") or ""),
                         })
-                if result:
-                    return result
+                if sections:
+                    return {
+                        "document_title": str(parsed.get("document_title") or topic or "Document"),
+                        "document_type": str(parsed.get("document_type") or "document"),
+                        "estimated_words": int(parsed.get("estimated_words") or sum(s["word_count"] for s in sections)),
+                        "needs_todo": bool(parsed.get("needs_todo", True)),
+                        "sections": sections,
+                    }
     except Exception as exc:
-        logger.warning("_ai_document_structure failed: %s | raw=%s", exc, raw[:300])
+        logger.warning("_llm_writing_plan failed: %s | raw=%s", exc, raw[:300])
 
-    # Fallback: minimal skeletons by type
-    _fallback: dict[str, list[dict[str, Any]]] = {
-        "article": [
-            {"title": "Abstract", "word_count": 220, "notes": "concise summary"},
-            {"title": "1. Introduction", "word_count": 380, "notes": "contextualise and state aims"},
-            {"title": "2. Literature Review", "word_count": 480, "notes": "thematic synthesis"},
-            {"title": "3. Methodology", "word_count": 360, "notes": "justify design and methods"},
-            {"title": "4. Results and Discussion", "word_count": 420, "notes": "present and interpret findings"},
-            {"title": "5. Conclusion", "word_count": 280, "notes": "synthesise and recommend"},
-            {"title": "References", "word_count": 130, "notes": "APA 7th edition"},
-        ],
-        "report": [
-            {"title": "Executive Summary", "word_count": 260, "notes": "standalone overview"},
-            {"title": "1. Introduction", "word_count": 340, "notes": "background and scope"},
-            {"title": "2. Findings", "word_count": 420, "notes": "thematic findings"},
-            {"title": "3. Discussion", "word_count": 380, "notes": "interpret findings"},
-            {"title": "4. Recommendations", "word_count": 280, "notes": "specific actionable steps"},
-            {"title": "5. Conclusion", "word_count": 240, "notes": "synthesis"},
-            {"title": "References", "word_count": 120, "notes": "APA 7th"},
-        ],
-        "assignment": [
-            {"title": "Introduction", "word_count": 300, "notes": "context and aims"},
-            {"title": "1. Main Discussion", "word_count": 450, "notes": "argument development"},
-            {"title": "2. Critical Analysis", "word_count": 400, "notes": "evaluate evidence"},
-            {"title": "3. Conclusion", "word_count": 260, "notes": "synthesis"},
-            {"title": "References", "word_count": 120, "notes": "APA 7th"},
-        ],
-        "presentation": [
-            {"title": "Slide 1: Overview", "word_count": 100, "notes": "title and agenda"},
-            {"title": "Slide 2: Problem Statement", "word_count": 150, "notes": "hook audience"},
-            {"title": "Slide 3: Key Findings", "word_count": 160, "notes": "evidence"},
-            {"title": "Slide 4: Discussion", "word_count": 150, "notes": "interpretation"},
-            {"title": "Slide 5: Conclusion", "word_count": 130, "notes": "takeaways"},
-        ],
-        "spreadsheet": [
-            {"title": "Overview", "word_count": 180, "notes": "data context"},
-            {"title": "Key Metrics", "word_count": 200, "notes": "quantitative summary"},
-            {"title": "Analysis", "word_count": 240, "notes": "trends and patterns"},
-            {"title": "Recommendations", "word_count": 200, "notes": "data-driven actions"},
+    # Fallback: minimal 5-section structure
+    t = topic or "the topic"
+    return {
+        "document_title": topic or "Document",
+        "document_type": "document",
+        "estimated_words": 1500,
+        "needs_todo": False,
+        "sections": [
+            {"title": "Introduction", "word_count": 280, "notes": f"Introduce {t} and state the aims"},
+            {"title": "Background", "word_count": 340, "notes": f"Contextualise {t} with relevant evidence"},
+            {"title": "Analysis", "word_count": 380, "notes": f"Critically examine the key dimensions of {t}"},
+            {"title": "Discussion", "word_count": 320, "notes": "Interpret findings and consider implications"},
+            {"title": "Conclusion", "word_count": 220, "notes": "Synthesise the key points and recommend next steps"},
         ],
     }
-    return _fallback.get(doc_type, _fallback["report"])
 
 
-def _write_ai_document(
+def _plan_and_write_document(
     document: Document,
     topic: str,
     instruction: str,
-    doc_type: str,
     plan: list,
 ) -> tuple[str, bool]:
-    """Write any document type by letting the AI design the structure from the user's request."""
+    """Unified flexible document writer.
+
+    The LLM reads the user's raw instruction and decides:
+      - what kind of document it is
+      - how many sections and what to write in each
+      - whether to show a detailed to-do list (for long pieces)
+    No fixed templates. No pre-defined document types.
+    """
     plan.clear()
-    plan.append({"step": "AI is designing document structure", "status": "pending"})
+    plan.append({"step": "Planning your document", "status": "pending"})
 
-    # ── Step 1: LLM decides the structure ────────────────────────────────────
-    structure = _ai_document_structure(topic, instruction, doc_type)
+    doc_context = _full_context_for_generation(document)
 
-    for item in structure:
+    # ── Step 1: Let the LLM design the entire plan ────────────────────────────
+    writing_plan = _llm_writing_plan(instruction, topic, doc_context)
+
+    doc_title = writing_plan["document_title"]
+    doc_type = writing_plan["document_type"]
+    needs_todo = writing_plan["needs_todo"]
+    sections_plan = writing_plan["sections"]
+    estimated_words = writing_plan["estimated_words"]
+
+    logger.info(
+        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s sections=%d",
+        doc_type, estimated_words, needs_todo, len(sections_plan),
+    )
+
+    # Build the to-do list — always show section steps so the user sees progress
+    for item in sections_plan:
         plan.append({"step": f"Writing {item['title']}", "status": "pending"})
     _done(plan, 0)
 
     design = _research_design(instruction, topic, document)
     sections: list[dict[str, Any]] = []
 
-    # ── Step 2: Write each section the AI chose ───────────────────────────────
-    for idx, item in enumerate(structure, start=1):
+    # ── Step 2: Write each section the AI designed ────────────────────────────
+    for idx, item in enumerate(sections_plan, start=1):
         title = item["title"]
         wc = item["word_count"]
         notes = item.get("notes", "")
@@ -5095,10 +5095,10 @@ def _write_ai_document(
                 context=(
                     f"{section_guide}\n\n"
                     f"Document type: {doc_type}\n"
-                    f"User request: {instruction[:500]}\n"
+                    f"Full user request: {instruction[:600]}\n"
                     f"Research design: {design}\n"
                     f"Writing note for this section: {notes}\n\n"
-                    f"Document so far:\n{context_so_far[-3000:]}"
+                    f"Document written so far:\n{context_so_far[-3500:]}"
                 ),
                 word_count=wc,
             )
@@ -5106,26 +5106,47 @@ def _write_ai_document(
             text = _fallback_subsection_text(topic, doc_type.capitalize(), title)
 
         sections.append({"title": title, "content": text})
-        document.content = {"topic": topic, "sections": sections, "document_type": doc_type}
-        _save(document, f"{doc_type}-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
+        document.content = {
+            "topic": topic,
+            "sections": sections,
+            "document_type": doc_type,
+            "document_title": doc_title,
+        }
+        _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
         _done(plan, idx)
 
-    document.content = {"topic": topic, "sections": sections, "document_type": doc_type}
-    document.title = f"{doc_type.capitalize()}: {topic}"
+    document.content = {
+        "topic": topic,
+        "sections": sections,
+        "document_type": doc_type,
+        "document_title": doc_title,
+    }
+    document.title = doc_title
     document.save(update_fields=["content", "title", "updated_at"])
-    DocumentVersion.objects.create(document=document, content=document.content, note=f"{doc_type}-generated")
+    DocumentVersion.objects.create(
+        document=document,
+        content=document.content,
+        note=f"{doc_type}-generated",
+    )
     _all_done(plan)
 
     total_words = sum(len(s["content"].split()) for s in sections)
-    section_titles = ", ".join(s["title"] for s in sections[:4])
-    if len(sections) > 4:
-        section_titles += f" … (+{len(sections) - 4} more)"
+    todo_note = " A writing plan was created and each section written in sequence." if needs_todo else ""
     reply = (
-        f"Generated a complete {doc_type} for '{topic}' "
-        f"({len(sections)} sections, ~{total_words:,} words). "
-        f"Sections: {section_titles}."
+        f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words.{todo_note}"
     )
     return reply, True
+
+
+# Legacy thin wrappers so old LLM classifications still route correctly
+def _write_ai_document(
+    document: Document,
+    topic: str,
+    instruction: str,
+    doc_type: str,
+    plan: list,
+) -> tuple[str, bool]:
+    return _plan_and_write_document(document, topic, instruction or topic, plan)
 
 
 def _write_article(
@@ -5134,7 +5155,7 @@ def _write_article(
     instruction: str,
     plan: list,
 ) -> tuple[str, bool]:
-    return _write_ai_document(document, topic, instruction, "article", plan)
+    return _plan_and_write_document(document, topic, instruction or f"Write an academic article on {topic}", plan)
 
 
 def _write_dissertation(
@@ -5302,8 +5323,9 @@ def _write_structured_document(
     plan: list,
     instruction: str = "",
 ) -> tuple[str, bool]:
-    """Route report/assignment/presentation/spreadsheet requests through the AI planner."""
-    return _write_ai_document(document, topic, instruction or topic, kind, plan)
+    """Route report/assignment/presentation/spreadsheet through the unified AI planner."""
+    effective = instruction or f"Write a {kind} on {topic}"
+    return _plan_and_write_document(document, topic, effective, plan)
 
 
 def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str, bool]:
