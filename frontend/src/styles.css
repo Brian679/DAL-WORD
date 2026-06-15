@@ -3540,29 +3540,46 @@ ul {
 }
 
 /* ── Ghost inline highlight for AI-updated sections ── */
-@keyframes agent-update-in {
-    from { background-color: rgba(99, 102, 241, 0.18); box-shadow: inset 3px 0 0 #6366f1; }
-    to   { background-color: rgba(99, 102, 241, 0.08); box-shadow: inset 3px 0 0 #818cf8; }
+
+/* Heading: bright flash → settles to a steady accent */
+@keyframes agent-heading-in {
+    0%   { background-color: rgba(99, 102, 241, 0.26); box-shadow: inset 4px 0 0 #4f46e5; }
+    65%  { background-color: rgba(99, 102, 241, 0.14); box-shadow: inset 4px 0 0 #6366f1; }
+    100% { background-color: rgba(99, 102, 241, 0.09); box-shadow: inset 4px 0 0 #818cf8; }
 }
-@keyframes agent-update-out {
-    from { background-color: rgba(99, 102, 241, 0.08); box-shadow: inset 3px 0 0 #818cf8; }
+/* Content: gentle wash → subtle steady tint */
+@keyframes agent-content-in {
+    from { background-color: rgba(99, 102, 241, 0.13); box-shadow: inset 2px 0 0 rgba(99, 102, 241, 0.55); }
+    to   { background-color: rgba(99, 102, 241, 0.05); box-shadow: inset 2px 0 0 rgba(99, 102, 241, 0.35); }
+}
+/* Fade-outs — separate so values match each element's settled state */
+@keyframes agent-heading-out {
+    from { background-color: rgba(99, 102, 241, 0.09); box-shadow: inset 4px 0 0 #818cf8; border-top-color: rgba(99, 102, 241, 0.2); }
+    to   { background-color: transparent; box-shadow: none; border-top-color: transparent; }
+}
+@keyframes agent-content-out {
+    from { background-color: rgba(99, 102, 241, 0.05); box-shadow: inset 2px 0 0 rgba(99, 102, 241, 0.35); }
     to   { background-color: transparent; box-shadow: none; }
 }
 
+/* Heading row — 4px bar + faint top-border marks the section boundary */
 .doc-rich-editor [data-ghost-highlight="true"] {
-    padding-left: 12px;
-    border-radius: 0 3px 0 0;
-    background-color: rgba(99, 102, 241, 0.1);
-    box-shadow: inset 3px 0 0 #6366f1;
-    animation: agent-update-in 0.35s ease forwards,
-               agent-update-out 1.2s ease 7.5s forwards;
+    padding-left: 14px;
+    border-top: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 0 5px 0 0;
+    background-color: rgba(99, 102, 241, 0.09);
+    box-shadow: inset 4px 0 0 #818cf8;
+    animation: agent-heading-in 0.45s cubic-bezier(0.22, 0.61, 0.36, 1) forwards,
+               agent-heading-out 1.6s ease 9s forwards;
 }
 
+/* Body paragraphs — 2px bar at lower opacity, visually grouped with heading */
 .doc-rich-editor [data-ghost-highlight="content"] {
-    padding-left: 12px;
+    padding-left: 14px;
     background-color: rgba(99, 102, 241, 0.05);
-    box-shadow: inset 3px 0 0 rgba(99, 102, 241, 0.3);
-    animation: agent-update-out 1.2s ease 7.5s forwards;
+    box-shadow: inset 2px 0 0 rgba(99, 102, 241, 0.35);
+    animation: agent-content-in 0.55s ease forwards,
+               agent-content-out 1.6s ease 9s forwards;
 }
 
 

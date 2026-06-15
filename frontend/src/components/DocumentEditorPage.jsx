@@ -1159,8 +1159,8 @@ export default function DocumentEditorPage({
       }, 120);
     }
 
-    // Auto-clear highlights after 9 seconds (badge + highlight visible long enough to notice)
-    const timer = setTimeout(() => setHighlightedSections([]), 9000);
+    // Auto-clear highlights after CSS fade finishes (9s display + 1.6s fade)
+    const timer = setTimeout(() => setHighlightedSections([]), 10700);
     return () => clearTimeout(timer);
   }, [highlightedSections, draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
