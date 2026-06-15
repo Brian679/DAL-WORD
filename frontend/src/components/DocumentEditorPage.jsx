@@ -2806,14 +2806,6 @@ export default function DocumentEditorPage({
               <div className="doc-paper-scroll">
                 <div className="doc-page-body-zone">
                   {!!manualError && <p className="doc-manual-error">{manualError}</p>}
-                  {!!highlightedSections.length && (
-                    <div className="doc-change-highlight-strip" role="status" aria-live="polite">
-                      <span className="doc-change-highlight-label">Agent updated:</span>
-                      {highlightedSections.map((title, idx) => (
-                        <span className="doc-change-highlight-chip" key={`${title}-${idx}`}>{title}</span>
-                      ))}
-                    </div>
-                  )}
                   <div
                     ref={richEditorRef}
                     className="doc-rich-editor"
@@ -3214,14 +3206,6 @@ export default function DocumentEditorPage({
                           </details>
                         )}
                       </div>
-                      {!!msg?.changeSet?.editedSections?.length && (
-                        <div className="dap-change-summary">
-                          <span className="dap-change-summary-label">Updated sections:</span>
-                          {msg.changeSet.editedSections.map((title, idx) => (
-                            <span className="dap-change-chip" key={`${msg.id}-${idx}`}>{title}</span>
-                          ))}
-                        </div>
-                      )}
                       {!!msg?.changeSet?.pending && (
                         <div className="dap-task-actions">
                           <button type="button" className="dap-keep-btn" onClick={() => keepAgentChanges(activeChatId, msg.id)}>Keep</button>
