@@ -356,3 +356,46 @@ class AcademicQualityView(APIView):
             "quality_score": 0, "verdict": "insufficient_text", "issues": [], "word_count": 0
         }
         return Response({"sections": sections_out, "overall": overall})
+
+
+class PlagiarismCheckView(APIView):
+    """
+    Check a document for plagiarism against every other document in the
+    workspace, using shingled n-gram fingerprint matching — the same
+    technique Turnitin's OriginalityCheck index is built on.
+    """
+
+    def post(self, request, document_id: int):
+        try:
+            document = Document.objects.get(pk=document_id)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        from .plagiarism_detector import check_plagiarism
+
+        custom_text = (request.data.get("text") or "").strip()
+        if custom_text:
+            full_text = custom_text
+        else:
+            content = document.content or {}
+            parts = []
+            for section in content.get("sections", []):
+                body = (section.get("content") or "").strip()
+                if body:
+                    parts.append(body)
+            full_text = "\n\n".join(parts)
+
+        source_docs = []
+        for other in Document.objects.exclude(pk=document_id).only("id", "title", "content"):
+            other_content = other.content or {}
+            parts = []
+            for section in other_content.get("sections", []):
+                body = (section.get("content") or "").strip()
+                if body:
+                    parts.append(body)
+            other_text = "\n\n".join(parts)
+            if other_text.strip():
+                source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
+
+        result = check_plagiarism(full_text, source_docs)
+        return Response(result)

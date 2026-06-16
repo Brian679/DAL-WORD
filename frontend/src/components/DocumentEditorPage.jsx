@@ -72,7 +72,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent, checkPlagiarism } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -753,6 +753,10 @@ export default function DocumentEditorPage({
   const [showAiDetectPanel, setShowAiDetectPanel] = useState(false);
   const [aiDetecting, setAiDetecting] = useState(false);
   const [aiDetectResult, setAiDetectResult] = useState(null);
+  // Plagiarism detection panel
+  const [showPlagiarismPanel, setShowPlagiarismPanel] = useState(false);
+  const [plagiarismChecking, setPlagiarismChecking] = useState(false);
+  const [plagiarismResult, setPlagiarismResult] = useState(null);
   const [qualityChecking, setQualityChecking] = useState(false);
   const [qualityResult, setQualityResult] = useState(null);
   const [showQualityPanel, setShowQualityPanel] = useState(false);
@@ -785,6 +789,7 @@ export default function DocumentEditorPage({
   const progressPollBusyRef = useRef(false);
   const workflowStateRef = useRef({});
   const aiDetectResultRef = useRef(null);
+  const plagiarismResultRef = useRef(null);
 
   function clearProgressPolling() {
     if (progressPollRef.current) {
@@ -1468,11 +1473,109 @@ export default function DocumentEditorPage({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiDetectResult, aiDetecting, draftSections]);
 
+  function _applyPlagiarismHighlights(result) {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+
+    const doc = window.document;
+    editor.querySelectorAll('[data-plag-sent]').forEach((el) => {
+      const txt = doc.createTextNode(el.textContent);
+      el.parentNode.replaceChild(txt, el);
+    });
+    editor.normalize();
+
+    if (!result?.sentences?.length) return;
+    const flagged = result.sentences.filter((s) => s.label !== 'original');
+    if (!flagged.length) return;
+
+    for (const { text, label, similarity, source_title } of flagged) {
+      try {
+        const bg = label === 'matched' ? 'rgba(168,85,247,0.28)' : 'rgba(96,165,250,0.28)';
+        const borderColor = label === 'matched' ? '#9333ea' : '#3b82f6';
+        const pct = Math.round(similarity * 100);
+
+        const walker = doc.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          const idx = node.textContent.indexOf(text);
+          if (idx === -1) continue;
+
+          const before = node.textContent.slice(0, idx);
+          const after  = node.textContent.slice(idx + text.length);
+          const parent = node.parentNode;
+
+          const span = doc.createElement('span');
+          span.setAttribute('data-plag-sent', label);
+          span.style.cssText = [
+            `background:${bg}`,
+            `border-bottom:2px solid ${borderColor}`,
+            'border-radius:3px',
+            'padding:0 1px',
+            'cursor:help',
+          ].join(';');
+          span.title = `${pct}% match${source_title ? ` — ${source_title}` : ''} — ${label === 'matched' ? 'Likely copied' : 'Similar wording'}`;
+          span.textContent = text;
+
+          if (before) parent.insertBefore(doc.createTextNode(before), node);
+          parent.insertBefore(span, node);
+          if (after)  parent.insertBefore(doc.createTextNode(after), node);
+          parent.removeChild(node);
+          break; // only first occurrence per sentence
+        }
+      } catch (e) {
+        console.error('[PLAGIARISM-HIGHLIGHT] error applying sentence highlight:', e, text?.slice(0, 40));
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (plagiarismResult && !plagiarismChecking && !plagiarismResult.error) {
+      const id = setTimeout(() => _applyPlagiarismHighlights(plagiarismResult), 80);
+      return () => clearTimeout(id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plagiarismResult, plagiarismChecking, draftSections]);
+
+  async function runPlagiarismCheck() {
+    const docId = document?.id;
+    if (!docId) return;
+    setPlagiarismChecking(true);
+    setShowPlagiarismPanel(true);
+    setShowAiDetectPanel(false);
+    setShowCommentsPanel(false);
+    setShowQualityPanel(false);
+    setAiPanelOpen(true);
+    try {
+      const result = await checkPlagiarism(docId);
+      plagiarismResultRef.current = result;
+      setPlagiarismResult(result);
+    } catch (err) {
+      plagiarismResultRef.current = null;
+      setPlagiarismResult({ error: String(err?.message || 'Plagiarism check failed') });
+    } finally {
+      setPlagiarismChecking(false);
+    }
+  }
+
+  function clearPlagiarismHighlights() {
+    plagiarismResultRef.current = null;
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.querySelectorAll('[data-plag-sent]').forEach((el) => {
+      const txt = window.document.createTextNode(el.textContent);
+      el.parentNode.replaceChild(txt, el);
+    });
+    editor.normalize();
+    setPlagiarismResult(null);
+    setShowPlagiarismPanel(false);
+  }
+
   async function runAiDetect() {
     const docId = document?.id;
     if (!docId) return;
     setAiDetecting(true);
     setShowAiDetectPanel(true);
+    setShowPlagiarismPanel(false);
     setShowCommentsPanel(false);
     setAiPanelOpen(true);
     try {
@@ -1507,6 +1610,7 @@ export default function DocumentEditorPage({
     setQualityChecking(true);
     setShowQualityPanel(true);
     setShowAiDetectPanel(false);
+    setShowPlagiarismPanel(false);
     setShowCommentsPanel(false);
     setAiPanelOpen(true);
     try {
@@ -1533,6 +1637,14 @@ export default function DocumentEditorPage({
     'check for artificial intelligence', 'scan ai', 'ai scan',
   ];
 
+  // Keywords that trigger plagiarism checking directly from chat input
+  const PLAGIARISM_PHRASES = [
+    'check for plagiarism', 'plagiarism check', 'check plagiarism', 'plagiarism score',
+    'plagiarism percentage', 'originality check', 'originality report', 'similarity report',
+    'similarity score', 'check originality', 'duplicate content check', 'is this plagiarised',
+    'is this plagiarized', 'check for copied content', 'check for duplicate',
+  ];
+
   // Keywords that trigger academic quality check from chat input
   const QUALITY_CHECK_PHRASES = [
     'check writing', 'writing check', 'academic quality', 'check academic',
@@ -1552,6 +1664,11 @@ export default function DocumentEditorPage({
   function _isQualityCheckRequest(text) {
     const lower = text.toLowerCase();
     return QUALITY_CHECK_PHRASES.some(p => lower.includes(p));
+  }
+
+  function _isPlagiarismRequest(text) {
+    const lower = text.toLowerCase();
+    return PLAGIARISM_PHRASES.some(p => lower.includes(p));
   }
 
   async function sendMessage(text) {
@@ -1584,6 +1701,40 @@ export default function DocumentEditorPage({
                     : aiDetectResultRef.current?.verdict === 'mixed' ? 'Mixed content detected. Some passages show AI signals — review the highlighted sections.'
                     : 'Content reads as human-written. No significant AI signals detected.'
                   } Flagged sentences are highlighted in the document.`,
+              plan: [],
+            },
+          ],
+        }
+      ));
+      return;
+    }
+
+    // ── Intercept: Plagiarism check request ────────────────────────────────────
+    if (_isPlagiarismRequest(userText) && !attachedFile) {
+      const userMsg = { id: Date.now(), role: 'user', text: userText };
+      const currentChatId = activeChatId;
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : { ...c, messages: [...c.messages, userMsg] }
+      ));
+      setInputValue('');
+      await runPlagiarismCheck();
+      setChats(prev => prev.map(c =>
+        c.id !== currentChatId ? c : {
+          ...c,
+          messages: [
+            ...c.messages,
+            {
+              id: Date.now() + 2,
+              role: 'assistant',
+              text: plagiarismResultRef.current?.error
+                ? `Plagiarism check failed: ${plagiarismResultRef.current.error}`
+                : `Plagiarism check complete. Overall similarity: **${(plagiarismResultRef.current?.overall_similarity_percentage ?? 0).toFixed(1)}%** — ${
+                    plagiarismResultRef.current?.verdict === 'severe' ? 'Severe similarity detected. Review the matched passages.'
+                    : plagiarismResultRef.current?.verdict === 'high' ? 'High similarity detected. Several passages closely match other documents.'
+                    : plagiarismResultRef.current?.verdict === 'moderate' ? 'Moderate similarity detected. Some passages overlap with other documents.'
+                    : plagiarismResultRef.current?.verdict === 'minor' ? 'Minor overlap detected — likely common phrasing.'
+                    : 'No significant matches found.'
+                  } Checked against **${plagiarismResultRef.current?.checked_against ?? 0}** other document(s) in your workspace.`,
               plan: [],
             },
           ],
@@ -2789,6 +2940,34 @@ export default function DocumentEditorPage({
                   </div>
                   <span className="doc-tool-group-label">AI Detection</span>
                 </div>
+                {/* Plagiarism Check */}
+                <div className="doc-tool-group">
+                  <div className="doc-tool-group-rows">
+                    <div className="doc-tool-group-row">
+                      <button
+                        className={`doc-tool-btn doc-tool-btn--labeled${plagiarismResult && !plagiarismChecking ? ' doc-tool-btn--active' : ''}`}
+                        title="Check for plagiarism against other documents (shingle fingerprint matching)"
+                        disabled={plagiarismChecking}
+                        onClick={runPlagiarismCheck}
+                      >
+                        <FileSearch size={13}/>
+                        <span>{plagiarismChecking ? 'Scanning…' : 'Check Plagiarism'}</span>
+                      </button>
+                    </div>
+                    <div className="doc-tool-group-row">
+                      <button
+                        className="doc-tool-btn doc-tool-btn--labeled"
+                        title="Clear plagiarism highlights"
+                        disabled={!plagiarismResult}
+                        onClick={clearPlagiarismHighlights}
+                      >
+                        <X size={13}/>
+                        <span>Clear</span>
+                      </button>
+                    </div>
+                  </div>
+                  <span className="doc-tool-group-label">Plagiarism</span>
+                </div>
                 {/* Tone */}
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
@@ -2850,14 +3029,14 @@ export default function DocumentEditorPage({
               <div className="dap-header-logo">
                 <Wand2 size={14} />
               </div>
-              <span className="dap-title">{showQualityPanel ? 'Writing Check' : showAiDetectPanel ? 'AI Detection' : showCommentsPanel ? 'Comments' : 'Copilot'}</span>
+              <span className="dap-title">{showQualityPanel ? 'Writing Check' : showAiDetectPanel ? 'AI Detection' : showPlagiarismPanel ? 'Plagiarism Check' : showCommentsPanel ? 'Comments' : 'Copilot'}</span>
             </div>
             <div className="dap-header-right">
               <button
                 type="button"
                 className={`dap-head-icon-btn${showAiDetectPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title="AI Detection results"
-                onClick={() => { setShowAiDetectPanel(p => !p); setShowCommentsPanel(false); setShowQualityPanel(false); }}
+                onClick={() => { setShowAiDetectPanel(p => !p); setShowPlagiarismPanel(false); setShowCommentsPanel(false); setShowQualityPanel(false); }}
               >
                 <ShieldCheck size={13} className="dap-icon-btn" />
                 {aiDetectResult && !showAiDetectPanel && (
@@ -2866,9 +3045,20 @@ export default function DocumentEditorPage({
               </button>
               <button
                 type="button"
+                className={`dap-head-icon-btn${showPlagiarismPanel ? ' dap-head-icon-btn--active' : ''}`}
+                title="Plagiarism check results"
+                onClick={() => { setShowPlagiarismPanel(p => !p); setShowAiDetectPanel(false); setShowCommentsPanel(false); setShowQualityPanel(false); }}
+              >
+                <FileSearch size={13} className="dap-icon-btn" />
+                {plagiarismResult && !showPlagiarismPanel && !plagiarismResult.error && (
+                  <span className="dap-comment-badge" style={{background: plagiarismResult.verdict === 'severe' ? '#ef4444' : plagiarismResult.verdict === 'high' ? '#ea580c' : plagiarismResult.verdict === 'moderate' ? '#ca8a04' : '#16a34a'}}>!</span>
+                )}
+              </button>
+              <button
+                type="button"
                 className={`dap-head-icon-btn${showQualityPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title="Academic writing quality report"
-                onClick={() => { setShowQualityPanel(p => !p); setShowAiDetectPanel(false); setShowCommentsPanel(false); }}
+                onClick={() => { setShowQualityPanel(p => !p); setShowAiDetectPanel(false); setShowPlagiarismPanel(false); setShowCommentsPanel(false); }}
               >
                 <BookOpen size={13} className="dap-icon-btn" />
                 {qualityResult && !qualityResult.error && !showQualityPanel && (
@@ -2881,7 +3071,7 @@ export default function DocumentEditorPage({
                 type="button"
                 className={`dap-head-icon-btn${showCommentsPanel ? ' dap-head-icon-btn--active' : ''}`}
                 title={showCommentsPanel ? 'Back to Chat' : `Comments${docComments.length ? ` (${docComments.length})` : ''}`}
-                onClick={() => { setShowCommentsPanel(p => !p); setShowAiDetectPanel(false); setShowQualityPanel(false); }}
+                onClick={() => { setShowCommentsPanel(p => !p); setShowAiDetectPanel(false); setShowPlagiarismPanel(false); setShowQualityPanel(false); }}
               >
                 <MessageCircle size={13} className="dap-icon-btn" />
                 {docComments.length > 0 && !showCommentsPanel && (
@@ -2995,8 +3185,113 @@ export default function DocumentEditorPage({
             </div>
           ) : null}
 
+          {/* ── Plagiarism Check panel ── */}
+          {showPlagiarismPanel ? (
+            <div className="dap-comments-panel" style={{padding:'12px 14px',overflowY:'auto'}}>
+              {plagiarismChecking ? (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:'32px 0',color:'#6b7280'}}>
+                  <FileSearch size={32} strokeWidth={1.5} style={{animation:'spin 1.5s linear infinite'}}/>
+                  <span style={{fontSize:13}}>Scanning for plagiarism…</span>
+                </div>
+              ) : plagiarismResult?.error ? (
+                <div style={{color:'#ef4444',fontSize:12,padding:8}}>{plagiarismResult.error}</div>
+              ) : plagiarismResult ? (
+                <>
+                  {/* Score gauge */}
+                  <div style={{textAlign:'center',marginBottom:14}}>
+                    {(() => {
+                      const pct = plagiarismResult.overall_similarity_percentage ?? 0;
+                      const color = plagiarismResult.color || '#16a34a';
+                      const label = plagiarismResult.verdict === 'severe' ? 'Severe Similarity'
+                        : plagiarismResult.verdict === 'high' ? 'High Similarity'
+                        : plagiarismResult.verdict === 'moderate' ? 'Moderate Similarity'
+                        : plagiarismResult.verdict === 'minor' ? 'Minor Similarity'
+                        : 'No Matches Found';
+                      const Icon = plagiarismResult.verdict === 'severe' || plagiarismResult.verdict === 'high' ? ShieldAlert
+                        : plagiarismResult.verdict === 'moderate' ? AlertTriangle
+                        : ShieldCheck;
+                      return (
+                        <>
+                          <Icon size={28} color={color} strokeWidth={1.8} style={{marginBottom:6}}/>
+                          <div style={{fontSize:28,fontWeight:700,color,lineHeight:1}}>{pct}%</div>
+                          <div style={{fontSize:11,color:'#6b7280',marginTop:3}}>Similarity</div>
+                          <div style={{fontSize:12,fontWeight:600,color,marginTop:4}}>{label}</div>
+                          <div style={{marginTop:8,height:6,borderRadius:4,background:'#e5e7eb',overflow:'hidden'}}>
+                            <div style={{height:'100%',width:`${pct}%`,background:color,transition:'width 0.6s ease',borderRadius:4}}/>
+                          </div>
+                          <div style={{display:'flex',justifyContent:'space-between',fontSize:10,color:'#9ca3af',marginTop:3}}>
+                            <span>Original</span><span>Copied</span>
+                          </div>
+                          <div style={{fontSize:11,color:'#6b7280',marginTop:8}}>
+                            Checked against <strong>{plagiarismResult.checked_against ?? 0}</strong> other document{plagiarismResult.checked_against === 1 ? '' : 's'}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                  {/* Legend */}
+                  <div style={{display:'flex',gap:10,fontSize:10,color:'#6b7280',marginBottom:10,flexWrap:'wrap'}}>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'rgba(168,85,247,0.3)',border:'1px solid #9333ea',display:'inline-block'}}/> Matched</span>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'rgba(96,165,250,0.3)',border:'1px solid #3b82f6',display:'inline-block'}}/> Similar</span>
+                    <span style={{display:'flex',alignItems:'center',gap:3}}><span style={{width:10,height:10,borderRadius:2,background:'transparent',border:'1px solid #d1d5db',display:'inline-block'}}/> Original</span>
+                  </div>
+                  {/* Sources */}
+                  {plagiarismResult.sources?.length > 0 && (
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontSize:11,fontWeight:600,color:'#374151',marginBottom:6}}>Matched sources</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                        {plagiarismResult.sources.map((s, i) => (
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#374151',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:5,padding:'5px 8px'}}>
+                            <span>{s.title}</span>
+                            <span style={{fontWeight:600,color:'#9333ea'}}>{s.match_percentage}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Flagged sentences */}
+                  {plagiarismResult.sentences?.filter(s => s.label !== 'original').length > 0 ? (
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:'#374151',marginBottom:6}}>
+                        Flagged passages ({plagiarismResult.sentences.filter(s=>s.label!=='original').length})
+                      </div>
+                      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                        {plagiarismResult.sentences.filter(s=>s.label!=='original').map((s,i)=>{
+                          const c = s.label==='matched' ? '#9333ea' : '#3b82f6';
+                          const bg = s.label==='matched' ? 'rgba(168,85,247,0.07)' : 'rgba(96,165,250,0.07)';
+                          return (
+                            <div key={i} style={{background:bg,border:`1px solid ${c}33`,borderRadius:5,padding:'6px 8px'}}>
+                              <div style={{fontSize:10,color:c,fontWeight:600,marginBottom:2}}>
+                                {Math.round(s.similarity*100)}% match · {s.label==='matched'?'Likely copied':'Similar wording'}{s.source_title ? ` · ${s.source_title}` : ''}
+                              </div>
+                              <div style={{fontSize:11,color:'#374151',lineHeight:1.5}}>
+                                {s.text.length > 140 ? s.text.slice(0,140)+'…' : s.text}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{fontSize:12,color:'#16a34a',textAlign:'center',padding:'12px 0'}}>
+                      <ShieldCheck size={20} style={{marginBottom:4}}/><br/>No matching passages found
+                    </div>
+                  )}
+                  <div style={{fontSize:10,color:'#9ca3af',marginTop:12,lineHeight:1.5}}>
+                    Uses shingled n-gram fingerprint matching against other documents in your workspace, mirroring the fingerprint-index approach behind Turnitin's OriginalityCheck.
+                  </div>
+                </>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,padding:'32px 0',color:'#9ca3af'}}>
+                  <FileSearch size={28} strokeWidth={1.5}/>
+                  <span style={{fontSize:12}}>Type <strong>"check for plagiarism"</strong> in the chat to scan the document.</span>
+                </div>
+              )}
+            </div>
+          ) : null}
+
           {/* ── Academic Quality panel ── */}
-          {showQualityPanel && !showAiDetectPanel ? (
+          {showQualityPanel && !showAiDetectPanel && !showPlagiarismPanel ? (
             <div className="dap-comments-panel" style={{padding:'12px 14px',overflowY:'auto'}}>
               {qualityChecking ? (
                 <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:10,padding:'32px 0',color:'#6b7280'}}>
@@ -3087,7 +3382,7 @@ export default function DocumentEditorPage({
           ) : null}
 
           {/* ── Comments panel / Main Chat ── */}
-          {!showAiDetectPanel && !showQualityPanel && showCommentsPanel ? (
+          {!showAiDetectPanel && !showPlagiarismPanel && !showQualityPanel && showCommentsPanel ? (
             <div className="dap-comments-panel">
               {docComments.length === 0 ? (
                 <div className="dap-comments-empty">

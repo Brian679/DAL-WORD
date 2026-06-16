@@ -155,6 +155,16 @@ export async function detectAIContent(docId, text = '') {
     return res.json();
 }
 
+export async function checkPlagiarism(docId, text = '') {
+    const res = await fetch(`${API_BASE}/agent/${docId}/plagiarism-check/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(text ? { text } : {}),
+    });
+    if (!res.ok) throw new Error(await readApiError(res, 'Plagiarism check failed'));
+    return res.json();
+}
+
 export async function getDissertationPlan(docId, message) {
     try {
         const res = await fetch(`${API_BASE}/agent/${docId}/dissertation-plan/`, {
