@@ -59,7 +59,7 @@ _AI_PHRASE_PATTERNS: list[str] = [
     r"\beveryone.{0,20}knows?\b",
     r"\bfacilitat(?:e|es|ing|ed)\b.{0,40}(?:understanding|learning|growth|progress)\b",
     r"\bseamlessly integrat\b",
-    r"\brobust (?:framework|methodology|approach|solution|system)\b",
+    r"\brobust (?:framework|methodology|approach|solution|system)s?\b",
     r"\bemphasise?s? the (?:importance|need|significance)\b",
     r"\bintricacies? of\b",
     r"\bever-?(?:evolving|changing|growing|increasing)\b",
@@ -209,7 +209,7 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     # Hedge openers
     (re.compile(r"\bIt is important to note that\b", re.I), "Note that"),
     (re.compile(r"\bIt is worth noting that\b", re.I), "Worth noting:"),
-    (re.compile(r"\bIt is (?:crucial|essential|vital) to\b", re.I), "To"),
+    (re.compile(r"\bIt is (?:crucial|essential|vital) to\b", re.I), lambda m: _match_case(m.group(), "to")),
     (re.compile(r"\bIt is evident that\b", re.I), "Clearly,"),
     (re.compile(r"\bIt (?:is|can be) (?:argued|said|noted|observed) that\b", re.I), "I would argue that"),
     (re.compile(r"\bNeedless to say,?\s*", re.I), ""),
@@ -246,8 +246,8 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bparadigm shift\b", re.I), "major change"),
     (re.compile(r"\binextricably linked\b", re.I), "closely connected"),
     (re.compile(r"\bseamlessly integrat\b", re.I), "integrat"),
-    (re.compile(r"\brobust (?:framework|methodology|approach|solution|system)\b", re.I), lambda m: m.group().split()[-1]),
-    (re.compile(r"\bthe (?:realm|landscape|domain) of\b", re.I), "the field of"),
+    (re.compile(r"\brobust (?:framework|methodology|approach|solution|system)s?\b", re.I), lambda m: m.group().split()[-1]),
+    (re.compile(r"\bthe (?:realm|landscape|domain) of\b", re.I), "the area of"),
     (re.compile(r"\bthe aforementioned\b", re.I), "these"),
     (re.compile(r"\baforementioned\b", re.I), "above-mentioned"),
     (re.compile(r"\bever-?(?:evolving|changing|growing)\b", re.I), "changing"),
@@ -256,7 +256,8 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bfoster(?:s|ed|ing)? (?:a )?(?:deeper|better|greater|more nuanced) understanding\b", re.I), "build understanding"),
     (re.compile(r"\bunderscores? the (?:importance|significance|need|necessity)\b", re.I), "highlights the importance"),
     (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), "highlights the importance"),
-    (re.compile(r"\bplays? (?:a )?(?:crucial|pivotal|significant|vital|key) role\b", re.I), "plays a key role"),
+    (re.compile(r"\b(plays?) (?:a )?(?:crucial|pivotal|significant|vital|key|important) role\b", re.I),
+     lambda m: "matters" if m.group(1).lower() == "plays" else "matter"),
     (re.compile(r"\bsignificantly impacts?\b", re.I), "affects"),
     (re.compile(r"\bpotential (?:benefits?|implications?|challenges?)\b", re.I), lambda m: m.group().split()[-1]),
     # Connective filler
@@ -351,25 +352,30 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
         while i < len(sentences):
             sent = sentences[i]
             words = sent.split()
-            # Split long sentences (> 30 words) at a clause boundary if one exists.
-            if len(words) > 30:
+            # Split long/medium sentences (> 20 words) at a clause boundary,
+            # falling back to the first comma if no conjunction is present.
+            if len(words) > 20:
                 m = _CLAUSE_SPLIT_RE.search(sent)
-                if m and rng.random() < 0.7:
-                    cut = m.start()
+                cut = m.start() if m else None
+                if cut is None:
+                    comma = sent.find(",", 15)
+                    if comma != -1:
+                        cut = comma
+                if cut is not None and rng.random() < 0.85:
                     first = sent[:cut].strip().rstrip(",") + "."
                     rest = sent[cut:].strip()
-                    rest = re.sub(r"^,\s*(and|but|so)\s+", "", rest, flags=re.IGNORECASE)
+                    rest = re.sub(r"^,\s*(?:(?:and|but|so|which|while)\s+)?", "", rest, flags=re.IGNORECASE)
                     rest = rest[:1].upper() + rest[1:]
                     rebuilt.append(first)
                     rebuilt.append(rest)
                     i += 1
                     continue
-            # Merge two consecutive short sentences (< 9 words) into one.
+            # Merge two consecutive short sentences (< 11 words) into one.
             if (
-                len(words) < 9
+                len(words) < 11
                 and i + 1 < len(sentences)
-                and len(sentences[i + 1].split()) < 14
-                and rng.random() < 0.5
+                and len(sentences[i + 1].split()) < 16
+                and rng.random() < 0.6
             ):
                 nxt = sentences[i + 1]
                 joiner = rng.choice([", and", ";", ", while"])
@@ -379,6 +385,22 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
                 continue
             rebuilt.append(sent)
             i += 1
+
+        # Final pass: if every sentence in the paragraph clusters in a narrow
+        # length band (flat = AI-like), force-split the longest one at its
+        # first comma to inject a short, punchy fragment.
+        lens = [len(s.split()) for s in rebuilt]
+        if len(rebuilt) >= 2 and lens and (max(lens) - min(lens)) < 7:
+            longest_i = max(range(len(rebuilt)), key=lambda idx: lens[idx])
+            longest = rebuilt[longest_i]
+            comma = longest.find(",", 10)
+            if comma != -1:
+                first = longest[:comma].strip().rstrip(",") + "."
+                rest = longest[comma:].strip()
+                rest = re.sub(r"^,\s*(?:(?:and|but|so|which|while)\s+)?", "", rest, flags=re.IGNORECASE)
+                rest = rest[:1].upper() + rest[1:]
+                rebuilt[longest_i:longest_i + 1] = [first, rest]
+
         out_paragraphs.append(" ".join(rebuilt))
     return "\n".join(out_paragraphs)
 
