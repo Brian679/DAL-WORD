@@ -1,7 +1,7 @@
 """
-AI content detection engine.
+AI content detection engine, plus a StealthWriter-style rule-based humaniser.
 
-Approximates Turnitin's two-signal methodology:
+Detection approximates Turnitin's two-signal methodology:
   1. Perplexity  – how predictable is each sentence to a language model?
      (approximated via known-phrase + structural signals)
   2. Burstiness  – humans vary their sentence complexity; LLMs stay uniform.
@@ -9,9 +9,19 @@ Approximates Turnitin's two-signal methodology:
 
 Overall document AI probability combines the mean sentence score (55 %)
 with a burstiness inversion signal (45 %).
+
+The humaniser mirrors the three signals a detector scores, attacking each
+directly instead of doing a single phrase find/replace pass:
+  Pass 1 — cliché/fingerprint phrase substitution (lowers phrase score)
+  Pass 2 — lexical substitution of high-predictability words with lower-
+            frequency synonyms (raises perplexity / lowers predictability)
+  Pass 3 — sentence-length restructuring: split long uniform sentences and
+            merge short uniform ones so length variance increases (raises
+            burstiness, since LLM output is unusually uniform in length)
 """
 from __future__ import annotations
 
+import random
 import re
 import statistics
 from typing import Any
@@ -54,6 +64,15 @@ _AI_PHRASE_PATTERNS: list[str] = [
     r"\bintricacies? of\b",
     r"\bever-?(?:evolving|changing|growing|increasing)\b",
     r"\bmyriad(?:\s+of)? (?:ways?|factors?|reasons?|benefits?|challenges?)\b",
+    r"\bshed(?:s|ding)? light on\b",
+    r"\bnavigate(?:s|d)? the complexit(?:y|ies) of\b",
+    r"\bstands? as a testament to\b",
+    r"\bserves? as a\b",
+    r"\bgarner(?:s|ed|ing)? (?:attention|interest|support)\b",
+    r"\bembark(?:s|ed|ing)? on a journey\b(?:\s+of)?",
+    r"\bin (?:today's|this) (?:fast-paced|rapidly changing) world\b",
+    r"\btapestry of\b",
+    r"\bunprecedented (?:levels?|growth|challenges?)\b",
 ]
 
 _AI_PHRASE_RES = [re.compile(p, re.IGNORECASE) for p in _AI_PHRASE_PATTERNS]
@@ -201,6 +220,18 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bBy no means\b", re.I), "Not"),
     # Time/world clichés
     (re.compile(r"\bIn today['’]?s (?:world|society|age|era|landscape)\b", re.I), "Today"),
+    (re.compile(r"\bin (?:today['’]?s|this) (?:fast-paced|rapidly changing) world\b", re.I), "now"),
+    (re.compile(r"\btapestry of\b", re.I), "mix of"),
+    (re.compile(r"\bunprecedented (?:levels?|growth|challenges?)\b", re.I), lambda m: f"sharp {m.group().split()[-1]}"),
+    (re.compile(r"\bshed(?:s|ding)? light on\b", re.I), "clarify"),
+    (re.compile(r"\bnavigate(?:s|d)? the complexit(?:y|ies) of\b", re.I), "work through"),
+    (re.compile(r"\bstands? as a testament to\b", re.I), "reflects"),
+    (re.compile(r"\bserves? as a\b", re.I), "acts as a"),
+    (re.compile(r"\bgarner(?:s|ed|ing)? (?:attention|interest|support)\b", re.I), lambda m: f"attract {m.group().split()[-1]}"),
+    (re.compile(r"\bembark(?:s|ed|ing)? on a journey\b(?:\s+of)?", re.I), "begin"),
+    (re.compile(r"\bit cannot be denied that\b", re.I), "clearly,"),
+    (re.compile(r"\bin (?:conclusion|summary)\b,?", re.I), "overall,"),
+    (re.compile(r"\bon the other hand\b", re.I), "by contrast"),
     (re.compile(r"\bThroughout history\b", re.I), "Historically"),
     (re.compile(r"\bThroughout the ages\b", re.I), "Over the years"),
     # Meta-essay phrases
@@ -245,24 +276,145 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-def rule_based_humanise(text: str) -> str:
+# ── Pass 2: lexical substitution ───────────────────────────────────────────
+# Common high-frequency / high-predictability words that LLMs over-use,
+# mapped to lower-frequency synonyms. Word-boundary, case-preserving swap.
+_SYNONYM_MAP: dict[str, list[str]] = {
+    "utilize": ["use"], "utilizes": ["uses"], "utilizing": ["using"],
+    "leverage": ["use", "draw on"], "leverages": ["uses", "draws on"], "leveraging": ["using", "drawing on"],
+    "numerous": ["many", "several"], "facilitate": ["help", "support"],
+    "facilitates": ["helps", "supports"], "demonstrate": ["show"], "demonstrates": ["shows"],
+    "demonstrated": ["showed"], "subsequently": ["later", "then"], "additionally": ["also"],
+    "approximately": ["about", "roughly"], "in order to": ["to"],
+    "due to the fact that": ["because"], "a number of": ["several", "a few"],
+    "is able to": ["can"], "are able to": ["can"], "prior to": ["before"],
+    "with regard to": ["regarding", "about"], "in the event that": ["if"],
+    "a majority of": ["most"], "in close proximity to": ["near"],
+    "indicate": ["show", "suggest"], "indicates": ["shows", "suggests"],
+    "significant": ["notable", "considerable"], "significantly": ["notably", "considerably"],
+    "obtain": ["get"], "obtained": ["got", "gathered"], "endeavor": ["try"],
+    "commence": ["begin", "start"], "commenced": ["began", "started"],
+    "terminate": ["end"], "ascertain": ["determine", "find out"],
+    "various": ["several", "a range of"],
+    "in conclusion": ["overall", "to sum up"], "on the other hand": ["conversely", "by contrast"],
+    "it cannot be denied that": ["clearly"], "shed light on": ["clarify", "explain"],
+    "in the realm of": ["in"], "cutting-edge": ["recent", "advanced"],
+    "garner": ["attract", "gain"], "garnered": ["attracted", "gained"],
+    "embark on": ["begin", "start"], "navigate the complexities of": ["address", "work through"],
+    "stands as a testament to": ["reflects", "confirms"],
+    "serves as a": ["acts as a", "functions as a"],
+}
+_SYNONYM_RES = sorted(_SYNONYM_MAP.keys(), key=len, reverse=True)
+
+
+def _match_case(src: str, repl: str) -> str:
+    if src.isupper():
+        return repl.upper()
+    if src[:1].isupper():
+        return repl[:1].upper() + repl[1:]
+    return repl
+
+
+def _lexical_substitute(text: str, rng: random.Random) -> str:
+    """Swap predictable high-frequency words for lower-frequency synonyms."""
+    for key in _SYNONYM_RES:
+        options = _SYNONYM_MAP[key]
+        pattern = re.compile(r"\b" + re.escape(key) + r"\b", re.IGNORECASE)
+
+        def _sub(m: re.Match, options: list[str] = options) -> str:
+            choice = rng.choice(options)
+            return _match_case(m.group(), choice)
+
+        text = pattern.sub(_sub, text)
+    return text
+
+
+# ── Pass 3: sentence-length restructuring (burstiness) ─────────────────────
+_CLAUSE_SPLIT_RE = re.compile(r",\s+(and|but|which|so|because)\s+", re.IGNORECASE)
+
+
+def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
     """
-    Apply deterministic phrase substitutions to reduce AI-detection scores.
-    Works without any LLM — replaces known AI clichés with plainer alternatives.
+    Split unusually long sentences and merge unusually short adjacent ones so
+    sentence-length variance rises — flat, uniform length is itself an AI
+    fingerprint (low burstiness), independent of word choice.
     """
+    paragraphs = text.split("\n")
+    out_paragraphs = []
+    for para in paragraphs:
+        if not para.strip():
+            out_paragraphs.append(para)
+            continue
+        sentences = _SENT_RE.split(para.strip())
+        rebuilt: list[str] = []
+        i = 0
+        while i < len(sentences):
+            sent = sentences[i]
+            words = sent.split()
+            # Split long sentences (> 30 words) at a clause boundary if one exists.
+            if len(words) > 30:
+                m = _CLAUSE_SPLIT_RE.search(sent)
+                if m and rng.random() < 0.7:
+                    cut = m.start()
+                    first = sent[:cut].strip().rstrip(",") + "."
+                    rest = sent[cut:].strip()
+                    rest = re.sub(r"^,\s*(and|but|so)\s+", "", rest, flags=re.IGNORECASE)
+                    rest = rest[:1].upper() + rest[1:]
+                    rebuilt.append(first)
+                    rebuilt.append(rest)
+                    i += 1
+                    continue
+            # Merge two consecutive short sentences (< 9 words) into one.
+            if (
+                len(words) < 9
+                and i + 1 < len(sentences)
+                and len(sentences[i + 1].split()) < 14
+                and rng.random() < 0.5
+            ):
+                nxt = sentences[i + 1]
+                joiner = rng.choice([", and", ";", ", while"])
+                merged = sent.rstrip(".") + joiner + " " + nxt[:1].lower() + nxt[1:]
+                rebuilt.append(merged)
+                i += 2
+                continue
+            rebuilt.append(sent)
+            i += 1
+        out_paragraphs.append(" ".join(rebuilt))
+    return "\n".join(out_paragraphs)
+
+
+def rule_based_humanise(text: str, seed: str | None = None) -> str:
+    """
+    StealthWriter-style multi-pass rewrite, applied without any LLM:
+      1. Replace known AI cliché phrases with plainer alternatives.
+      2. Swap predictable high-frequency words for lower-frequency synonyms
+         (raises perplexity).
+      3. Restructure sentence lengths — split long uniform sentences, merge
+         short uniform ones (raises burstiness).
+    `seed` makes synonym/restructuring choices deterministic per-call while
+    still varying between different input texts.
+    """
+    rng = random.Random(seed or text[:200])
+
     result = text
     for pattern, repl in _HUMANISE_RULES:
-        if callable(repl):
-            result = pattern.sub(repl, result)
-        else:
-            result = pattern.sub(repl, result)
+        result = pattern.sub(repl, result)
     # Collapse accidental double-spaces
     result = re.sub(r"  +", " ", result)
-    # Fix 'Also, Also,' chains
-    result = re.sub(r"\bAlso, Also,?\s+", "Also, ", result)
+    # Collapse duplicate connectors left by stacked substitutions
+    # (e.g. "Furthermore, it is evident that" -> "Also, " + "Clearly," -> "Also, Clearly,")
+    result = re.sub(
+        r"\b(?:Also|And|So|Overall),\s+(?=(?:Also|And|So|Clearly|Obviously|Overall),)",
+        "",
+        result,
+    )
     # Remove stray leading commas after blank substitutions
     result = re.sub(r"\.\s+,\s+", ". ", result)
     result = re.sub(r"^\s*,\s*", "", result, flags=re.MULTILINE)
+
+    result = _lexical_substitute(result, rng)
+    result = _restructure_for_burstiness(result, rng)
+
     return result.strip()
 
 

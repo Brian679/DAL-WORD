@@ -4526,7 +4526,7 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
             logger.info("LLM humanise unavailable (%s), using rule-based fallback.", exc)
 
         if not new_content:
-            new_content = rule_based_humanise(content)
+            new_content = rule_based_humanise(content, seed=f"{document.id}:{i}")
 
         if new_content and new_content.strip() != content:
             sections[i]["content"] = new_content.strip()
