@@ -1542,6 +1542,10 @@ export default function DocumentEditorPage({
 
   function _isAiDetectRequest(text) {
     const lower = text.toLowerCase();
+    // "humanise the AI content" should route to humanising, not detection —
+    // don't let the bare "ai content" phrase steal requests that are really
+    // asking to rewrite/humanise the text.
+    if (/humanis|humaniz/.test(lower)) return false;
     return AI_DETECT_PHRASES.some(p => lower.includes(p));
   }
 
@@ -1616,6 +1620,7 @@ export default function DocumentEditorPage({
       return;
     }
 
+    let displayText = userText;
     if (attachedFile) {
         if (!displayText) {
              displayText = `Uploaded file: ${attachedFile.name}`;
