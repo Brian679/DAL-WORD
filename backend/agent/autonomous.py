@@ -46,6 +46,7 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "enhance_section",
     "enhance_document",
     "humanise_ai_sections",
+    "reduce_plagiarism_similarity",
     "address_comments",
     "create_outline",
     "add_chart",
@@ -74,6 +75,7 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
+        "reduce_plagiarism_similarity": "Detect passages that overlap with other workspace documents and rewrite them to reduce textual similarity",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
         # Legacy aliases
         "write_report":     "Plan and write a report based on the request",
@@ -1988,6 +1990,21 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     }
     if any(k in text for k in _humanise_kw):
         return {"intent": "humanise_ai_sections", "target_section": None, "topic": None}
+
+    # ── Reduce plagiarism / similarity ───────────────────────────────────────
+    _plagiarism_reduce_kw = {
+        "reduce similarity", "reduce the similarity", "reduce similarity score",
+        "reduce the similarity score", "reduce plagiarism", "reduce the plagiarism",
+        "reduce plagiarism score", "fix plagiarism", "fix the plagiarism",
+        "remove plagiarism", "remove the plagiarism", "lower the plagiarism",
+        "lower plagiarism", "make this original", "make it original",
+        "make this more original", "rewrite the plagiarised", "rewrite the plagiarized",
+        "rewrite plagiarised content", "rewrite plagiarized content",
+        "de-plagiarise", "de-plagiarize", "deplagiarise", "deplagiarize",
+        "avoid plagiarism", "reduce matched content", "reduce the matched content",
+    }
+    if any(k in text for k in _plagiarism_reduce_kw):
+        return {"intent": "reduce_plagiarism_similarity", "target_section": None, "topic": None}
 
     # ── Academic quality check ───────────────────────────────────────────────
     _quality_kw = {
@@ -4292,6 +4309,8 @@ def run_agent(
             reply, updated = _add_image(document, target_section, generation_message, plan)
         elif intent == "humanise_ai_sections":
             reply, updated = _humanise_ai_sections(document, topic or "", plan)
+        elif intent == "reduce_plagiarism_similarity":
+            reply, updated = _reduce_plagiarism_similarity(document, topic or "", plan)
         elif intent == "check_academic_quality":
             reply, updated = _check_academic_quality(document, plan)
         else:
@@ -4562,6 +4581,92 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
     return (
         "No strongly AI-detected passages were found — your document already reads naturally. "
         "Try running **Detect AI** first to scan for flagged sentences.",
+        False,
+    )
+
+
+def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Detect passages overlapping with other workspace documents and rewrite them to cut similarity."""
+    from .plagiarism_detector import check_plagiarism, reduce_similarity
+
+    sections = (document.content or {}).get("sections", [])
+    if not sections:
+        _all_done(plan)
+        return "The document has no sections yet.", False
+
+    source_docs = []
+    for other in Document.objects.exclude(pk=document.pk).only("id", "title", "content"):
+        other_content = other.content or {}
+        parts = [
+            (s.get("content") or "").strip()
+            for s in other_content.get("sections", [])
+            if (s.get("content") or "").strip()
+        ]
+        other_text = "\n\n".join(parts)
+        if other_text.strip():
+            source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
+
+    _done(plan, 0)  # Scanning document for matched/similar passages
+
+    if not source_docs:
+        _all_done(plan)
+        return (
+            "No other documents exist in the workspace to compare against, so there is nothing to "
+            "reduce — plagiarism similarity is only measured against other workspace documents.",
+            False,
+        )
+
+    _done(plan, 1)  # Comparing against other documents in the workspace
+
+    reduced = 0
+    for i, section in enumerate(sections):
+        content = (section.get("content") or "").strip()
+        if not content:
+            continue
+
+        detection = check_plagiarism(content, source_docs)
+        flagged = {s["text"] for s in detection.get("sentences", []) if s.get("label") != "original"}
+        if not flagged:
+            continue
+
+        new_content = reduce_similarity(content, flagged, seed=f"{document.id}:{i}")
+
+        # Re-check; if anything is still flagged, retry once with a fresh seed
+        # (mirrors the before/after verification pattern used by AI-humanisation).
+        recheck = check_plagiarism(new_content, source_docs)
+        still_flagged = {s["text"] for s in recheck.get("sentences", []) if s.get("label") != "original"}
+        if still_flagged:
+            retry_content = reduce_similarity(new_content, still_flagged, seed=f"{document.id}:{i}:retry")
+            if retry_content != new_content:
+                new_content = retry_content
+
+        if new_content.strip() != content:
+            sections[i]["content"] = new_content.strip()
+            reduced += 1
+
+    _done(plan, 2)  # Rewriting flagged passages to reduce textual overlap
+    _done(plan, 3)  # Re-checking similarity after rewrite
+    _all_done(plan)
+
+    if reduced:
+        document.content["sections"] = sections
+        _save(document, "reduce-plagiarism-similarity")
+
+        full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
+        after_result = check_plagiarism(full_text, source_docs)
+        after_pct = after_result.get("overall_similarity_percentage", 0)
+        after_verdict = after_result.get("verdict", "")
+
+        return (
+            f"Rewrote {reduced} section(s) to reduce overlap with other workspace documents. "
+            f"Similarity dropped to **{after_pct}%** ({after_verdict.replace('_', ' ')}). "
+            "Click **Check Plagiarism** to see the updated highlights.",
+            True,
+        )
+
+    return (
+        "No matched or similar passages were found against other workspace documents — your document "
+        "already reads as original. Try running **Check Plagiarism** first to scan for flagged sentences.",
         False,
     )
 

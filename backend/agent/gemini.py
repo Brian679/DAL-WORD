@@ -66,6 +66,7 @@ Choose ONE intent:
 - enhance_document
 - enhance_section
 - humanise_ai_sections
+- reduce_plagiarism_similarity
 - write_section
 - write_dissertation
 - write_document
@@ -77,6 +78,7 @@ Choose ONE intent:
 
 Guidance:
 - If user says "humanise", "humanize", "make it sound human", "remove AI", "bypass AI detection", "make less AI", "sound more natural", "rewrite AI passages", "human-like" -> humanise_ai_sections.
+- If user says "reduce similarity", "reduce plagiarism", "fix plagiarism", "remove plagiarism", "lower the plagiarism", "make this original", "rewrite the plagiarised content", "de-plagiarise" -> reduce_plagiarism_similarity. Note this is different from just asking to "check" or "scan for" plagiarism, which is a read-only request and should be classified as chat.
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
 - If user says "improve 2.7" or "fix 3.4" (subsection number) -> enhance_section with that exact number as target_section.
 - If user says "redo chapter X" or "rewrite chapter X" -> write_section with target_section.
@@ -113,6 +115,13 @@ def create_execution_plan(intent: str) -> list[str]:
             "Rewriting flagged passages with authentic human voice",
             "Varying sentence length and structure for natural burstiness",
             "Saving humanised document",
+        ],
+        "reduce_plagiarism_similarity": [
+            "Scanning document for matched/similar passages",
+            "Comparing against other documents in the workspace",
+            "Rewriting flagged passages to reduce textual overlap",
+            "Re-checking similarity after rewrite",
+            "Saving updated document",
         ],
         "enhance_document": [
             "Reading and analysing document structure",

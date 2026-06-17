@@ -1668,6 +1668,9 @@ export default function DocumentEditorPage({
 
   function _isPlagiarismRequest(text) {
     const lower = text.toLowerCase();
+    // "reduce/fix the plagiarism" should route to the similarity-reduction
+    // intent (which rewrites content), not the read-only originality check.
+    if (/\b(reduce|fix|remove|lower|rewrite|avoid|de-?plagiaris[ez]e?)\b/.test(lower)) return false;
     return PLAGIARISM_PHRASES.some(p => lower.includes(p));
   }
 
@@ -2952,6 +2955,17 @@ export default function DocumentEditorPage({
                       >
                         <FileSearch size={13}/>
                         <span>{plagiarismChecking ? 'Scanning…' : 'Check Plagiarism'}</span>
+                      </button>
+                    </div>
+                    <div className="doc-tool-group-row">
+                      <button
+                        className="doc-tool-btn doc-tool-btn--labeled"
+                        title="Rewrite matched/similar passages to reduce overlap with other documents"
+                        disabled={isThinking}
+                        onClick={() => { setAiPanelOpen(true); sendMessage('Reduce the plagiarism similarity in this document.'); }}
+                      >
+                        <Wand2 size={13}/>
+                        <span>Reduce Similarity</span>
                       </button>
                     </div>
                     <div className="doc-tool-group-row">
