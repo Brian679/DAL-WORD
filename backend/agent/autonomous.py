@@ -1980,6 +1980,11 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     if any(k in text for k in _grammar_kw):
         return {"intent": "enhance_section", "target_section": target, "topic": "grammar_and_style"}
 
+    # Strip common filler determiners so natural insertions like "remove THE ai"
+    # or "get rid of THE plagiarism" still match the literal phrases below.
+    _loose_text = re.sub(r"\b(the|a|an|this|that|my|your|its|it's)\b", " ", text)
+    _loose_text = re.sub(r"\s+", " ", _loose_text).strip()
+
     # ── Humanise / de-AI ────────────────────────────────────────────────────
     _humanise_kw = {
         "humanise", "humanize", "humanise the", "humanize the",
@@ -1987,8 +1992,11 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "remove ai", "less ai", "bypass ai", "avoid ai detection",
         "rewrite ai", "humanise ai", "humanize ai",
         "natural voice", "natural writing", "make more natural",
+        "get rid of ai", "take out ai", "eliminate ai", "scrub ai",
+        "sound human", "less robotic", "more natural sounding",
+        "make sound human", "make less ai",
     }
-    if any(k in text for k in _humanise_kw):
+    if any(k in _loose_text for k in _humanise_kw):
         return {"intent": "humanise_ai_sections", "target_section": None, "topic": None}
 
     # ── Reduce plagiarism / similarity ───────────────────────────────────────
@@ -2002,8 +2010,10 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "rewrite plagiarised content", "rewrite plagiarized content",
         "de-plagiarise", "de-plagiarize", "deplagiarise", "deplagiarize",
         "avoid plagiarism", "reduce matched content", "reduce the matched content",
+        "get rid of plagiarism", "take out plagiarism", "eliminate plagiarism",
+        "scrub plagiarism", "cut plagiarism", "clean up plagiarism",
     }
-    if any(k in text for k in _plagiarism_reduce_kw):
+    if any(k in _loose_text for k in _plagiarism_reduce_kw):
         return {"intent": "reduce_plagiarism_similarity", "target_section": None, "topic": None}
 
     # ── Academic quality check ───────────────────────────────────────────────

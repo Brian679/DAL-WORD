@@ -1635,6 +1635,8 @@ export default function DocumentEditorPage({
     'what is the ai', 'ai score', 'how much ai', 'scan for ai', 'ai check',
     'is this ai', 'check if ai', 'ai content', 'turnitin', 'ai detect',
     'check for artificial intelligence', 'scan ai', 'ai scan',
+    'any ai in', 'is there ai', 'ai in this', 'ai in here', 'ai generated',
+    'ai-generated', 'written by ai', 'sounds like ai', 'flag ai',
   ];
 
   // Keywords that trigger plagiarism checking directly from chat input
@@ -1643,6 +1645,8 @@ export default function DocumentEditorPage({
     'plagiarism percentage', 'originality check', 'originality report', 'similarity report',
     'similarity score', 'check originality', 'duplicate content check', 'is this plagiarised',
     'is this plagiarized', 'check for copied content', 'check for duplicate',
+    'any plagiarism', 'is there plagiarism', 'plagiarism in this', 'plagiarism in here',
+    'copied content', 'matched content', 'matching content', 'duplicate content',
   ];
 
   // Keywords that trigger academic quality check from chat input
@@ -1652,26 +1656,40 @@ export default function DocumentEditorPage({
     'academic check', 'writing feedback', 'critique the writing',
   ];
 
+  // Strip common filler determiners so natural insertions like "remove THE ai"
+  // or "check for THE plagiarism" still match the phrase lists above, which
+  // are written without them.
+  function _normalizeForIntent(text) {
+    return text.toLowerCase().replace(/\b(the|a|an|this|that|my|your|its|it's)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Catches "check <anything> for ai/plagiarism" templates where unrelated
+  // words ("this document", "my essay") sit between the verb and the noun.
+  const _CHECK_FOR_AI_RE = /\bcheck\b[\w\s]{0,30}\bfor\s+ai\b/;
+  const _CHECK_FOR_PLAGIARISM_RE = /\bcheck\b[\w\s]{0,30}\bfor\s+plagiarism\b/;
+
   function _isAiDetectRequest(text) {
-    const lower = text.toLowerCase();
+    const lower = _normalizeForIntent(text);
     // "humanise the AI content" should route to humanising, not detection —
     // don't let the bare "ai content" phrase steal requests that are really
     // asking to rewrite/humanise the text.
     if (/humanis|humaniz/.test(lower)) return false;
-    return AI_DETECT_PHRASES.some(p => lower.includes(p));
+    return AI_DETECT_PHRASES.some(p => lower.includes(p)) || _CHECK_FOR_AI_RE.test(lower);
   }
 
   function _isQualityCheckRequest(text) {
-    const lower = text.toLowerCase();
+    const lower = _normalizeForIntent(text);
     return QUALITY_CHECK_PHRASES.some(p => lower.includes(p));
   }
 
   function _isPlagiarismRequest(text) {
-    const lower = text.toLowerCase();
-    // "reduce/fix the plagiarism" should route to the similarity-reduction
-    // intent (which rewrites content), not the read-only originality check.
-    if (/\b(reduce|fix|remove|lower|rewrite|avoid|de-?plagiaris[ez]e?)\b/.test(lower)) return false;
-    return PLAGIARISM_PHRASES.some(p => lower.includes(p));
+    const lower = _normalizeForIntent(text);
+    // "reduce/fix/get rid of the plagiarism" should route to the
+    // similarity-reduction intent (which rewrites content), not the
+    // read-only originality check.
+    if (/\b(reduce|fix|remove|lower|rewrite|avoid|eliminate|scrub|cut|de-?plagiaris[ez]e?)\b/.test(lower)) return false;
+    if (/\bget rid of\b|\btake out\b|\bclean ?up\b/.test(lower)) return false;
+    return PLAGIARISM_PHRASES.some(p => lower.includes(p)) || _CHECK_FOR_PLAGIARISM_RE.test(lower);
   }
 
   async function sendMessage(text) {
