@@ -1755,7 +1755,11 @@ export default function DocumentEditorPage({
                     : plagiarismResultRef.current?.verdict === 'moderate' ? 'Moderate similarity detected. Some passages overlap with other documents.'
                     : plagiarismResultRef.current?.verdict === 'minor' ? 'Minor overlap detected — likely common phrasing.'
                     : 'No significant matches found.'
-                  } Checked against **${plagiarismResultRef.current?.checked_against ?? 0}** other document(s) in your workspace.`,
+                  } Checked against **${plagiarismResultRef.current?.checked_against ?? 0}** other document(s) in your workspace${
+                    plagiarismResultRef.current?.external_checked
+                      ? ` and **${plagiarismResultRef.current?.external_papers_checked ?? 0}** source(s) from the open web (Crossref, arXiv, PubMed, Semantic Scholar).`
+                      : '.'
+                  }`,
               plan: [],
             },
           ],
@@ -3256,6 +3260,9 @@ export default function DocumentEditorPage({
                           </div>
                           <div style={{fontSize:11,color:'#6b7280',marginTop:8}}>
                             Checked against <strong>{plagiarismResult.checked_against ?? 0}</strong> other document{plagiarismResult.checked_against === 1 ? '' : 's'}
+                            {plagiarismResult.external_checked ? (
+                              <> and <strong>{plagiarismResult.external_papers_checked ?? 0}</strong> open-web source{plagiarismResult.external_papers_checked === 1 ? '' : 's'}</>
+                            ) : null}
                           </div>
                         </>
                       );
@@ -3273,9 +3280,15 @@ export default function DocumentEditorPage({
                       <div style={{fontSize:11,fontWeight:600,color:'#374151',marginBottom:6}}>Matched sources</div>
                       <div style={{display:'flex',flexDirection:'column',gap:4}}>
                         {plagiarismResult.sources.map((s, i) => (
-                          <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#374151',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:5,padding:'5px 8px'}}>
-                            <span>{s.title}</span>
-                            <span style={{fontWeight:600,color:'#9333ea'}}>{s.match_percentage}%</span>
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,fontSize:11,color:'#374151',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:5,padding:'5px 8px'}}>
+                            {s.url ? (
+                              <a href={s.url} target="_blank" rel="noopener noreferrer" style={{color:'#374151',textDecoration:'underline',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={s.title}>
+                                {s.title} <span style={{color:'#9ca3af'}}>(web)</span>
+                              </a>
+                            ) : (
+                              <span>{s.title}</span>
+                            )}
+                            <span style={{fontWeight:600,color:'#9333ea',flexShrink:0}}>{s.match_percentage}%</span>
                           </div>
                         ))}
                       </div>
@@ -3294,7 +3307,12 @@ export default function DocumentEditorPage({
                           return (
                             <div key={i} style={{background:bg,border:`1px solid ${c}33`,borderRadius:5,padding:'6px 8px'}}>
                               <div style={{fontSize:10,color:c,fontWeight:600,marginBottom:2}}>
-                                {Math.round(s.similarity*100)}% match · {s.label==='matched'?'Likely copied':'Similar wording'}{s.source_title ? ` · ${s.source_title}` : ''}
+                                {Math.round(s.similarity*100)}% match · {s.label==='matched'?'Likely copied':'Similar wording'}
+                                {s.source_title ? (
+                                  s.source_url ? (
+                                    <> · <a href={s.source_url} target="_blank" rel="noopener noreferrer" style={{color:c}}>{s.source_title} (web)</a></>
+                                  ) : ` · ${s.source_title}`
+                                ) : ''}
                               </div>
                               <div style={{fontSize:11,color:'#374151',lineHeight:1.5}}>
                                 {s.text.length > 140 ? s.text.slice(0,140)+'…' : s.text}
@@ -3310,7 +3328,7 @@ export default function DocumentEditorPage({
                     </div>
                   )}
                   <div style={{fontSize:10,color:'#9ca3af',marginTop:12,lineHeight:1.5}}>
-                    Uses shingled n-gram fingerprint matching against other documents in your workspace, mirroring the fingerprint-index approach behind Turnitin's OriginalityCheck.
+                    Uses shingled n-gram fingerprint matching against other documents in your workspace{plagiarismResult.external_checked ? ', plus live results from Crossref, arXiv, PubMed, SSRN, and Semantic Scholar' : ''}, mirroring the fingerprint-index approach behind Turnitin's OriginalityCheck.
                   </div>
                 </>
               ) : (

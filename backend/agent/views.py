@@ -362,7 +362,9 @@ class PlagiarismCheckView(APIView):
     """
     Check a document for plagiarism against every other document in the
     workspace, using shingled n-gram fingerprint matching — the same
-    technique Turnitin's OriginalityCheck index is built on.
+    technique Turnitin's OriginalityCheck index is built on — and, unless
+    disabled, against the open scholarly web (Crossref, arXiv, PubMed, SSRN,
+    Semantic Scholar, and Google Scholar if ALLOW_GOOGLE_SCHOLAR_SCRAPE=1).
     """
 
     def post(self, request, document_id: int):
@@ -372,6 +374,11 @@ class PlagiarismCheckView(APIView):
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
         from .plagiarism_detector import check_plagiarism
+        from .web_plagiarism import (
+            check_external_plagiarism,
+            external_check_enabled,
+            merge_into_check_result,
+        )
 
         custom_text = (request.data.get("text") or "").strip()
         if custom_text:
@@ -398,4 +405,14 @@ class PlagiarismCheckView(APIView):
                 source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
 
         result = check_plagiarism(full_text, source_docs)
+
+        include_external = str(request.data.get("include_external", "")).strip().lower()
+        run_external = external_check_enabled() if include_external == "" else include_external not in ("0", "false")
+        if run_external and full_text.strip():
+            external = check_external_plagiarism(full_text)
+            result = merge_into_check_result(result, external)
+        else:
+            result["external_checked"] = False
+            result["external_papers_checked"] = 0
+
         return Response(result)

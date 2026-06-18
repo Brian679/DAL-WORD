@@ -4596,8 +4596,10 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
 
 
 def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect passages overlapping with other workspace documents and rewrite them to cut similarity."""
+    """Detect passages overlapping with other workspace documents (and, unless disabled, the open web) and rewrite them to cut similarity."""
+    from .ai_detector import _split_sentences
     from .plagiarism_detector import check_plagiarism, reduce_similarity
+    from .web_plagiarism import check_external_plagiarism, external_check_enabled
 
     sections = (document.content or {}).get("sections", [])
     if not sections:
@@ -4616,9 +4618,11 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
         if other_text.strip():
             source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
 
+    use_external = external_check_enabled()
+
     _done(plan, 0)  # Scanning document for matched/similar passages
 
-    if not source_docs:
+    if not source_docs and not use_external:
         _all_done(plan)
         return (
             "No other documents exist in the workspace to compare against, so there is nothing to "
@@ -4626,7 +4630,23 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
             False,
         )
 
-    _done(plan, 1)  # Comparing against other documents in the workspace
+    _done(plan, 1)  # Comparing against other documents and the open web
+
+    # Run the (network-bound) web search exactly once for the whole document
+    # rather than per section/per retry, so reducing similarity stays fast.
+    external_hit_texts: set[str] = set()
+    if use_external:
+        full_text_before = "\n\n".join(
+            (s.get("content") or "").strip() for s in sections if (s.get("content") or "").strip()
+        )
+        external = check_external_plagiarism(full_text_before)
+        external_hit_texts = {h["text"] for h in external.get("hits", [])}
+
+    def _flagged_for(content: str) -> set[str]:
+        detection = check_plagiarism(content, source_docs)
+        flagged = {s["text"] for s in detection.get("sentences", []) if s.get("label") != "original"}
+        flagged |= {s.strip() for s in _split_sentences(content) if s.strip() in external_hit_texts}
+        return flagged
 
     reduced = 0
     for i, section in enumerate(sections):
@@ -4634,8 +4654,7 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
         if not content:
             continue
 
-        detection = check_plagiarism(content, source_docs)
-        flagged = {s["text"] for s in detection.get("sentences", []) if s.get("label") != "original"}
+        flagged = _flagged_for(content)
         if not flagged:
             continue
 
@@ -4643,8 +4662,7 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
 
         # Re-check; if anything is still flagged, retry once with a fresh seed
         # (mirrors the before/after verification pattern used by AI-humanisation).
-        recheck = check_plagiarism(new_content, source_docs)
-        still_flagged = {s["text"] for s in recheck.get("sentences", []) if s.get("label") != "original"}
+        still_flagged = _flagged_for(new_content)
         if still_flagged:
             retry_content = reduce_similarity(new_content, still_flagged, seed=f"{document.id}:{i}:retry")
             if retry_content != new_content:
@@ -4668,14 +4686,16 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
         after_verdict = after_result.get("verdict", "")
 
         return (
-            f"Rewrote {reduced} section(s) to reduce overlap with other workspace documents. "
+            f"Rewrote {reduced} section(s) to reduce overlap with other workspace documents"
+            f"{' and the open web' if use_external else ''}. "
             f"Similarity dropped to **{after_pct}%** ({after_verdict.replace('_', ' ')}). "
             "Click **Check Plagiarism** to see the updated highlights.",
             True,
         )
 
     return (
-        "No matched or similar passages were found against other workspace documents — your document "
+        "No matched or similar passages were found against other workspace documents"
+        f"{' or the open web' if use_external else ''} — your document "
         "already reads as original. Try running **Check Plagiarism** first to scan for flagged sentences.",
         False,
     )
