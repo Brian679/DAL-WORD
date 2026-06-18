@@ -762,6 +762,7 @@ export default function DocumentEditorPage({
   const [showQualityPanel, setShowQualityPanel] = useState(false);
   // Ribbon state
   const [activeRibbonTab, setActiveRibbonTab] = useState('Home');
+  const [ribbonTabMenuOpen, setRibbonTabMenuOpen] = useState(false);
   // View state
   const [showRuler, setShowRuler] = useState(false);
   const [showFormattingMarks, setShowFormattingMarks] = useState(false);
@@ -1996,15 +1997,48 @@ export default function DocumentEditorPage({
                 <button className="doc-qa-btn" title="Undo"><RotateCcw size={14} /></button>
                 <button className="doc-qa-btn" title="More"><ChevronDown size={14} /></button>
               </div>
-              {['Home', 'Insert', 'Page Layout', 'References', 'Review', 'View', 'Tools', 'WPS AI'].map((tab) => (
-                <span
-                  key={tab}
-                  className={`doc-ribbon-tab${activeRibbonTab === tab ? ' doc-ribbon-tab--active' : ''}`}
-                  onClick={() => setActiveRibbonTab(tab)}
+              <div className="doc-ribbon-tab-list">
+                {['Home', 'Insert', 'Page Layout', 'References', 'Review', 'View', 'Tools', 'WPS AI'].map((tab) => (
+                  <span
+                    key={tab}
+                    className={`doc-ribbon-tab${activeRibbonTab === tab ? ' doc-ribbon-tab--active' : ''}`}
+                    onClick={() => setActiveRibbonTab(tab)}
+                  >
+                    {tab}
+                  </span>
+                ))}
+              </div>
+
+              {/* Mobile-only: ribbon tab labels collapse into this dropdown so the
+                  tab row doesn't overflow narrow screens, without losing access
+                  to Insert/Page Layout/References/etc. */}
+              <div className="doc-ribbon-tab-toggle-wrap">
+                <button
+                  type="button"
+                  className="doc-ribbon-tab-toggle"
+                  onClick={() => setRibbonTabMenuOpen((v) => !v)}
                 >
-                  {tab}
-                </span>
-              ))}
+                  {activeRibbonTab}
+                  <ChevronDown size={13} />
+                </button>
+                {ribbonTabMenuOpen && (
+                  <>
+                    <div className="doc-ribbon-tab-menu-backdrop" onClick={() => setRibbonTabMenuOpen(false)} />
+                    <div className="doc-ribbon-tab-menu">
+                      {['Home', 'Insert', 'Page Layout', 'References', 'Review', 'View', 'Tools', 'WPS AI'].map((tab) => (
+                        <button
+                          type="button"
+                          key={tab}
+                          className={`doc-ribbon-tab-menu-item${activeRibbonTab === tab ? ' doc-ribbon-tab-menu-item--active' : ''}`}
+                          onClick={() => { setActiveRibbonTab(tab); setRibbonTabMenuOpen(false); }}
+                        >
+                          {tab}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* ── Home toolbar ── */}

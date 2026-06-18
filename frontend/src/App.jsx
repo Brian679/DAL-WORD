@@ -143,7 +143,7 @@ export default function App() {
         )}
         <button className="wtab-new" onClick={handleNewDocument}>+ New</button>
         <span className="tabbar-spacer" />
-        <button className="upgrade-now-btn">&#9889; Upgrade Now</button>
+        <button className="upgrade-now-btn">&#9889; <span>Upgrade Now</span></button>
       </div>
 
       {/* ── View ───────────────────────────────────────────────── */}

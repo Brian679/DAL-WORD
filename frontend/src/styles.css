@@ -595,6 +595,9 @@ ul {
     position: sticky;
     top: 0;
     z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 }
 
 .file-main-title {
@@ -618,6 +621,22 @@ ul {
 
 .refresh-btn:hover {
     background: rgba(0, 0, 0, 0.06);
+}
+
+/* Hidden on desktop — the nav sidebar's "This PC" item already does this.
+   Shown on mobile (≤760px) once that sidebar is hidden, see media query. */
+.mobile-import-btn {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 6px 12px;
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 500;
 }
 
 .file-cols-header {
@@ -3030,6 +3049,78 @@ ul {
     border-bottom-color: #1459b6;
 }
 
+.doc-ribbon-tab-list {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+/* Mobile-only replacement for the tab-label row: collapses Home/Insert/...
+   into a single dropdown button so the ribbon never overflows narrow screens. */
+.doc-ribbon-tab-toggle-wrap {
+    display: none;
+    position: relative;
+}
+
+.doc-ribbon-tab-toggle {
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid #d8dce3;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #22252b;
+    font-size: 12.5px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.doc-ribbon-tab-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+}
+
+.doc-ribbon-tab-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 41;
+    min-width: 150px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.doc-ribbon-tab-menu-item {
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 5px;
+    background: none;
+    border: none;
+    font-size: 13px;
+    color: #22252b;
+}
+
+.doc-ribbon-tab-menu-item:hover {
+    background: #eef2f8;
+}
+
+.doc-ribbon-tab-menu-item--active {
+    color: #1459b6;
+    font-weight: 600;
+    background: #eaf1fc;
+}
+
 /* Tools row */
 .doc-ribbon-toolbar {
     display: flex;
@@ -3740,4 +3831,95 @@ ul {
 .wps-divider { width: 1px; height: 50px; background: #e2e8f0; margin: 0 8px; }
 
 .wps-ribbon-group { display: flex; align-items: center; padding: 0 4px; }
+
+/* ═══════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE
+   (kept at the end of the file so these overrides win the cascade
+   regardless of where the base rule they target is defined above)
+══════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 760px) {
+    /* ── Header (visible on the dashboard only) ── */
+    .wps-searchbar {
+        display: none;
+    }
+    .wps-brand-name {
+        display: none;
+    }
+
+    /* ── Tab bar — kept visible per product decision, just decluttered ── */
+    .upgrade-now-btn span {
+        display: none;
+    }
+
+    /* ── Dashboard layout: drop the decorative app-switcher strip and the
+       nav sidebar (its one real action, file import, moves to the file
+       list header) so the file list gets the full width. ── */
+    .icon-strip,
+    .nav-panel {
+        display: none;
+    }
+    .mobile-import-btn {
+        display: inline-flex;
+    }
+    .file-cols-header,
+    .file-row {
+        grid-template-columns: 32px 1fr 90px;
+    }
+    .fcol-location {
+        display: none;
+    }
+
+    /* File info panel becomes a full-height overlay instead of squeezing
+       the file list into a sliver. */
+    .info-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 86%;
+        max-width: 340px;
+        z-index: 30;
+        box-shadow: -6px 0 20px rgba(0, 0, 0, 0.18);
+    }
+
+    /* ── Document editor ribbon: collapse the Home/Insert/.../WPS AI labels
+       into a single dropdown so the row never overflows. ── */
+    .doc-ribbon-tab-list {
+        display: none;
+    }
+    .doc-ribbon-tab-toggle-wrap {
+        display: block;
+    }
+    .doc-page-body-zone {
+        padding: 28px 18px;
+    }
+    .doc-ai-panel {
+        max-height: 320px;
+    }
+}
+
+@media (max-width: 480px) {
+    .header-icon-btn {
+        display: none;
+    }
+    .upgrade-now-btn {
+        display: none;
+    }
+    .file-badge-local,
+    .fcol-time {
+        display: none;
+    }
+    .file-cols-header,
+    .file-row {
+        grid-template-columns: 28px 1fr;
+        padding: 7px 12px 7px 10px;
+    }
+    .doc-page-body-zone {
+        padding: 20px 12px;
+    }
+    .doc-zoom-track {
+        display: none;
+    }
+}
 

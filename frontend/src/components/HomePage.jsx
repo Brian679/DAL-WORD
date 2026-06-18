@@ -259,6 +259,9 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
             Recent
             <button className="refresh-btn" onClick={onRefresh} title="Refresh"><RefreshCw size={16} /></button>
           </h2>
+          <button className="mobile-import-btn" onClick={handleThisPC} title="Import from this device">
+            <Monitor size={14} /> Import
+          </button>
         </div>
 
         {/* ── Template strip ──────────────────────────────────── */}
