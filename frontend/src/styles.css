@@ -954,6 +954,10 @@ ul {
     overflow-y: auto;
 }
 
+.info-panel-backdrop {
+    display: none;
+}
+
 .info-header {
     padding: 14px 16px;
     font-size: 14px;
@@ -1874,6 +1878,7 @@ ul {
 .doc-status-item {
     font-size: 11px;
     color: #576171;
+    white-space: nowrap;
 }
 .doc-status-saving { color: #5f6368; font-style: italic; }
 .doc-status-saved   { color: #188038; font-weight: 600; }
@@ -1890,6 +1895,8 @@ ul {
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .doc-spell-indicator {
@@ -3897,6 +3904,59 @@ ul {
     .doc-ai-panel {
         max-height: 320px;
     }
+
+    /* ── Status bar: the right-hand cluster (Menu/Play/Globe icons +
+       zoom slider) has no click handlers anywhere — purely decorative —
+       so it's safe to drop on narrow screens to keep the bar from
+       crowding/wrapping. ── */
+    .doc-status-right {
+        display: none;
+    }
+
+    /* ── File rows: bigger checkbox + a touch more vertical breathing
+       room so the row is easier to tap accurately. ── */
+    .file-row {
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .fcol-check input[type=checkbox] {
+        width: 16px;
+        height: 16px;
+    }
+
+    /* ── Template strip: only one card ("Blank Document") is shown, so
+       shrink the section instead of giving it a full desktop-sized
+       showcase. ── */
+    .tpl-section {
+        padding: 10px 14px 0;
+        margin-bottom: 4px;
+    }
+    .tpl-header {
+        margin-bottom: 8px;
+    }
+    .tpl-grid {
+        padding-bottom: 10px;
+    }
+    .tpl-card {
+        min-width: 72px;
+        width: 72px;
+        padding: 8px;
+        gap: 6px;
+    }
+    .tpl-card-thumb {
+        width: 38px;
+        height: 48px;
+    }
+
+    /* ── Info panel: dim the page behind the slide-over so it reads as
+       a modal instead of a stray floating box. ── */
+    .info-panel-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.45);
+        z-index: 29;
+    }
 }
 
 @media (max-width: 480px) {
@@ -3913,13 +3973,10 @@ ul {
     .file-cols-header,
     .file-row {
         grid-template-columns: 28px 1fr;
-        padding: 7px 12px 7px 10px;
+        padding: 10px 12px 10px 10px;
     }
     .doc-page-body-zone {
         padding: 20px 12px;
-    }
-    .doc-zoom-track {
-        display: none;
     }
 }
 

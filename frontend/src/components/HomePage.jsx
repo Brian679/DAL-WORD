@@ -351,6 +351,8 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
 
       {/* ── Right info panel ──────────────────────────────────── */}
       {selectedDoc && (
+        <>
+        <div className="info-panel-backdrop" onClick={() => setSelectedDoc(null)} />
         <aside className="info-panel">
           <div className="info-header">
             <span className="info-title">File Information</span>
@@ -385,6 +387,7 @@ export default function HomePage({ documents, onOpenDocument, onNewDocument, onR
             <button className="info-rec-btn"><FileText size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />Export to PDF</button>
           </div>
         </aside>
+        </>
       )}
     </div>
   );
