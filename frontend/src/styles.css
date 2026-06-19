@@ -2717,6 +2717,70 @@ ul {
 }
 .dap-research-banner button:hover { color: #0b5ed7; }
 
+/* Writing settings (citation style / academic level / word count) */
+.dap-writing-settings-wrap {
+    position: relative;
+    display: inline-flex;
+}
+.dap-writing-settings-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+}
+.dap-writing-settings-popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 51;
+    width: 220px;
+    background: #ffffff;
+    border: 1px solid #d8dce4;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+    padding: 10px;
+}
+.dap-ws-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #5f6368;
+    margin-bottom: 8px;
+}
+.dap-ws-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 7px;
+    font-size: 11.5px;
+    color: #1a1a1a;
+}
+.dap-ws-row select,
+.dap-ws-row input {
+    flex: 1;
+    max-width: 120px;
+    height: 24px;
+    border: 1px solid #d8dce4;
+    border-radius: 5px;
+    font-size: 11px;
+    padding: 0 5px;
+    outline: none;
+    color: #1a1a1a;
+}
+.dap-ws-row select:focus,
+.dap-ws-row input:focus { border-color: var(--blue); }
+.dap-ws-clear {
+    width: 100%;
+    background: none;
+    border: 1px solid #d8dce4;
+    border-radius: 5px;
+    color: #5f6368;
+    font-size: 11px;
+    padding: 4px 0;
+    cursor: pointer;
+    margin-top: 2px;
+}
+.dap-ws-clear:hover { color: #d93025; border-color: #d93025; }
+
 .dap-model-pill {
     flex: 1;
     height: 26px;
@@ -3126,6 +3190,58 @@ ul {
     color: #1459b6;
     font-weight: 600;
     background: #eaf1fc;
+}
+
+/* "Improve" enhancement-style dropdown (WPS AI tab) */
+.doc-improve-menu-wrap {
+    position: relative;
+}
+
+.doc-improve-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+}
+
+.doc-improve-menu {
+    /* position/top/left are set inline (portaled to document.body so the
+       ribbon's overflow:hidden can't clip it) */
+    z-index: 41;
+    min-width: 190px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.doc-improve-menu-item {
+    text-align: left;
+    padding: 7px 10px;
+    border-radius: 5px;
+    background: none;
+    border: none;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.doc-improve-menu-item:hover {
+    background: #eef2f8;
+}
+
+.doc-improve-menu-item-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #22252b;
+}
+
+.doc-improve-menu-item-desc {
+    font-size: 10.5px;
+    color: #7c8798;
 }
 
 /* Tools row */

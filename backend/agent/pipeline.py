@@ -163,9 +163,14 @@ class ContentGenerator:
             "2. Reference the actual topic, objectives, methodology, and context of this specific study.\n"
             "3. Do NOT write generic academic content that could apply to any study.\n"
             "4. Do NOT include the section heading in your response.\n"
-            "5. Do NOT use filler phrases such as 'this section will discuss', "
-            "'in today's world', 'it is important to note'.\n"
+            "5. Do NOT use filler phrases such as 'this section will discuss', 'in today's world', "
+            "'it is important to note', 'delve into', 'navigate the complexities of', "
+            "'in the realm of', 'a testament to'.\n"
             "6. Write actual academic content — grounded in THIS specific research.\n"
+            "7. Vary paragraph openers and sentence rhythm — never start consecutive paragraphs with "
+            "the same word, and mix short analytical sentences with longer elaborations.\n"
+            "8. Ground every claim in a concrete example, statistic, or citation — never leave an "
+            "assertion as an unsupported generalisation.\n"
         )
 
         return generate_fn(task.title, task.topic, prompt_context, wc)

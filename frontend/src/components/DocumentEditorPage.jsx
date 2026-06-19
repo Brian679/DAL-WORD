@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   Bold,
@@ -84,6 +85,37 @@ const INITIAL_CHATS = [{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: INITIA
 const MIN_EDITOR_HEIGHT = 900;
 const PAGE_CYCLE_PX = 1120;
 const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
+
+const IMPROVE_STYLES = [
+  {
+    label: 'Clarity',
+    desc: 'Simplify & disambiguate',
+    build: (sel) => sel
+      ? `Improve the clarity of this text — simplify complex sentences and make the meaning unambiguous: "${sel}"`
+      : 'Improve the clarity of the document — simplify complex sentences and make every paragraph’s meaning unambiguous.',
+  },
+  {
+    label: 'Concision',
+    desc: 'Cut filler, tighten prose',
+    build: (sel) => sel
+      ? `Make this text more concise — cut filler words and redundant phrasing without losing meaning: "${sel}"`
+      : 'Make the document more concise — cut filler words and redundant phrasing throughout without losing meaning.',
+  },
+  {
+    label: 'Depth',
+    desc: 'Stronger evidence & analysis',
+    build: (sel) => sel
+      ? `Add more analytical depth to this text — strengthen the argument with more evidence and critical evaluation: "${sel}"`
+      : 'Add more analytical depth throughout the document — strengthen arguments with more evidence and critical evaluation.',
+  },
+  {
+    label: 'Flow',
+    desc: 'Vary sentences & transitions',
+    build: (sel) => sel
+      ? `Improve the flow of this text — vary sentence length and strengthen transitions: "${sel}"`
+      : 'Improve the flow of the document — vary sentence length and strengthen transitions between paragraphs.',
+  },
+];
 
 function normalizeStep(step = '') {
   return step.replace(/^[-\s]+/, '').trim();
@@ -733,6 +765,16 @@ export default function DocumentEditorPage({
   const [inputValue,   setInputValue]   = useState('');
   const [attachedFile, setAttachedFile] = useState(null);
   const [groundedResearch, setGroundedResearch] = useState(false);
+  // Writing controls — citation style / academic level / target word count,
+  // prepended to outgoing chat messages so the agent honours them explicitly
+  // instead of relying on the user typing them inline.
+  const [writingSettingsOpen, setWritingSettingsOpen] = useState(false);
+  const [citationStyle, setCitationStyle] = useState('');
+  const [academicLevel, setAcademicLevel] = useState('');
+  const [targetWords, setTargetWords] = useState('');
+  const [improveMenuOpen, setImproveMenuOpen] = useState(false);
+  const [improveMenuPos, setImproveMenuPos] = useState({ top: 0, left: 0 });
+  const improveBtnRef = useRef(null);
   const fileInputRef = useRef(null);
   const [isThinking,   setIsThinking]   = useState(false);
   const [isSavingManual, setIsSavingManual] = useState(false);
@@ -1693,6 +1735,15 @@ export default function DocumentEditorPage({
     return PLAGIARISM_PHRASES.some(p => lower.includes(p)) || _CHECK_FOR_PLAGIARISM_RE.test(lower);
   }
 
+  function buildGuidelinesPrefix() {
+    const parts = [];
+    if (citationStyle) parts.push(`Citation style: ${citationStyle}.`);
+    if (academicLevel) parts.push(`Academic level: ${academicLevel}.`);
+    const words = parseInt(targetWords, 10);
+    if (words > 0) parts.push(`Target word count: ~${words.toLocaleString()} words.`);
+    return parts.length ? `[${parts.join(' ')}]\n\n` : '';
+  }
+
   async function sendMessage(text) {
     if (!text.trim() && (!attachedFile)) return;
     if (isThinking) return;
@@ -1810,6 +1861,9 @@ export default function DocumentEditorPage({
     const beforeAgentSections = cloneSections(draftSections);
     const dissertationRequest = looksLikeDissertationRequest(userText);
     const progressMessageId = Date.now() + 1;
+    // Send the writing-controls guidelines to the agent without cluttering
+    // the visible chat bubble with the raw [Citation style: ...] prefix.
+    const effectiveText = `${buildGuidelinesPrefix()}${userText}`;
     setChats((prev) =>
       prev.map((chat) => {
         if (chat.id !== currentChatId) return chat;
@@ -1857,7 +1911,7 @@ export default function DocumentEditorPage({
       setLiveProgressMsgId(progressMessageId);
 
       // Call the LLM plan endpoint — this is where the AI generates the tailored todo structure.
-      const planResult = await getDissertationPlan(document?.id, userText);
+      const planResult = await getDissertationPlan(document?.id, effectiveText);
       previewPlan = planResult?.plan?.length ? planResult.plan : createFallbackPreviewPlan();
 
       const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
@@ -1890,7 +1944,7 @@ export default function DocumentEditorPage({
       // ── Step 1: Preview (non-dissertation only) ──────────────────────────
       // Send directly without preview_only so the backend executes immediately
       const result = await chatWithDocument(
-        document?.id, userText, selectedModel,
+        document?.id, effectiveText, selectedModel,
         dissertationRequest ? attachedFile : null,
         /* previewOnly = */ false,
         { groundedResearch, verifyCitations: groundedResearch },
@@ -2903,15 +2957,37 @@ export default function DocumentEditorPage({
                       ><Wand2 size={13}/><span>Rewrite</span></button>
                     </div>
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to improve selected text"
-                        disabled={isThinking}
-                        onClick={() => {
-                          const sel = window.getSelection()?.toString().trim();
-                          const msg = sel ? `Improve this text: "${sel}"` : 'Improve the writing quality of the document.';
-                          setAiPanelOpen(true);
-                          setInputValue(msg);
-                        }}
-                      ><Star size={13}/><span>Improve</span></button>
+                      <div className="doc-improve-menu-wrap" ref={improveBtnRef}>
+                        <button className="doc-tool-btn doc-tool-btn--labeled" title="Ask AI to improve selected text — choose a style"
+                          disabled={isThinking}
+                          onClick={() => {
+                            if (!improveMenuOpen) {
+                              const rect = improveBtnRef.current?.getBoundingClientRect();
+                              if (rect) setImproveMenuPos({ top: rect.bottom + 4, left: rect.left });
+                            }
+                            setImproveMenuOpen((v) => !v);
+                          }}
+                        ><Star size={13}/><span>Improve</span></button>
+                        {improveMenuOpen && createPortal(
+                          <>
+                            <div className="doc-improve-menu-backdrop" onClick={() => setImproveMenuOpen(false)} />
+                            <div className="doc-improve-menu" style={{ position: 'fixed', top: improveMenuPos.top, left: improveMenuPos.left }}>
+                              {IMPROVE_STYLES.map((opt) => (
+                                <button key={opt.label} type="button" className="doc-improve-menu-item" onClick={() => {
+                                  const sel = window.getSelection()?.toString().trim();
+                                  setAiPanelOpen(true);
+                                  setInputValue(opt.build(sel));
+                                  setImproveMenuOpen(false);
+                                }}>
+                                  <span className="doc-improve-menu-item-label">{opt.label}</span>
+                                  <span className="doc-improve-menu-item-desc">{opt.desc}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </>,
+                          window.document.body
+                        )}
+                      </div>
                       <button className="doc-tool-btn doc-tool-btn--labeled" title="Summarise the document with AI"
                         disabled={isThinking}
                         onClick={() => { setAiPanelOpen(true); sendMessage('Summarise the entire document in 3-5 bullet points.'); }}
@@ -3699,6 +3775,16 @@ export default function DocumentEditorPage({
                   <button type="button" onClick={() => setGroundedResearch(false)} title="Disable Research Mode"><X size={10} /></button>
                 </div>
               )}
+              {(citationStyle || academicLevel || targetWords) && (
+                <div className="dap-research-banner dap-writing-settings-banner">
+                  <Settings2 size={11} />
+                  <span>
+                    {[citationStyle && `${citationStyle} citations`, academicLevel, targetWords && `~${Number(targetWords).toLocaleString()} words`]
+                      .filter(Boolean).join(' · ')}
+                  </span>
+                  <button type="button" onClick={() => { setCitationStyle(''); setAcademicLevel(''); setTargetWords(''); }} title="Clear writing settings"><X size={10} /></button>
+                </div>
+              )}
               <div className="dap-composer-box">
                 <textarea
                   className="dap-composer-input"
@@ -3725,6 +3811,64 @@ export default function DocumentEditorPage({
                   >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                   </button>
+                  <div className="dap-writing-settings-wrap">
+                    <button
+                      type="button"
+                      className={`dap-research-btn${writingSettingsOpen || citationStyle || academicLevel || targetWords ? ' active' : ''}`}
+                      onClick={() => setWritingSettingsOpen((v) => !v)}
+                      title="Writing settings — citation style, academic level, target word count"
+                      disabled={isThinking}
+                    >
+                      <Settings2 size={13} />
+                    </button>
+                    {writingSettingsOpen && (
+                      <>
+                        <div className="dap-writing-settings-backdrop" onClick={() => setWritingSettingsOpen(false)} />
+                        <div className="dap-writing-settings-popover">
+                          <div className="dap-ws-title">Writing settings</div>
+                          <label className="dap-ws-row">
+                            <span>Citation style</span>
+                            <select value={citationStyle} onChange={(e) => setCitationStyle(e.target.value)}>
+                              <option value="">Default (APA)</option>
+                              <option value="APA">APA</option>
+                              <option value="Harvard">Harvard</option>
+                              <option value="MLA">MLA</option>
+                              <option value="Chicago">Chicago</option>
+                              <option value="IEEE">IEEE</option>
+                              <option value="Vancouver">Vancouver</option>
+                            </select>
+                          </label>
+                          <label className="dap-ws-row">
+                            <span>Academic level</span>
+                            <select value={academicLevel} onChange={(e) => setAcademicLevel(e.target.value)}>
+                              <option value="">Default (Masters)</option>
+                              <option value="Undergraduate">Undergraduate</option>
+                              <option value="Masters">Masters</option>
+                              <option value="PhD">PhD</option>
+                            </select>
+                          </label>
+                          <label className="dap-ws-row">
+                            <span>Target words</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="100"
+                              placeholder="e.g. 12000"
+                              value={targetWords}
+                              onChange={(e) => setTargetWords(e.target.value)}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="dap-ws-clear"
+                            onClick={() => { setCitationStyle(''); setAcademicLevel(''); setTargetWords(''); }}
+                          >
+                            Clear all
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <select
                     className="dap-model-pill"
                     value={selectedModel}

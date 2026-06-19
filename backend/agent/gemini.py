@@ -264,6 +264,8 @@ def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) ->
 
 def _classify_section_type(hint: str) -> str:
     h = hint.lower()
+    if any(k in h for k in ["abstract", "executive summary"]):
+        return "abstract"
     if any(k in h for k in ["introduction", "background", "problem statement", "objective", "scope", "significance"]):
         return "introduction"
     if any(k in h for k in ["literature", "theoretical", "conceptual", "empirical", "related work", "review"]):
@@ -279,7 +281,21 @@ def _classify_section_type(hint: str) -> str:
     return "general"
 
 
+_AI_CLICHE_PHRASES = (
+    "'in today's world', 'in this day and age', 'since time immemorial', 'it is important/crucial to note', "
+    "'it should be noted that', 'needless to say', 'delve into', 'navigate the complexities of', "
+    "'in the realm of', 'a testament to', 'this section will discuss/explore', 'as previously mentioned'"
+)
+
 _SECTION_GUIDES: dict[str, str] = {
+    "abstract": (
+        "Section type: ABSTRACT\n"
+        "• Write as a SINGLE dense paragraph — no sub-headings, no bullet points, no citations.\n"
+        "• Cover, in order: context/problem, purpose/objectives, method, key finding(s), and the study's contribution.\n"
+        "• Every sentence must carry information — no throat-clearing or background padding.\n"
+        "• Use past tense for what was done and found; present tense only for the study's significance.\n"
+        "• Keep it self-contained — a reader should understand the whole study from this paragraph alone."
+    ),
     "introduction": (
         "Section type: INTRODUCTION\n"
         "• Open with a precise, contextualised problem statement — not a generic claim.\n"
@@ -343,7 +359,11 @@ _SECTION_GUIDES: dict[str, str] = {
         "• Prefer active voice; use passive only when the agent is unknown or unimportant.\n"
         "• Each paragraph needs a clear topic sentence and logical internal progression.\n"
         "• Use precise transitions: 'However', 'In contrast', 'Building on this', 'Consequently'.\n"
-        "• Remove filler: 'it should be noted that', 'needless to say', 'as previously mentioned'."
+        "• Do not open consecutive paragraphs with the same word or phrase "
+        "(e.g. two paragraphs both starting with 'Moreover' or 'Furthermore').\n"
+        "• Ground every analytical claim in a concrete example, statistic, or citation — "
+        "never leave a claim as an unsupported generalisation.\n"
+        f"• Remove filler and AI clichés: {_AI_CLICHE_PHRASES}."
     ),
 }
 
@@ -362,7 +382,8 @@ def enhance_text(text: str, topic: str, instruction: str = "", section_title: st
         "3. Sharpen vocabulary — replace vague words with precise academic terms.\n"
         "4. Fix transitions — each sentence must flow logically from the previous.\n"
         "5. Remove redundancy — cut phrases that add no meaning.\n"
-        "6. Preserve ALL factual content, data, citations, and specific details.\n\n"
+        f"6. Remove AI clichés: {_AI_CLICHE_PHRASES}.\n"
+        "7. Preserve ALL factual content, data, citations, and specific details.\n\n"
         f"TEXT TO IMPROVE:\n{text[:3500]}\n\n"
         "Return ONLY the improved text. No explanations, no markdown, no headings."
     )
@@ -392,7 +413,8 @@ def generate_section_content(
         "• Include precise claims, concrete examples, and academic evidence language.\n"
         "• Do NOT include the section heading in your response.\n"
         "• Do NOT use HTML tags — plain text with blank lines between paragraphs.\n"
-        "• Avoid AI clichés: 'in today's world', 'it is important to note', 'this section will…'.\n"
+        f"• Avoid AI clichés: {_AI_CLICHE_PHRASES}.\n"
+        "• Do not open consecutive paragraphs with the same word or phrase.\n"
         f"• Aim for ~{word_count} words — do not stop early.\n\n"
         "Begin writing now:"
     )
