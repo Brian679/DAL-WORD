@@ -352,11 +352,12 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
 
     if "references" in lowered or "bibliography" in lowered:
         return (
-            "Write a note explaining that the References section will list all cited works in the "
-            "appropriate citation format (APA, Harvard, or Vancouver as specified). "
-            "Then provide 8–12 sample plausible references in APA 7th edition format "
-            "relevant to the research topic, covering recent literature (2015–2024) "
-            "from a mix of journals, books, and reports."
+            "No verified external sources were retrievable for this document (the literature search "
+            "returned nothing, e.g. due to no network access). Write a short note stating plainly that "
+            "automatic source retrieval failed and that the entries below are ILLUSTRATIVE PLACEHOLDERS, "
+            "not verified citations — they must be replaced with real literature before submission. "
+            "Then provide 8–12 example references in APA 7th edition format, each prefixed with "
+            "'[Placeholder]' so they cannot be mistaken for verified sources."
         )
 
     if "appendix" in lowered or "appendices" in lowered:
@@ -1160,8 +1161,10 @@ def generate_dissertation_plan_llm(
         "'i. Abstract', 'ii. Dedication', 'iii. Acknowledgements', "
         "'iv. Table of Contents', 'v. List of Figures', 'vi. List of Tables', "
         "'vii. List of Abbreviations and Acronyms'.\n"
-        "- After the front matter, generate exactly 5 or 6 main chapters (Introduction, Literature Review, "
-        "Methodology, Results/Analysis, Conclusion, and optionally References & Appendices).\n"
+        "- After the front matter, generate exactly 6 main chapters: Introduction, Literature Review, "
+        "Methodology, Results/Analysis, Conclusion, and a final 'References and Appendices' chapter "
+        "with a 'References' section and an 'Appendices' section — this final chapter is mandatory, "
+        "never omit it.\n"
         "- Chapter 1 must contain: Background, Statement of the Problem, Research Objectives, "
         "Research Questions, Significance, Scope & Delimitations, Definition of Key Terms, Chapter Summary.\n"
         "- Chapter 2 title and section headings must be SPECIFIC to the research topic — do NOT use "
@@ -1465,6 +1468,12 @@ def _next_caption_number(document: Document, kind: str) -> int:
     return max_seen + 1
 
 
+_SYNTHETIC_DATA_NOTE = (
+    "\nNote: these figures are AI-simulated placeholders for demonstration purposes only — "
+    "they are not real survey/experimental results. Replace with your actual collected data before submission."
+)
+
+
 def _table_discussion_text(node_title: str, research_design: str, objective: str | None = None) -> str:
     if "response rate" in node_title.lower():
         return (
@@ -1472,6 +1481,7 @@ def _table_discussion_text(node_title: str, research_design: str, objective: str
             "providing evidence of dataset adequacy for statistical analysis.\n"
             "Discussion: A strong response rate supports representativeness and reduces the risk of non-response bias, "
             "thereby improving confidence in subsequent objective-level findings."
+            f"{_SYNTHETIC_DATA_NOTE}"
         )
 
     if "demographic" in node_title.lower():
@@ -1479,18 +1489,21 @@ def _table_discussion_text(node_title: str, research_design: str, objective: str
             "Interpretation: The respondent profile indicates a reasonably balanced distribution across key demographic categories, "
             "which supports broad coverage of participant perspectives.\n"
             "Discussion: This distribution improves confidence that subsequent objective-level findings are not overly driven by a single subgroup."
+            f"{_SYNTHETIC_DATA_NOTE}"
         )
 
     if research_design == "qualitative":
         return (
             "Interpretation: The theme matrix shows recurring viewpoints across participants, with some themes appearing more frequently than others.\n"
             "Discussion: The pattern suggests consistent experiential concerns and provides evidence for targeted policy and implementation recommendations."
+            f"{_SYNTHETIC_DATA_NOTE}"
         )
 
     obj = (objective or node_title or "the objective").strip()
     return (
         f"Interpretation: The metric pattern for {obj[:70]} shows uneven performance across indicators, with stronger outcomes in selected dimensions.\n"
         "Discussion: The spread across indicators highlights where focused interventions are required to improve overall study outcomes."
+        f"{_SYNTHETIC_DATA_NOTE}"
     )
 
 
@@ -1503,6 +1516,7 @@ def _chart_discussion_text(series: list[float], objective: str | None = None, no
     return (
         f"Interpretation: Figure trend is {trend}, with values ranging from {low:.2f} to {high:.2f} and an average of {avg:.2f}.\n"
         f"Discussion: For {objective_label[:70]}, the visual pattern reinforces the numerical evidence and clarifies priority areas for action."
+        f"{_SYNTHETIC_DATA_NOTE}"
     )
 
 
@@ -1543,6 +1557,72 @@ def _sanitize_body(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+
+def _retrieve_citation_pool(topic: str, document_id: int | None) -> list[Any]:
+    """Fetch real papers from the open scholarly web (Crossref, arXiv, PubMed, SSRN,
+    Semantic Scholar) to ground dissertation citations in verifiable sources.
+    Fails soft — returns [] if retrieval is unavailable (e.g. offline)."""
+    try:
+        from .research_layer import retrieval_pipeline
+
+        result = retrieval_pipeline(topic=topic or "research topic", document_id=document_id, top_k=20)
+        return result.top_papers
+    except Exception as exc:
+        logger.warning("_retrieve_citation_pool: retrieval failed for topic=%s: %s", (topic or "")[:60], exc)
+        return []
+
+
+def _apa_reference_entry(paper: Any) -> str:
+    authors = list(getattr(paper, "authors", None) or [])
+    if authors:
+        names: list[str] = []
+        for a in authors[:6]:
+            parts = a.split()
+            if len(parts) >= 2:
+                initials = "".join(f"{n[0]}." for n in parts[:-1])
+                names.append(f"{parts[-1]}, {initials}")
+            else:
+                names.append(a)
+        if len(authors) > 6:
+            author_str = ", ".join(names) + ", et al."
+        elif len(names) > 1:
+            author_str = ", ".join(names[:-1]) + ", & " + names[-1]
+        else:
+            author_str = names[0]
+    else:
+        author_str = "Unknown Author"
+    year = str(paper.year) if getattr(paper, "year", None) else "n.d."
+    title = (paper.title or "Untitled").rstrip(".")
+    venue = paper.journal or (paper.source or "").replace("_", " ").title()
+    locator = f"https://doi.org/{paper.doi}" if getattr(paper, "doi", None) else (paper.url or "")
+    entry = f"{author_str} ({year}). {title}. {venue}."
+    if locator:
+        entry += f" {locator}"
+    return entry
+
+
+def _format_reference_list(pool: list[Any], max_items: int = 15) -> str | None:
+    """Build a real APA-style reference list from retrieved papers only — no LLM invention."""
+    if not pool:
+        return None
+    seen: set[str] = set()
+    entries: list[str] = []
+    for paper in pool:
+        if not getattr(paper, "title", None):
+            continue
+        key = (getattr(paper, "doi", None) or paper.title).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(_apa_reference_entry(paper))
+        if len(entries) >= max_items:
+            break
+    if not entries:
+        return None
+    entries.sort()
+    return "\n\n".join(entries)
+
+
 def _execute_subsection_nodes(
     nodes: list[dict[str, Any]],
     document: Document,
@@ -1557,6 +1637,7 @@ def _execute_subsection_nodes(
     on_node_completed: Any | None = None,
     default_word_count: int = 220,
     user_instruction: str = "",
+    citation_pool: list[Any] | None = None,
 ) -> tuple[str, str, list[dict[str, str]]]:
     chunks: list[str] = []
     blocks: list[dict[str, str]] = []
@@ -1564,6 +1645,14 @@ def _execute_subsection_nodes(
 
     # Build study brief ONCE per call (shared by every node in this invocation)
     document_brief = _extract_document_brief(document, topic, research_design)
+    if citation_pool:
+        from .research_layer import build_citation_context
+
+        document_brief = (
+            f"{document_brief}\n\n{build_citation_context(citation_pool, max_items=12)}\n"
+            "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
+            "the verified sources listed above. Do not invent author names, years, or studies."
+        )
 
     for node in nodes:
         step_idx = plan_cursor[0]
@@ -1690,6 +1779,32 @@ def _execute_subsection_nodes(
             except Exception:
                 body = _fallback_subsection_text(topic, section_title, title)
         else:
+            lowered_title = title.lower()
+            real_references = (
+                ("reference" in lowered_title or "bibliograph" in lowered_title)
+                and _format_reference_list(citation_pool)
+            )
+            if real_references:
+                # ── References/Bibliography: built directly from verified papers ──
+                # retrieved from Crossref/arXiv/PubMed/SSRN/Semantic Scholar — never
+                # asked of the LLM, so there is nothing here for it to hallucinate.
+                body = (
+                    "The following references were retrieved from open scholarly databases "
+                    "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
+                    "to this study topic:\n\n" + real_references
+                )
+                body = _strip_leading_heading(body, title)
+                body = _sanitize_body(body)
+                chunks.append(f"{title}\n{body}")
+                local_context = f"{local_context}\n\n{title}\n{body}".strip()
+                _done(plan, step_idx)
+                if callable(on_node_completed):
+                    try:
+                        on_node_completed("\n\n".join(chunks), list(blocks), title)
+                    except Exception as exc:
+                        logger.warning("Subsection progress callback failed for '%s': %s", title, exc)
+                continue
+
             # ── Text node: multi-agent pipeline ──────────────────────────
             # PlannerAgent.generate_spec enriches the task with guidelines +
             # word count.  ContentGenerator → RuntimeSandbox → ErrorAnalyzer
@@ -1698,7 +1813,6 @@ def _execute_subsection_nodes(
             from .planner import PlannerAgent, TaskSpec as PipelineTaskSpec, IntentSpec
 
             guidelines = _subsection_guidelines(title, topic)
-            lowered_title = title.lower()
             is_pointform = any(
                 k in lowered_title
                 for k in ["research objective", "objectives", "research question", "hypothes",
@@ -1768,6 +1882,7 @@ def _execute_subsection_nodes(
                 on_node_completed,
                 default_word_count,
                 user_instruction,
+                citation_pool,
             )
             if child_text:
                 chunks.append(child_text)
@@ -2720,13 +2835,16 @@ def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -
     # ── References / Appendices ─────────────────────────────────────────────
     if "reference" in sub_lower:
         return (
-            f"Accenture. (2023). Banking on AI: How financial institutions are scaling artificial intelligence. Accenture Research.\n"
-            f"Arner, D., Barberis, J., & Buckley, R. (2020). The evolution of fintech: A new post-crisis paradigm? Georgetown Journal of International Law, 47(4), 1271–1319.\n"
-            f"Basel Committee on Banking Supervision. (2022). Principles for the sound management of AI risk in banks. Bank for International Settlements.\n"
-            f"Davenport, T. H., & Ronanki, R. (2018). Artificial intelligence for the real world. Harvard Business Review, 96(1), 108–116.\n"
-            f"Gu, S., Kelly, B., & Xiu, D. (2020). Empirical asset pricing via machine learning. Review of Financial Studies, 33(5), 2223–2273.\n"
-            f"McKinsey & Company. (2022). The state of AI in financial services: Insights from the McKinsey Global AI Survey. McKinsey Digital.\n"
-            f"Taddy, M. (2019). The technological elements of artificial intelligence. In A. Agrawal, J. Gans, & A. Goldfarb (Eds.), The economics of artificial intelligence (pp. 61–83). University of Chicago Press."
+            "Automatic source retrieval failed for this document (e.g. no network access), so no verified "
+            "citations are available. The entries below are ILLUSTRATIVE PLACEHOLDERS only — they are not "
+            "verified sources and must be replaced with real literature before submission.\n\n"
+            "[Placeholder] Accenture. (2023). Banking on AI: How financial institutions are scaling artificial intelligence. Accenture Research.\n"
+            "[Placeholder] Arner, D., Barberis, J., & Buckley, R. (2020). The evolution of fintech: A new post-crisis paradigm? Georgetown Journal of International Law, 47(4), 1271–1319.\n"
+            "[Placeholder] Basel Committee on Banking Supervision. (2022). Principles for the sound management of AI risk in banks. Bank for International Settlements.\n"
+            "[Placeholder] Davenport, T. H., & Ronanki, R. (2018). Artificial intelligence for the real world. Harvard Business Review, 96(1), 108–116.\n"
+            "[Placeholder] Gu, S., Kelly, B., & Xiu, D. (2020). Empirical asset pricing via machine learning. Review of Financial Studies, 33(5), 2223–2273.\n"
+            "[Placeholder] McKinsey & Company. (2022). The state of AI in financial services: Insights from the McKinsey Global AI Survey. McKinsey Digital.\n"
+            "[Placeholder] Taddy, M. (2019). The technological elements of artificial intelligence. In A. Agrawal, J. Gans, & A. Goldfarb (Eds.), The economics of artificial intelligence (pp. 61–83). University of Chicago Press."
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
         return (
@@ -5342,6 +5460,11 @@ def _write_section(
         table_counter = [_next_caption_number(document, "table")]
         word_count = _chapter_word_count_target(chapter_hint, instruction, nodes_to_write)
 
+        # Only fetch real sources when this section actually needs citations
+        # (Literature Review / References) — avoids needless network latency
+        # for purely structural sections like Objectives or Scope.
+        citation_pool = _retrieve_citation_pool(topic, document.id) if chapter_hint in (2, 6) else []
+
         def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
             safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
             if selected_node:
@@ -5378,7 +5501,16 @@ def _write_section(
             on_node_completed=_persist_subsection_progress,
             default_word_count=word_count,
             user_instruction=instruction or "",
+            citation_pool=citation_pool,
         )
+
+        if citation_pool:
+            try:
+                from .research_layer import repair_citations
+
+                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
+            except Exception as exc:
+                logger.warning("_write_section: citation repair failed: %s", exc)
 
         if selected_node:
             # chapter_text already starts with the subsection title from _execute_subsection_nodes
@@ -5483,6 +5615,13 @@ def _rewrite_chapter_batch(
     figure_counter = [_next_caption_number(document, "figure")]
     table_counter = [_next_caption_number(document, "table")]
 
+    # Only fetch real sources when a Literature Review or References chapter
+    # is being rewritten — avoids needless network latency otherwise.
+    citation_pool = (
+        _retrieve_citation_pool(topic, document.id)
+        if any(n in (2, 6) for n in chapter_numbers) else []
+    )
+
     sections = document.content.setdefault("sections", [])
 
     for chapter in chapter_blueprints:
@@ -5527,7 +5666,16 @@ def _rewrite_chapter_batch(
             table_counter=table_counter,
             on_node_completed=_persist_subsection_progress,
             default_word_count=chapter["word_count"],
+            citation_pool=citation_pool,
         )
+
+        if citation_pool:
+            try:
+                from .research_layer import repair_citations
+
+                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
+            except Exception as exc:
+                logger.warning("_rewrite_chapter_batch: citation repair failed: %s", exc)
 
         section_payload["content"] = chapter_text if chapter_text.strip() else ""
         if chapter_blocks:
@@ -5911,6 +6059,12 @@ def _write_dissertation(
     # Prepend to the raw instruction so ContentGenerator sees it
     enriched_instruction = f"{_style_note}\n\n{instruction}"
 
+    # ── Retrieve real literature ONCE for the whole dissertation ──────────
+    # Grounds in-text citations and the References chapter in verifiable papers
+    # from Crossref/arXiv/PubMed/SSRN/Semantic Scholar instead of LLM invention.
+    citation_pool = _retrieve_citation_pool(topic, document.id)
+    logger.info("_write_dissertation: retrieved %d candidate sources for citation grounding", len(citation_pool))
+
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
         ch_num = _chapter_number_from_title(chapter_title)
@@ -5961,7 +6115,16 @@ def _write_dissertation(
             on_node_completed=_persist_subsection_progress,
             default_word_count=ch_word_count,
             user_instruction=enriched_instruction,
+            citation_pool=citation_pool,
         )
+
+        if citation_pool:
+            try:
+                from .research_layer import repair_citations
+
+                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
+            except Exception as exc:
+                logger.warning("_write_dissertation: citation repair failed for '%s': %s", chapter_title, exc)
 
         section_payload["content"] = chapter_text if chapter_text.strip() else ""
         if chapter_blocks:
@@ -5981,9 +6144,17 @@ def _write_dissertation(
     document.save(update_fields=["title", "updated_at"])
     _all_done(plan)
 
+    citation_note = (
+        f" Citations were grounded in {len(citation_pool)} real sources retrieved from Crossref, "
+        "arXiv, PubMed, and Semantic Scholar."
+        if citation_pool else
+        " No verified external sources could be retrieved (e.g. no network access) — "
+        "the References chapter contains clearly-labelled illustrative placeholders that must be replaced."
+    )
     reply = (
         f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "
         "The AI generated a tailored chapter and section plan, then wrote each section sequentially."
+        f"{citation_note}"
     )
     return reply, True
 

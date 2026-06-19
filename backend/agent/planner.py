@@ -378,7 +378,14 @@ class PlannerAgent:
         if "conclusion" in lowered:
             return "Conclusions (200–300 words): synthesise findings, restate significance, close."
         if "reference" in lowered:
-            return "APA 7th edition reference list (minimum 15 sources). Formatted consistently."
+            return (
+                "No verified external sources were retrievable for this document (the literature search "
+                "returned nothing, e.g. due to no network access). Write a short note stating plainly that "
+                "automatic source retrieval failed and that the entries below are ILLUSTRATIVE PLACEHOLDERS, "
+                "not verified citations — they must be replaced with real literature before submission. "
+                "Then provide 8–12 example references in APA 7th edition format, each prefixed with "
+                "'[Placeholder]' so they cannot be mistaken for verified sources."
+            )
         if "appendix" in lowered or "appendices" in lowered:
             return "Appendix: label each item (Appendix A, B …), title, and brief description."
 
