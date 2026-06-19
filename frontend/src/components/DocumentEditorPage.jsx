@@ -948,6 +948,19 @@ export default function DocumentEditorPage({
     }).join('');
   }
 
+  // node.textContent drops <br> tags entirely (they contribute no text), which
+  // glues adjacent lines together (e.g. a heading immediately followed by its
+  // body on the next line, rendered as "<p>Heading<br>Body</p>", would read back
+  // as "HeadingBody" with no separator). Replace <br> with a literal newline
+  // before extracting text so line breaks survive the HTML round-trip.
+  function _textWithLineBreaks(node) {
+    if (node.nodeType !== 1) return node.textContent || '';
+    const tmp = window.document.createElement('div');
+    tmp.innerHTML = node.innerHTML || '';
+    tmp.querySelectorAll('br').forEach((br) => br.replaceWith(window.document.createTextNode('\n')));
+    return tmp.textContent || '';
+  }
+
   function htmlToSections(html) {
     const div = window.document.createElement('div');
     div.innerHTML = html;
@@ -962,7 +975,7 @@ export default function DocumentEditorPage({
         const liNodes = Array.from(node.querySelectorAll('li'));
         if (liNodes.length) {
           const prefix = tag === 'ol' ? (i) => `${i + 1}. ` : () => '- ';
-          const listText = liNodes.map((li, i) => `${prefix(i)}${li.textContent.trim()}`).join('\n');
+          const listText = liNodes.map((li, i) => `${prefix(i)}${_textWithLineBreaks(li).trim()}`).join('\n');
           current.content += (current.content ? '\n\n' : '') + listText;
         }
       } else if (tag === 'figure') {
@@ -975,7 +988,7 @@ export default function DocumentEditorPage({
         current.blocks.push({ block_id: blockId, type: blockType, src, caption });
         current.content += (current.content ? '\n\n' : '') + `[[BLOCK:${blockId}]]`;
       } else if (tag !== '#comment') {
-        const text = (node.textContent || '').trim();
+        const text = _textWithLineBreaks(node).trim();
         if (text) {
           current.content += (current.content ? '\n\n' : '') + text;
         }

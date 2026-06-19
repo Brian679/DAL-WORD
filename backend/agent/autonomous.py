@@ -1230,7 +1230,7 @@ def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
             {"title": "1.8 Chapter Summary", "sections": []},
         ]},
         {"title": "Chapter 2: Literature Review", "sections": [
-            {"title": f"2.1 Introduction to {topic[:60]}", "sections": []},
+            {"title": "2.1 Introduction", "sections": []},
             {"title": "2.2 Theoretical Framework", "sections": []},
             {"title": "2.3 Conceptual Framework", "sections": []},
             {"title": "2.4 Empirical Review", "sections": []},
@@ -1777,7 +1777,10 @@ def _execute_subsection_nodes(
                     word_count=280,
                 )
             except Exception:
-                body = _fallback_subsection_text(topic, section_title, title)
+                body = _fallback_subsection_text(
+                    topic, section_title, title,
+                    objectives=(document.content or {}).get("research_objectives"),
+                )
         else:
             lowered_title = title.lower()
             real_references = (
@@ -1851,12 +1854,13 @@ def _execute_subsection_nodes(
                 "▶ [PlannerAgent→Pipeline] %s — %s (wc=%d)",
                 section_title, title, task_spec.word_count,
             )
+            _doc_objectives = (document.content or {}).get("research_objectives")
             result = Pipeline().run_node(
                 task=task_spec,
                 document_brief=document_brief,
                 rolling_context=local_context,
                 generate_fn=generate_section_content,
-                fallback_fn=_fallback_subsection_text,
+                fallback_fn=lambda t, s, sub: _fallback_subsection_text(t, s, sub, objectives=_doc_objectives),
                 user_instruction=user_instruction,
             )
             body = result.content
@@ -2527,7 +2531,21 @@ def _explicit_section_target_from_message(message: str) -> str | None:
     return None
 
 
-def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -> str:
+def _objective_to_question(objective: str, topic: str) -> str:
+    """Convert a research objective statement into an interrogative research question."""
+    cleaned = objective.strip().rstrip(".")
+    question, replaced = re.subn(r"^to\s+\w+\s+", "What is ", cleaned, count=1, flags=re.IGNORECASE)
+    if not replaced:
+        question = f"What is the relationship between {topic} and {cleaned}"
+    return question.rstrip("?") + "?"
+
+
+def _fallback_subsection_text(
+    topic: str,
+    section_title: str,
+    subsection: str,
+    objectives: list[str] | None = None,
+) -> str:
     """Return substantive academic fallback text when model generation fails."""
     prompt = (
         f"Write a concise but substantive academic subsection for '{subsection}' "
@@ -2610,13 +2628,21 @@ def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -
         )
 
     if "hypoth" in sub_lower:
+        if objectives:
+            lines = []
+            for i, obj in enumerate(objectives[:3], start=1):
+                stem = re.sub(r"^to\s+\w+\s+", "", obj.strip().rstrip("."), count=1, flags=re.IGNORECASE)
+                stem = stem or obj.strip().rstrip(".")
+                lines.append(
+                    f"{i}. H0: There is no statistically significant relationship between {stem} and the outcomes examined in this study.\n"
+                    f"   H1: There is a statistically significant relationship between {stem} and the outcomes examined in this study."
+                )
+            return "\n".join(lines)
         return (
-            "1. H0: Artificial intelligence adoption has no statistically significant effect on operational efficiency in the selected organisations.\n"
-            "   H1: Artificial intelligence adoption has a statistically significant positive effect on operational efficiency in the selected organisations.\n"
-            "2. H0: AI-enabled risk analytics has no statistically significant relationship with fraud detection accuracy.\n"
-            "   H1: AI-enabled risk analytics has a statistically significant positive relationship with fraud detection accuracy.\n"
-            "3. H0: AI-driven customer-service systems have no statistically significant effect on customer satisfaction levels.\n"
-            "   H1: AI-driven customer-service systems have a statistically significant positive effect on customer satisfaction levels."
+            f"1. H0: {topic[:1].upper()}{topic[1:]} has no statistically significant effect on the outcomes examined in this study.\n"
+            f"   H1: {topic[:1].upper()}{topic[1:]} has a statistically significant positive effect on the outcomes examined in this study.\n"
+            f"2. H0: There is no statistically significant relationship between the key variables associated with {topic}.\n"
+            f"   H1: There is a statistically significant relationship between the key variables associated with {topic}."
         )
 
     # ── Chapter 1 Introduction subsections ─────────────────────────────────
@@ -2691,37 +2717,139 @@ def _fallback_subsection_text(topic: str, section_title: str, subsection: str) -
         )
 
     if "research objective" in sub_lower or "research question" in sub_lower:
-        return (
-            "1. To evaluate the extent to which artificial intelligence tools improve operational efficiency in banking processes, "
-            "including turnaround time and process accuracy.\n"
-            "2. To examine the relationship between AI-enabled systems and risk-management performance, with emphasis on fraud detection and anomaly control.\n"
-            "3. To determine the effect of AI deployment on customer-service outcomes, particularly responsiveness, personalization, and satisfaction."
-        )
+        is_question = "question" in sub_lower
+        items = list(objectives[:6]) if objectives else [
+            f"To determine the current state of {topic}.",
+            f"To examine the key factors influencing {topic}.",
+            f"To evaluate the relationship between {topic} and related outcomes in the study context.",
+        ]
+        if is_question:
+            return "\n".join(f"{i}. {_objective_to_question(o, topic)}" for i, o in enumerate(items, start=1))
+        return "\n".join(f"{i}. {o.strip().rstrip('.')}." for i, o in enumerate(items, start=1))
 
     if "chapter 2" in sec or "literature review" in sec:
+        if "introduction" in sub_lower:
+            return (
+                f"This chapter reviews the existing body of scholarship relevant to {topic}, situating the present study "
+                "within established theoretical and empirical traditions. The review is organised around the conceptual "
+                "review, the theoretical framework guiding the study, the empirical literature on the subject, and the "
+                "research gap that this study addresses.\n\n"
+                "The chapter begins by clarifying the core concepts central to the study, before moving to the theories "
+                "that explain the relationships among the key variables. It then synthesises empirical findings from "
+                "global, regional, and sector-specific studies, before concluding with an identification of gaps in "
+                "current knowledge that justify the present inquiry."
+            )
+        if any(k in sub_lower for k in ["conceptual", "core concept", "dimension", "relationships between variables", "definition and conceptualisation"]):
+            return (
+                f"The conceptual review clarifies the key terms and constructs underpinning {topic}, establishing a shared "
+                "vocabulary for the analysis that follows. Each construct is defined with reference to its dominant usage "
+                "in the academic literature, and its dimensions, indicators, and measurement approaches are outlined "
+                "to support the operationalisation adopted in Chapter 3.\n\n"
+                "The review further maps the conceptual relationships among the study's key variables, illustrating how "
+                "they are theorised to interact. This conceptual groundwork provides the basis for the theoretical "
+                "framework and the empirical hypotheses examined later in the study."
+            )
+        if "theoretical" in sub_lower or "theory" in sub_lower or "theories" in sub_lower:
+            return (
+                f"This section presents the theoretical foundations relevant to {topic}. Several theories offer "
+                "complementary lenses for understanding the relationships under investigation, including classical "
+                "and contemporary perspectives drawn from the relevant disciplinary literature.\n\n"
+                "Among the foundational theories considered, institutional theory explains how external normative and "
+                "coercive pressures shape organisational and individual behaviour, while resource-based perspectives "
+                "highlight the role of internal capabilities and resource endowments in determining outcomes. "
+                "Contemporary and emerging theoretical contributions extend these classical accounts to contexts "
+                "characterised by rapid technological, environmental, or socioeconomic change. The theory judged most "
+                "applicable to this study is justified on the grounds of its explanatory power for the specific "
+                "relationships and context examined here."
+            )
+        if "global evidence" in sub_lower or ("empirical" in sub_lower and "global" in sub_lower):
+            return (
+                f"Global empirical evidence on {topic} reveals broadly consistent patterns across diverse settings, "
+                "albeit with notable variation in magnitude and mechanism. Cross-country and cross-sectoral studies "
+                "report measurable associations between the key variables identified in this study, with effect sizes "
+                "shaped by contextual factors such as institutional maturity, resource availability, and policy "
+                "environment.\n\n"
+                "Taken together, the global evidence base establishes a strong prima facie case for the relationships "
+                "this study investigates, while also highlighting the need for the context-specific evidence that "
+                "this study seeks to generate."
+            )
+        if "developed econom" in sub_lower:
+            return (
+                f"Evidence from developed economies demonstrates relatively mature engagement with {topic}, supported "
+                "by well-established institutional, regulatory, and infrastructural conditions. Studies conducted in "
+                "these contexts often report stronger and more consistent outcomes, reflecting greater resource "
+                "availability and longer histories of implementation.\n\n"
+                "Nonetheless, even within developed-economy contexts, researchers note that outcomes vary by sector "
+                "and by the quality of implementation, underscoring that institutional maturity alone does not "
+                "guarantee favourable results."
+            )
+        if "emerging econom" in sub_lower:
+            return (
+                f"Studies situated in emerging economies provide important comparative evidence on {topic}, often "
+                "revealing different constraints and enablers than those documented in developed-economy research. "
+                "Infrastructural gaps, regulatory transition, and resource limitations frequently moderate the "
+                "strength of observed relationships in these settings.\n\n"
+                "Despite these constraints, emerging-economy studies report meaningful progress and, in some cases, "
+                "outcomes that rival those of more developed contexts, particularly where targeted policy support "
+                "and capacity-building interventions have been implemented."
+            )
+        if "developing econom" in sub_lower or "africa" in sub_lower:
+            return (
+                f"Evidence from developing economies and the African context highlights both the opportunities and "
+                f"the structural challenges associated with {topic}. Studies in this context frequently emphasise "
+                "infrastructural deficits, financing constraints, and capacity limitations as factors that condition "
+                "the pace and depth of observed outcomes.\n\n"
+                "At the same time, this literature documents innovative, context-adapted approaches that have achieved "
+                "meaningful results despite resource constraints, offering valuable lessons for the present study's "
+                "context and underscoring the importance of locally grounded evidence."
+            )
+        if "sectoral" in sub_lower or "industry" in sub_lower:
+            return (
+                f"Sectoral and industry-specific studies on {topic} reveal that outcomes are not uniform across "
+                "industries, but instead reflect sector-specific operating conditions, regulatory regimes, and "
+                "stakeholder priorities. Comparative sectoral analysis helps to clarify which of these conditions "
+                "are most consequential for the relationships examined in this study.\n\n"
+                "This sector-sensitive evidence base informs the contextual scope of the present study and supports "
+                "the selection of an appropriate analytical frame for interpreting the primary data collected."
+            )
+        if "synthesis" in sub_lower or "critical appraisal" in sub_lower:
+            return (
+                f"Synthesising the empirical literature reviewed above, the evidence on {topic} is consistent in "
+                "direction but heterogeneous in magnitude, with methodological differences accounting for a "
+                "substantial share of the variation reported across studies. Many existing studies rely on "
+                "secondary data, cross-sectional designs, or narrow sectoral samples, limiting the generalisability "
+                "of their conclusions.\n\n"
+                "This critical appraisal identifies methodological rigor, contextual specificity, and triangulation "
+                "of data sources as priorities for closing the gaps identified, directly motivating the design "
+                "adopted in the present study."
+            )
+        if "research gap" in sub_lower or "gap" in sub_lower:
+            return (
+                f"Despite the volume of literature on {topic}, this review identifies a clear and persistent gap: "
+                "existing studies offer limited context-specific, primary evidence that directly links the key "
+                "variables examined in this study to measurable outcomes within the present research setting. "
+                "Much of the available evidence is either generalised across dissimilar contexts or focused on "
+                "secondary data unsuited to establishing the specific relationships of interest here.\n\n"
+                "The present study addresses this gap by generating original primary data within a clearly defined "
+                "context, thereby contributing context-grounded evidence that extends and refines the existing "
+                "body of knowledge."
+            )
+        if "summary" in sub_lower:
+            return (
+                f"This chapter has reviewed the conceptual, theoretical, and empirical literature relevant to "
+                f"{topic}. It clarified the key constructs, outlined the theoretical perspectives guiding the study, "
+                "synthesised empirical evidence across global, regional, and sectoral contexts, and identified the "
+                "research gap that justifies the present inquiry.\n\n"
+                "Building on this foundation, the next chapter presents the research methodology adopted to "
+                "generate primary evidence addressing the identified gap."
+            )
         return (
-            f"Existing scholarship on {topic} converges on the view that technological capability, organisational readiness, "
-            "and governance quality jointly determine implementation outcomes. Empirical studies from both developed and emerging contexts "
-            "report measurable efficiency gains where deployment is aligned with data quality, process redesign, and staff upskilling. "
-            "However, the literature also identifies persistent constraints, including model-opacity concerns, uneven digital infrastructure, "
-            "and regulatory uncertainty that can weaken realised benefits (Davenport & Ronanki, 2018; McKinsey, 2022).\n\n"
-            f"Foundational theoretical contributions to the study of {topic} draw on institutional theory, resource-based views, "
-            "and dynamic capabilities frameworks. Institutional theorists emphasise normative isomorphism and coercive pressures as "
-            "primary adoption drivers (DiMaggio & Powell, 1983), while resource-based perspectives identify internal competencies "
-            "as the durable source of competitive advantage. Dynamic capability theory, advanced by Teece et al. (1997), argues that "
-            "the capacity to sense, seize, and reconfigure resources is the defining characteristic of high-performing organisations "
-            "in technology-intensive environments.\n\n"
-            "Empirical research on adoption outcomes consistently demonstrates a positive relationship between digital infrastructure "
-            "maturity and performance improvements, though effect sizes vary considerably across institutional contexts. Meta-analytic "
-            "evidence suggests that implementation quality moderates this relationship, with poorly executed initiatives generating "
-            "negligible or even negative returns. Studies from the banking sector, in particular, report that AI-driven process "
-            "automation reduces error rates by 20–35% and transaction processing times by up to 40% where system integration is robust "
-            "(Arner et al., 2020; Basel Committee, 2022).\n\n"
-            "Critical synthesis further indicates that many prior studies overemphasise short-term performance indicators while giving "
-            "limited attention to institutional adaptation and long-run risk externalities. Social and ethical dimensions — including "
-            "algorithmic bias, workforce displacement, and data-privacy concerns — receive comparatively little empirical attention. "
-            "This gap underscores the need for context-sensitive evidence that links technical adoption to operational, governance, "
-            "and customer-facing outcomes within a unified analytical frame, which this study seeks to provide."
+            f"This subsection contributes to the broader literature review on {topic}, situating the discussion "
+            "within the relevant theoretical and empirical context established elsewhere in this chapter. "
+            "It draws on the conceptual and empirical foundations introduced earlier to extend the analysis "
+            "to the specific dimension addressed here.\n\n"
+            "The discussion remains anchored in the study's research objectives, ensuring that the literature "
+            "reviewed directly supports the analytical framework developed for subsequent chapters."
         )
 
     if "chapter 3" in sec or "methodology" in sec:
@@ -2967,12 +3095,14 @@ def _heading_positions(text: str) -> list[tuple[int, int, str]]:
     return positions
 
 
-def _replace_subsection_if_present(section_text: str, subsection_query: str, new_block: str) -> str | None:
+def _subsection_match_range(section_text: str, subsection_query: str) -> tuple[int, int] | None:
+    """Locate the (start, end) character range of the heading matching `subsection_query`
+    and everything up to the next heading. Returns None if no heading matches."""
     positions = _heading_positions(section_text)
     if not positions:
         return None
 
-    query = subsection_query.lower().strip()
+    query = (subsection_query or "").lower().strip()
     query_num_match = re.search(r"\b\d+(?:\.\d+)*\b", query)
     query_num = query_num_match.group(0) if query_num_match else None
 
@@ -2990,6 +3120,14 @@ def _replace_subsection_if_present(section_text: str, subsection_query: str, new
 
     start = positions[hit_index][0]
     end = positions[hit_index + 1][0] if hit_index + 1 < len(positions) else len(section_text)
+    return start, end
+
+
+def _replace_subsection_if_present(section_text: str, subsection_query: str, new_block: str) -> str | None:
+    match_range = _subsection_match_range(section_text, subsection_query)
+    if match_range is None:
+        return None
+    start, end = match_range
     return section_text[:start] + new_block.strip() + "\n\n" + section_text[end:]
 
 
@@ -5108,7 +5246,8 @@ def _run_copilot_loop(
                                 # Strip numeric prefix so specific section patterns match
                                 _subsec_name_clean = re.sub(r"^\d+(?:\.\d+)*\s*", "", _heading_txt).strip()
                                 _static_body = _fallback_subsection_text(
-                                    topic or "", _sec.get("title", ""), _subsec_name_clean or _heading_txt
+                                    topic or "", _sec.get("title", ""), _subsec_name_clean or _heading_txt,
+                                    objectives=(document.content or {}).get("research_objectives"),
                                 )
                                 if _static_body and len(_static_body) > 80:
                                     if _subsec_id:
@@ -5297,7 +5436,10 @@ def _enhance_section(
     try:
         enhanced = enhance_text(source_text, topic, enhance_instruction, section_title=sec_title)
     except Exception:
-        enhanced = _fallback_subsection_text(topic, sec_title, query)
+        enhanced = _fallback_subsection_text(
+            topic, sec_title, query,
+            objectives=(document.content or {}).get("research_objectives"),
+        )
 
     if subsection_block:
         heading = subsection_block[0]
@@ -5465,19 +5607,31 @@ def _write_section(
         # for purely structural sections like Objectives or Scope.
         citation_pool = _retrieve_citation_pool(topic, document.id) if chapter_hint in (2, 6) else []
 
+        # Snapshot the chapter content BEFORE generation starts and locate the
+        # target subsection's (start, end) range exactly once. Every progress
+        # update (and the final write) splices against this fixed baseline —
+        # never against content already mutated by a prior progress update —
+        # so a heading match that only succeeds on the first callback (e.g.
+        # "2.4 Empirical Review" gets replaced by "2.4.1 ...") can't cause
+        # later callbacks to fall through to the append branch repeatedly and
+        # duplicate already-written children.
+        _original_chapter_content = chapter_payload.get("content", "")
+        _match_range = (
+            _subsection_match_range(_original_chapter_content, selected_node.get("title", query))
+            if selected_node else None
+        )
+
+        def _splice_chapter_content(new_text: str) -> str:
+            if not selected_node:
+                return new_text if new_text.strip() else ""
+            if _match_range:
+                start, end = _match_range
+                return _original_chapter_content[:start] + new_text.strip() + "\n\n" + _original_chapter_content[end:]
+            return (_original_chapter_content.rstrip() + "\n\n" + new_text).strip()
+
         def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
             safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
-            if selected_node:
-                updated_content = _replace_subsection_if_present(
-                    chapter_payload.get("content", ""),
-                    subsection_query=selected_node.get("title", query),
-                    new_block=partial_text,
-                )
-                chapter_payload["content"] = updated_content or (
-                    (chapter_payload.get("content") or "").rstrip() + "\n\n" + partial_text
-                ).strip()
-            else:
-                chapter_payload["content"] = partial_text if partial_text.strip() else ""
+            chapter_payload["content"] = _splice_chapter_content(partial_text)
 
             if partial_blocks:
                 chapter_payload["blocks"] = partial_blocks
@@ -5512,18 +5666,8 @@ def _write_section(
             except Exception as exc:
                 logger.warning("_write_section: citation repair failed: %s", exc)
 
-        if selected_node:
-            # chapter_text already starts with the subsection title from _execute_subsection_nodes
-            updated_content = _replace_subsection_if_present(
-                chapter_payload.get("content", ""),
-                subsection_query=selected_node.get("title", query),
-                new_block=chapter_text,
-            )
-            chapter_payload["content"] = updated_content or (
-                (chapter_payload.get("content") or "").rstrip() + "\n\n" + chapter_text
-            ).strip()
-        else:
-            chapter_payload["content"] = chapter_text if chapter_text.strip() else ""
+        # chapter_text already starts with the subsection title from _execute_subsection_nodes
+        chapter_payload["content"] = _splice_chapter_content(chapter_text)
 
         if chapter_blocks:
             chapter_payload["blocks"] = chapter_blocks
@@ -5552,7 +5696,10 @@ def _write_section(
             word_count=320,
         )
     except Exception:
-        content = _fallback_subsection_text(topic, section_name, section_name)
+        content = _fallback_subsection_text(
+            topic, section_name, section_name,
+            objectives=(document.content or {}).get("research_objectives"),
+        )
     content = _sanitize_body(content)
     _done(plan, 2)
 
@@ -5915,7 +6062,10 @@ def _plan_and_write_document(
                 word_count=wc,
             )
         except Exception:
-            text = _fallback_subsection_text(topic, doc_type.capitalize(), title)
+            text = _fallback_subsection_text(
+                topic, doc_type.capitalize(), title,
+                objectives=(document.content or {}).get("research_objectives"),
+            )
 
         sections.append({"title": title, "content": text})
         document.content = {
