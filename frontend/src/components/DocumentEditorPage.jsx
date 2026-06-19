@@ -432,8 +432,97 @@ function renderFigureBlock(blk, key) {
 
 const _UL_RE = /^[-*•◦▪]\s+/;
 const _OL_RE = /^\d+[.):]\s+/;
+const _BLOCK_MARKER_RE = /\[\[BLOCK:([^\]]+)\]\]/g;
 
 function _isListLine(l) { return _UL_RE.test(l) || _OL_RE.test(l); }
+
+function _escapeHtml(text) {
+  return (text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// HTML-string equivalent of renderFigureBlock(), for building the contenteditable editor's innerHTML.
+function blockFigureHtmlString(block) {
+  if (!block) return '';
+  const src = block.src ? `http://127.0.0.1:8000${block.src}` : '';
+  const caption = _escapeHtml(block.caption || '');
+  const blockId = _escapeHtml(block.block_id || '');
+  const blockType = _escapeHtml(block.type || 'image');
+  return (
+    `<figure class="doc-figure" data-block-id="${blockId}" data-block-type="${blockType}" contenteditable="false">` +
+    `<img src="${src}" alt="${caption || 'Generated image'}" class="doc-figure-img" />` +
+    (caption ? `<figcaption class="doc-figure-caption">${caption}</figcaption>` : '') +
+    `</figure>`
+  );
+}
+
+// Converts a plain-text chunk (paragraphs/lists, no block markers) into editor HTML.
+// Mirrors the per-paragraph logic in sectionsToHtml().
+function paragraphChunkToHtml(text) {
+  if (!text) return '';
+  const paras = text.split(/\n\n+/);
+  return paras.map((p) => {
+    const pLines = p.split('\n').map(l => l.trimEnd()).filter(l => l.trim());
+    if (pLines.length === 0) return '';
+    const listItems = pLines.filter(l => _isListLine(l.trimStart()));
+    const hasIntro = pLines.length > 1 && !_isListLine(pLines[0].trimStart()) && listItems.length >= pLines.length - 1;
+    const isList = listItems.length >= 2 && (listItems.length === pLines.length || hasIntro);
+    if (isList) {
+      const intro = hasIntro ? `<p>${_escapeHtml(pLines[0].trim())}</p>` : '';
+      const items = pLines.filter((l, i) => !(i === 0 && hasIntro) && l.trim());
+      const orderedCount = items.filter(l => _OL_RE.test(l.trimStart())).length;
+      const tag = orderedCount > items.length - orderedCount ? 'ol' : 'ul';
+      const lis = items.map(l => {
+        const text = l.trimStart().replace(_UL_RE, '').replace(_OL_RE, '').trim();
+        const esc = _escapeHtml(text);
+        const withComments = esc.replace(
+          /\[Comment:\s*([^\]]+)\]/gi,
+          (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
+        );
+        return `<li>${withComments}</li>`;
+      }).join('');
+      return `${intro}<${tag}>${lis}</${tag}>`;
+    }
+    const escaped = _escapeHtml(p);
+    const withComments = escaped.replace(
+      /\[Comment:\s*([^\]]+)\]/gi,
+      (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
+    );
+    return `<p>${withComments.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+}
+
+// Splits content on [[BLOCK:id]] markers, rendering text chunks as paragraphs/lists
+// and markers as <figure> elements looked up from the section's blocks array.
+function contentToHtmlWithBlocks(content, blocks) {
+  const normalized = (content || '').replace(/<br\s*\/?>/gi, '\n');
+  const blockList = Array.isArray(blocks) ? blocks : [];
+  if (!blockList.length || !normalized.includes('[[BLOCK:')) {
+    return paragraphChunkToHtml(normalized);
+  }
+  const markerRe = new RegExp(_BLOCK_MARKER_RE.source, 'g');
+  let last = 0;
+  let match;
+  let html = '';
+  const placed = new Set();
+  while ((match = markerRe.exec(normalized)) !== null) {
+    html += paragraphChunkToHtml(normalized.slice(last, match.index));
+    const blockId = (match[1] || '').trim();
+    const block = blockList.find((b) => (b.block_id || '').trim() === blockId);
+    if (block) {
+      placed.add(blockId);
+      html += blockFigureHtmlString(block);
+    }
+    last = markerRe.lastIndex;
+  }
+  html += paragraphChunkToHtml(normalized.slice(last));
+  blockList.forEach((blk) => {
+    const blockId = (blk.block_id || '').trim();
+    if (blockId && !placed.has(blockId)) {
+      html += blockFigureHtmlString(blk);
+    }
+  });
+  return html;
+}
 
 function renderParagraph(para, key) {
   const lines = para.split('\n').map(l => l.trimEnd());
@@ -853,37 +942,7 @@ export default function DocumentEditorPage({
         html += `<${tag} data-section-title="true">${s.title}</${tag}>`;
       }
       if (s.content) {
-        const normalized = s.content.replace(/<br\s*\/?>/gi, '\n');
-        const paras = normalized.split(/\n\n+/);
-        html += paras.map((p) => {
-          const pLines = p.split('\n').map(l => l.trimEnd()).filter(l => l.trim());
-          if (pLines.length === 0) return '';
-          const listItems = pLines.filter(l => _isListLine(l.trimStart()));
-          const hasIntro = pLines.length > 1 && !_isListLine(pLines[0].trimStart()) && listItems.length >= pLines.length - 1;
-          const isList = listItems.length >= 2 && (listItems.length === pLines.length || hasIntro);
-          if (isList) {
-            const intro = hasIntro ? `<p>${pLines[0].trim().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</p>` : '';
-            const items = pLines.filter((l, i) => !(i === 0 && hasIntro) && l.trim());
-            const orderedCount = items.filter(l => _OL_RE.test(l.trimStart())).length;
-            const tag = orderedCount > items.length - orderedCount ? 'ol' : 'ul';
-            const lis = items.map(l => {
-              const text = l.trimStart().replace(_UL_RE,'').replace(_OL_RE,'').trim();
-              const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-              const withComments = esc.replace(
-                /\[Comment:\s*([^\]]+)\]/gi,
-                (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
-              );
-              return `<li>${withComments}</li>`;
-            }).join('');
-            return `${intro}<${tag}>${lis}</${tag}>`;
-          }
-          const escaped = p.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-          const withComments = escaped.replace(
-            /\[Comment:\s*([^\]]+)\]/gi,
-            (_, txt) => `<span class="doc-comment-inline" contenteditable="false">[Comment: ${txt}]</span>`
-          );
-          return `<p>${withComments.replace(/\n/g, '<br>')}</p>`;
-        }).join('');
+        html += contentToHtmlWithBlocks(s.content, s.blocks);
       }
       return html;
     }).join('');
@@ -906,6 +965,15 @@ export default function DocumentEditorPage({
           const listText = liNodes.map((li, i) => `${prefix(i)}${li.textContent.trim()}`).join('\n');
           current.content += (current.content ? '\n\n' : '') + listText;
         }
+      } else if (tag === 'figure') {
+        const img = node.querySelector('img');
+        const figcaption = node.querySelector('figcaption');
+        const blockId = node.getAttribute('data-block-id') || `blk-${Date.now()}-${current.blocks.length}`;
+        const blockType = node.getAttribute('data-block-type') || 'image';
+        const src = (img?.getAttribute('src') || '').replace(/^https?:\/\/127\.0\.0\.1:8000/, '');
+        const caption = figcaption ? figcaption.textContent.trim() : '';
+        current.blocks.push({ block_id: blockId, type: blockType, src, caption });
+        current.content += (current.content ? '\n\n' : '') + `[[BLOCK:${blockId}]]`;
       } else if (tag !== '#comment') {
         const text = (node.textContent || '').trim();
         if (text) {

@@ -6203,6 +6203,8 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
 
     _section_title = section.get("title", "Data")
     _ai = _ai_chart_series(_section_title, n_points=8)
+    figure_no = _next_caption_number(document, "figure")
+    figure_caption = f"Figure {figure_no}: {_section_title}"
     chart_path = generate_chart(
         series=_ai["series"],
         chart_type=_ai["chart_type"],
@@ -6210,9 +6212,16 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
         x_labels=_ai.get("x_labels") or None,
         unit=_ai.get("unit") or None,
     )
-    section.setdefault("blocks", []).append(
-        {"type": "chart", "src": chart_path, "caption": f"Chart for {section.get('title', 'section')}"}
+    blocks = section.setdefault("blocks", [])
+    block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+    blocks.append(
+        {"type": "chart", "src": chart_path, "caption": figure_caption, "block_id": block_id}
     )
+    addition = (
+        f"\n\n{figure_caption}\n[[BLOCK:{block_id}]]\n"
+        f"{_chart_discussion_text(_ai['series'], None, _section_title)}"
+    )
+    section["content"] = (section.get("content", "") or "").rstrip() + addition
     _save(document, f"chart:{target or 'section'}")
     _all_done(plan)
     return f"Added a chart to '{section.get('title', 'the section')}'.", True
