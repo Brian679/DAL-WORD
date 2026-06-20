@@ -399,7 +399,7 @@ _SECTION_VISUAL_SPECS: list[dict[str, Any]] = [
         "meta": {"table_type": "empirical_summary"}, "designs_only": None,
     },
     {
-        "chapter": 2, "keyword": "conceptual review",
+        "chapter": 2, "keyword": ("conceptual review", "conceptual framework"),
         "kind": "chart", "title": "Conceptual Framework Diagram",
         "meta": {"chart_type": "framework"}, "designs_only": None,
     },
@@ -602,10 +602,23 @@ def _inject_standard_visuals(
     result: list[dict[str, Any]] = []
     for node in nodes:
         title_lower = node.get("title", "").lower()
-        children = list(node.get("children", []))
+
+        # Recurse into the node's OWN (pre-injection) children first. Visual nodes
+        # appended below are never fed back into this recursion, so an injected
+        # node whose own title happens to contain its trigger keyword (e.g. "Conceptual
+        # Framework Diagram" containing "conceptual framework") can't self-match and
+        # recurse forever.
+        original_children = list(node.get("children", []))
+        children = (
+            _inject_standard_visuals(original_children, chapter_number, research_design)
+            if original_children else []
+        )
 
         for spec in specs:
-            if spec["keyword"] not in title_lower:
+            spec_keywords = spec["keyword"]
+            if isinstance(spec_keywords, str):
+                spec_keywords = (spec_keywords,)
+            if not any(kw in title_lower for kw in spec_keywords):
                 continue
             # Skip if design restriction doesn't match
             allowed = spec.get("designs_only")
@@ -622,11 +635,46 @@ def _inject_standard_visuals(
                 "meta": spec.get("meta", {}),
             })
 
-        # Recurse into children (e.g. subsections of Chapter 2's Empirical Review)
-        if children:
-            children = _inject_standard_visuals(children, chapter_number, research_design)
-
         result.append({**node, "children": children})
+    return result
+
+
+def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Guarantee Chapter 2 gets a conceptual-framework diagram even if the LLM-tailored
+    section titles don't literally contain one of the _SECTION_VISUAL_SPECS keywords
+    (the plan prompt deliberately encourages topic-specific, non-generic headings).
+    """
+
+    def _has_framework_chart(node_list: list[dict[str, Any]]) -> bool:
+        for n in node_list:
+            if n.get("kind") == "chart" and (n.get("meta") or {}).get("chart_type") == "framework":
+                return True
+            if _has_framework_chart(n.get("children", []) or []):
+                return True
+        return False
+
+    if not nodes or _has_framework_chart(nodes):
+        return nodes
+
+    framework_kws = ("conceptual", "theoretical", "framework", "model")
+    target_idx = next(
+        (i for i, n in enumerate(nodes) if any(kw in (n.get("title") or "").lower() for kw in framework_kws)),
+        None,
+    )
+    if target_idx is None:
+        # No obvious match — place it on the second node (after the chapter intro),
+        # or the first if the chapter has only one section.
+        target_idx = 1 if len(nodes) > 1 else 0
+
+    result = list(nodes)
+    target = dict(result[target_idx])
+    target["children"] = list(target.get("children", [])) + [{
+        "title": "Conceptual Framework Diagram",
+        "kind": "chart",
+        "children": [],
+        "meta": {"chart_type": "framework"},
+    }]
+    result[target_idx] = target
     return result
 
 
@@ -1171,6 +1219,10 @@ def generate_dissertation_plan_llm(
         "generic placeholder titles like 'Related Work' or 'Review of Literature'. Instead, frame "
         "headings around the actual subject matter (e.g. if the topic is municipal finance, use "
         "'2.2 Revenue Mechanisms in Local Government', '2.3 Fiscal Sustainability Theories', etc.).\n"
+        "- Chapter 2 must include exactly one section whose title literally contains the words "
+        "'Conceptual Framework' (e.g. 'X.X Conceptual Framework of <topic-specific qualifier>') — this is "
+        "where the conceptual framework diagram will be placed, so do not omit or rename it away from "
+        "that exact phrase even while keeping other Chapter 2 headings topic-specific.\n"
         "- Chapter 2 must end with a 'Chapter Summary' section.\n"
         "- Chapter 3 sections must reflect the stated research design "
         f"({research_design}): include appropriate data collection and analysis subsections. "
@@ -1269,12 +1321,34 @@ def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
     ]
 
 
-def llm_chapters_to_blueprints(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert LLM plan chapters to the internal blueprint format used by _write_dissertation."""
+def llm_chapters_to_blueprints(
+    chapters: list[dict[str, Any]],
+    research_design: str = "quantitative",
+    objectives: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Convert LLM plan chapters to the internal blueprint format used by _write_dissertation.
+
+    Mirrors what the chat-driven single-chapter rewrite path already does via
+    _chapter_nodes_for_generation: inject the standard table/chart visual nodes for
+    Chapters 1/2/3/5 (_inject_standard_visuals) and the objective-aware results
+    visuals for Chapter 4 (_chapter4_subsections), so a freshly-generated full
+    dissertation isn't all plain text.
+    """
+    objectives = objectives or []
     blueprints = []
     for chapter in chapters:
         title = chapter.get("title", "Untitled Chapter")
+        chapter_number = _chapter_number_from_title(title)
         nodes = _sections_to_nodes(chapter.get("sections", []))
+
+        if chapter_number == 4:
+            nodes = _chapter4_subsections(research_design, objectives)
+        elif chapter_number == 2:
+            nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
+            nodes = _ensure_framework_visual(nodes)
+        elif chapter_number:
+            nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
+
         blueprints.append({"title": title, "nodes": nodes})
     return blueprints
 
@@ -1339,11 +1413,15 @@ def _framework_target_index(document: Document, target: str | None, prompt: str)
     text = f"{(target or '')} {(prompt or '')}".lower()
     looks_framework = any(k in text for k in ["conceptual", "theoretical", "framework", "model"])
     if looks_framework:
+        # Ordered most-specific-first. Numbered prefixes are deliberately omitted: different
+        # templates number Chapter 2 differently (DISSERTATION_TEMPLATE uses "2.2 Conceptual
+        # Review" / "2.3 Theoretical Framework", _fallback_dissertation_chapters uses "2.2
+        # Theoretical Framework" / "2.3 Conceptual Framework"), and find_section's numeric-token
+        # tier would otherwise match on the number alone and pick the wrong section.
         preferred_titles = [
-            "2.3 Theoretical Framework",
-            "Theoretical Framework",
-            "2.2 Conceptual Review",
+            "Conceptual Framework",
             "Conceptual Review",
+            "Theoretical Framework",
             "Literature Review",
             "Chapter 2",
         ]
@@ -1352,32 +1430,35 @@ def _framework_target_index(document: Document, target: str | None, prompt: str)
             if idx is not None:
                 return idx
 
-        for i, section in enumerate(sections):
-            combined = f"{section.get('title', '')}\n{section.get('content', '')}".lower()
-            if any(k in combined for k in ["conceptual framework", "theoretical framework", "framework"]):
-                return i
+        for keywords in (("conceptual framework",), ("conceptual review",), ("theoretical framework",), ("framework",)):
+            for i, section in enumerate(sections):
+                combined = f"{section.get('title', '')}\n{section.get('content', '')}".lower()
+                if any(k in combined for k in keywords):
+                    return i
 
     return len(sections) - 1
 
 
-def _build_framework_spec(document: Document, target: str | None, prompt: str) -> dict[str, Any]:
-    sections = (document.content or {}).get("sections", [])
-    idx = _framework_target_index(document, target, prompt)
-    local_title = ""
-    local_content = ""
-    if idx is not None and 0 <= idx < len(sections):
-        local_title = str(sections[idx].get("title") or "")
-        local_content = str(sections[idx].get("content") or "")
-
-    full_context = _full_context_for_generation(document)[:5000]
-    topic = str((document.content or {}).get("topic") or document.title or "Study")
-    objectives = _extract_objectives(document, topic)
+def _framework_spec_from_inputs(
+    topic: str,
+    objectives: list[str],
+    local_title: str,
+    local_content: str,
+    full_context: str,
+    prompt: str,
+    document_title: str = "",
+) -> dict[str, Any]:
+    """Ask the LLM for a structured conceptual-framework figure spec given already-located
+    context. Shared by _build_framework_spec (chat 'add image' command, document-located
+    context) and the automatic Chapter 2 visual injected during full dissertation writing
+    (in-progress chapter context, no document lookup needed).
+    """
     objective_text = "\n".join(f"- {item}" for item in objectives[:4])
 
     llm_prompt = (
         "You are an academic research assistant. Build a professional conceptual framework specification "
         "for a dissertation figure.\n\n"
-        f"Document title: {document.title}\n"
+        f"Document title: {document_title or topic}\n"
         f"Topic: {topic}\n"
         f"Target section title: {local_title or 'N/A'}\n"
         f"User request: {prompt}\n\n"
@@ -1386,7 +1467,7 @@ def _build_framework_spec(document: Document, target: str | None, prompt: str) -
         "Relevant section content:\n"
         f"{local_content[:1400]}\n\n"
         "Whole document context:\n"
-        f"{full_context}\n\n"
+        f"{full_context[:5000]}\n\n"
         "Return JSON only with this exact shape:\n"
         "{"
         '"title":"...",'
@@ -1418,8 +1499,32 @@ def _build_framework_spec(document: Document, target: str | None, prompt: str) -
             "notes": str(data.get("notes") or "")[0:180],
         }
     except Exception as exc:
-        logger.warning("_build_framework_spec fallback: %s", exc)
+        logger.warning("_framework_spec_from_inputs fallback: %s", exc)
         return _default_framework_spec(topic, prompt)
+
+
+def _build_framework_spec(document: Document, target: str | None, prompt: str) -> dict[str, Any]:
+    sections = (document.content or {}).get("sections", [])
+    idx = _framework_target_index(document, target, prompt)
+    local_title = ""
+    local_content = ""
+    if idx is not None and 0 <= idx < len(sections):
+        local_title = str(sections[idx].get("title") or "")
+        local_content = str(sections[idx].get("content") or "")
+
+    full_context = _full_context_for_generation(document)
+    topic = str((document.content or {}).get("topic") or document.title or "Study")
+    objectives = _extract_objectives(document, topic)
+
+    return _framework_spec_from_inputs(
+        topic=topic,
+        objectives=objectives,
+        local_title=local_title,
+        local_content=local_content,
+        full_context=full_context,
+        prompt=prompt,
+        document_title=document.title,
+    )
 
 
 def _insert_block_marker(section_text: str, block_id: str, prompt: str) -> str:
@@ -1433,11 +1538,15 @@ def _insert_block_marker(section_text: str, block_id: str, prompt: str) -> str:
     framework_request = any(k in lowered_prompt for k in ["conceptual", "theoretical", "framework", "model"])
 
     if framework_request:
-        for i, line in enumerate(lines):
-            lower_line = line.lower().strip()
-            if any(k in lower_line for k in ["conceptual framework", "theoretical framework", "framework"]):
-                lines.insert(i + 1, marker)
-                return "\n".join(lines)
+        # Prefer the most specific heading match: a literal "conceptual framework" line
+        # wins even if a generic "framework"/"theoretical framework" line appears earlier
+        # in the section (e.g. "2.2 Theoretical Framework" before "2.3 Conceptual Framework").
+        for keywords in (("conceptual framework",), ("theoretical framework",), ("framework",)):
+            for i, line in enumerate(lines):
+                lower_line = line.lower().strip()
+                if any(kw in lower_line for kw in keywords):
+                    lines.insert(i + 1, marker)
+                    return "\n".join(lines)
 
     if not text.strip():
         return marker
@@ -1527,6 +1636,8 @@ def _append_node_plan_steps(plan: list[dict[str, Any]], nodes: list[dict[str, An
         verb = "Writing"
         if kind == "table":
             verb = "Creating table for"
+        elif kind == "chart" and (node.get("meta") or {}).get("chart_type") == "framework":
+            verb = "Creating diagram for"
         elif kind == "chart":
             verb = "Creating chart for"
         plan.append({"step": f"{indent}{verb} {node.get('title', 'Untitled subsection')}", "status": "pending"})
@@ -1704,6 +1815,38 @@ def _execute_subsection_nodes(
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective)}"
+            )
+        elif kind == "chart" and meta.get("chart_type") == "framework":
+            figure_no = figure_counter[0]
+            figure_counter[0] += 1
+            objectives_list = (document.content or {}).get("research_objectives") or []
+            framework_spec = _framework_spec_from_inputs(
+                topic=topic,
+                objectives=objectives_list,
+                local_title=title,
+                local_content=local_context[-1400:],
+                full_context=current_document_context,
+                prompt=f"Conceptual framework diagram for: {topic}",
+                document_title=document.title,
+            )
+            image_path = generate_image(
+                f"Conceptual framework diagram for {topic}", framework_spec=framework_spec
+            )
+            figure_caption = f"Figure {figure_no}: {framework_spec.get('title') or title}"
+            block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+            blocks.append({
+                "type": "image",
+                "src": image_path,
+                "caption": figure_caption,
+                "block_id": block_id,
+            })
+            framework_notes = framework_spec.get("notes") or ""
+            body = (
+                f"{figure_caption}\n"
+                f"[[BLOCK:{block_id}]]\n"
+                "Interpretation: The diagram maps how the independent, mediating, and control variables "
+                "identified in this study relate to the dependent variable.\n"
+                f"Discussion: {framework_notes or 'This framework guides the analysis and interpretation presented in subsequent chapters.'}"
             )
         elif kind == "chart":
             objective = str(meta.get("objective") or "") or None
@@ -2049,10 +2192,19 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
         return {"intent": "create_outline", "target_section": None, "topic": topic}
 
+    _visual_verbs = {"add", "put", "insert", "include", "place", "attach", "generate", "create", "make", "draw", "build", "design"}
+
+    # "generate the conceptual framework" — framework requests imply a diagram even
+    # without an explicit "image"/"diagram"/"chart" keyword. _add_image already knows
+    # how to locate the right section (_framework_target_index) and build a real
+    # boxes-and-arrows spec (_build_framework_spec) rather than rewriting prose.
+    _framework_phrases = ["conceptual framework", "theoretical framework"]
+    if any(v in text for v in _visual_verbs) and any(p in text for p in _framework_phrases):
+        return {"intent": "add_image", "target_section": target, "topic": None}
+
     # ── Visual + section-keyword detection (must come before plain add_chart/add_image) ──
     # "generate the conceptual framework image" / "add a chart to the empirical review"
     # → route to write_section so _write_section injects the visual node.
-    _visual_verbs = {"add", "put", "insert", "include", "place", "attach", "generate", "create", "make"}
     _visual_kinds = {"table", "chart", "graph", "image", "figure", "diagram"}
     if any(v in text for v in _visual_verbs) and any(k in text for k in _visual_kinds):
         for _kws, _sec_name in _SECTION_KEYWORD_MAP:
@@ -6347,7 +6499,7 @@ def _write_dissertation(
             guidelines=user_guidelines,
         )
 
-    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters)
+    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters, design, objectives_early)
 
     # ── Step 2: Build the flat step list ─────────────────────────────────
     for chapter in chapter_blueprints:
