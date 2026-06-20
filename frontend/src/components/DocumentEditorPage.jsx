@@ -446,6 +446,7 @@ function _escapeHtml(text) {
 // HTML-string equivalent of renderFigureBlock(), for building the contenteditable editor's innerHTML.
 function blockFigureHtmlString(block) {
   if (!block) return '';
+  if (block.type === 'table') return tableBlockHtmlString(block);
   const src = block.src ? `http://127.0.0.1:8000${block.src}` : '';
   const caption = _escapeHtml(block.caption || '');
   const blockId = _escapeHtml(block.block_id || '');
@@ -453,6 +454,28 @@ function blockFigureHtmlString(block) {
   return (
     `<figure class="doc-figure" data-block-id="${blockId}" data-block-type="${blockType}" contenteditable="false">` +
     `<img src="${src}" alt="${caption || 'Generated image'}" class="doc-figure-img" />` +
+    (caption ? `<figcaption class="doc-figure-caption">${caption}</figcaption>` : '') +
+    `</figure>`
+  );
+}
+
+// Real <table> markup (not an image) for Chapter 4-style data tables. Deliberately NOT
+// contenteditable="false" — unlike image/chart figures, table cells stay directly editable
+// in the rich editor so students can correct/update values inline.
+function tableBlockHtmlString(block) {
+  const blockId = _escapeHtml(block.block_id || '');
+  const caption = _escapeHtml(block.caption || '');
+  const headers = Array.isArray(block.headers) ? block.headers : [];
+  const rows = Array.isArray(block.rows) ? block.rows : [];
+  const theadHtml = headers.length
+    ? `<thead><tr>${headers.map((h) => `<th>${_escapeHtml(String(h))}</th>`).join('')}</tr></thead>`
+    : '';
+  const tbodyHtml = `<tbody>${rows.map((row) => (
+    `<tr>${(Array.isArray(row) ? row : []).map((cell) => `<td>${_escapeHtml(String(cell))}</td>`).join('')}</tr>`
+  )).join('')}</tbody>`;
+  return (
+    `<figure class="doc-figure doc-table-figure" data-block-id="${blockId}" data-block-type="table">` +
+    `<table class="doc-table">${theadHtml}${tbodyHtml}</table>` +
     (caption ? `<figcaption class="doc-figure-caption">${caption}</figcaption>` : '') +
     `</figure>`
   );
@@ -987,13 +1010,26 @@ export default function DocumentEditorPage({
           current.content += (current.content ? '\n\n' : '') + listText;
         }
       } else if (tag === 'figure') {
-        const img = node.querySelector('img');
         const figcaption = node.querySelector('figcaption');
         const blockId = node.getAttribute('data-block-id') || `blk-${Date.now()}-${current.blocks.length}`;
         const blockType = node.getAttribute('data-block-type') || 'image';
-        const src = (img?.getAttribute('src') || '').replace(/^https?:\/\/127\.0\.0\.1:8000/, '');
         const caption = figcaption ? figcaption.textContent.trim() : '';
-        current.blocks.push({ block_id: blockId, type: blockType, src, caption });
+        if (blockType === 'table') {
+          const table = node.querySelector('table');
+          const headers = table
+            ? Array.from(table.querySelectorAll('thead th')).map((th) => th.textContent.trim())
+            : [];
+          const rows = table
+            ? Array.from(table.querySelectorAll('tbody tr')).map((tr) =>
+                Array.from(tr.querySelectorAll('td')).map((td) => td.textContent.trim())
+              )
+            : [];
+          current.blocks.push({ block_id: blockId, type: 'table', headers, rows, caption });
+        } else {
+          const img = node.querySelector('img');
+          const src = (img?.getAttribute('src') || '').replace(/^https?:\/\/127\.0\.0\.1:8000/, '');
+          current.blocks.push({ block_id: blockId, type: blockType, src, caption });
+        }
         current.content += (current.content ? '\n\n' : '') + `[[BLOCK:${blockId}]]`;
       } else if (tag === 'hr') {
         current.content += (current.content ? '\n\n' : '') + _PAGE_BREAK_MARKER;

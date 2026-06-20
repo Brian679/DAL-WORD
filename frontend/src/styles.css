@@ -1398,6 +1398,34 @@ ul {
     display: block;
 }
 
+.doc-table-figure {
+    text-align: left;
+}
+
+.doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    margin: 0 auto;
+}
+
+.doc-table th,
+.doc-table td {
+    border: 1px solid #d8cfc2;
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.doc-table thead th {
+    background: #f3ece0;
+    font-weight: 600;
+    color: #3a2f24;
+}
+
+.doc-table tbody tr:nth-child(even) {
+    background: #fbf8f3;
+}
+
 .doc-edit-toolbar {
     display: flex;
     gap: 0.5rem;

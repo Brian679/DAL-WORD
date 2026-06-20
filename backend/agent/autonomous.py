@@ -27,7 +27,6 @@ from .llm import (
 from .tools import (
     find_section,
     generate_chart,
-    generate_table_chart,
     generate_image,
     save_dataset_json,
     update_section,
@@ -380,7 +379,7 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
 
 # ---------------------------------------------------------------------------
 # Per-chapter visual node specs — injected automatically when the agent writes
-# any of these sections. Chapter 4 is excluded (handled by _chapter4_subsections).
+# any of these sections. Chapter 4 is excluded (handled by _plan_chapter4_structure).
 # Each spec: chapter (int), keyword (str, lowercase, matched against node title),
 #             kind ("table"|"chart"|"image"), title (child node title), meta (dict),
 #             designs_only (list[str]|None — None means all designs)
@@ -595,7 +594,7 @@ def _inject_standard_visuals(
 ) -> list[dict[str, Any]]:
     """Walk the node tree for this chapter and append table/chart child nodes to
     sections that benefit from visual data.  Chapter 4 is skipped — it already
-    has its own visual logic in _chapter4_subsections.
+    has its own visual logic in _plan_chapter4_structure.
     """
     if chapter_number == 4:
         return nodes
@@ -759,6 +758,41 @@ def _research_design(message: str, topic: str, document: Document) -> str:
     return "quantitative"
 
 
+# Heuristic keyword sets for _uses_human_respondents(). Not exhaustive — a topic can mix
+# both signals (e.g. "user acceptance of a new robotic system") — so respondent hints are
+# checked first and win on conflict, since a human-facing study still needs a respondent
+# profile even when it also discusses a technical artifact.
+_RESPONDENT_HINTS = (
+    "survey", "questionnaire", "respondent", "interview", "participant", "perception",
+    "awareness", "opinion", "attitude towards", "attitude of", "employee", "customer",
+    "consumer", "student", "teacher", "patient", "citizen", "manager", "user experience",
+    "stakeholder", "satisfaction", "smes", "small and medium enterpr",
+)
+_NO_RESPONDENT_HINTS = (
+    "robot", "robotic", "drone", "uav", "embedded system", "firmware", "microcontroller",
+    "arduino", "raspberry pi", "sensor", "actuator", "circuit", "pcb", "iot device",
+    "algorithm", "neural network", "machine learning model", "deep learning model",
+    "control system", "automation system", "autonomous", "simulation", "prototype",
+    "structural analysis", "mechanical design", "hydraulic", "pneumatic",
+    "software system", "network protocol", "encryption", "compiler", "operating system",
+    "database performance", "api throughput", "latency", "signal processing",
+)
+
+
+def _uses_human_respondents(topic: str, message: str, objectives: list[str] | None = None) -> bool:
+    """Decide whether Chapter 4 should include a survey-style Respondent Profile section
+    (response rate, demographics). Defaults to True (the app's original assumption, which
+    fits most business/social-science dissertations) unless the topic clearly reads as a
+    technical/engineering build-and-test study with no human survey component.
+    """
+    text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
+    if any(hint in text for hint in _RESPONDENT_HINTS):
+        return True
+    if any(hint in text for hint in _NO_RESPONDENT_HINTS):
+        return False
+    return True
+
+
 def _extract_objectives(document: Document, topic: str) -> list[str]:
     """Dynamically analyze the whole document and extract objectives using the LLM."""
     from agent.gemini import extract_formal_objectives
@@ -854,12 +888,20 @@ def _extract_document_brief(document: Document, topic: str, research_design: str
     )
 
 
-def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[dict[str, Any]]:
+def _chapter4_subsections(
+    research_design: str,
+    objectives: list[str],
+    topic: str = "",
+    message: str = "",
+) -> list[dict[str, Any]]:
     nodes: list[dict[str, Any]] = [
         {"title": "4.1 Introduction", "children": []},
     ]
 
-    if research_design in {"quantitative", "qualitative", "mixed"}:
+    has_respondents = research_design in {"quantitative", "qualitative", "mixed"} and _uses_human_respondents(
+        topic, message, objectives
+    )
+    if has_respondents:
         demo_children: list[dict[str, Any]] = [
             {
                 "title": "4.2.1 Response Rate",
@@ -925,6 +967,118 @@ def _chapter4_subsections(research_design: str, objectives: list[str]) -> list[d
     nodes.append({"title": f"4.{last_idx} Discussion of Findings", "children": []})
     nodes.append({"title": f"4.{last_idx + 1} Chapter Summary", "children": []})
     return [_normalize_subsection_node(n) for n in nodes]
+
+
+def _plan_chapter4_structure(
+    llm_sections: list[dict[str, Any]],
+    research_design: str,
+    objectives: list[str],
+    topic: str,
+    message: str = "",
+) -> list[dict[str, Any]]:
+    """LLM-first planner for Chapter 4 structure and its visuals.
+
+    Rather than discarding the dissertation planner's own topic-tailored
+    Chapter 4 section proposal, this reasons about which of those sections
+    need a table/chart and what kind, based on the actual topic and research
+    design (e.g. an engineering/technical study gets trial-based results
+    visuals, not survey demographics). Falls back to the heuristic
+    _chapter4_subsections when the LLM is unavailable or returns something
+    unusable, so behaviour never regresses.
+    """
+    draft_titles = [str(s.get("title") or "").strip() for s in (llm_sections or []) if s.get("title")]
+    has_respondents_hint = _uses_human_respondents(topic, message, objectives)
+    objective_lines = "\n".join(f"- {o}" for o in objectives[:6]) or "- (infer from the topic)"
+    titles_block = "\n".join(f"- {t}" for t in draft_titles) or "- (no draft titles provided; propose your own)"
+
+    prompt = (
+        "You are planning the data and visuals for Chapter 4 (Results/Analysis) of an academic "
+        "dissertation. Return JSON only.\n"
+        f"Topic: {topic}\n"
+        f"Research design: {research_design}\n"
+        f"Research objectives:\n{objective_lines}\n\n"
+        "Draft section titles already proposed for this chapter:\n"
+        f"{titles_block}\n\n"
+        "Decide, section by section, what data visuals each section actually needs given the TOPIC "
+        "and the kind of data this study would realistically produce. Do not assume a respondent "
+        "survey unless the topic genuinely involves human participants — a technical/engineering study "
+        "that builds or tests a system or device should report experimental/trial results, not survey "
+        "demographics.\n\n"
+        "Return ONLY valid JSON using this schema:\n"
+        "{\n"
+        '  "needs_respondent_profile": true|false,\n'
+        '  "sections": [\n'
+        '    {"title": "4.X ...", "objective": "<matching objective or empty>", '
+        '"has_table": true|false, "table_type": "response_rate|demographics|generic|none", '
+        '"has_chart": true|false}\n'
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Cover the full chapter: an introduction, a respondent-profile section ONLY if "
+        "needs_respondent_profile is true, one section per research objective, a discussion of "
+        "findings, and a chapter summary.\n"
+        "- Only set needs_respondent_profile=true if data is collected directly from human "
+        "respondents (surveys/interviews/questionnaires).\n"
+        "- Give each objective-results section at least a table; quantitative/mixed designs should "
+        "usually pair it with a chart too. Qualitative designs should not use charts.\n"
+        "- Use concise academic numbering (4.1, 4.2, ...).\n"
+        "- Return ONLY the JSON object, no markdown fences."
+    )
+
+    try:
+        data = _extract_json_obj(generate_text(prompt))
+        sections = data.get("sections")
+        if not isinstance(sections, list) or not sections:
+            raise ValueError("no sections returned for chapter 4 plan")
+
+        needs_respondents = bool(data.get("needs_respondent_profile", has_respondents_hint))
+        nodes: list[dict[str, Any]] = []
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            sec_title = str(sec.get("title") or "").strip()
+            if not sec_title:
+                continue
+            if "respondent" in sec_title.lower() and not needs_respondents:
+                continue
+
+            sec_objective = str(sec.get("objective") or "").strip()
+            table_type = str(sec.get("table_type") or "").strip().lower()
+            children: list[dict[str, Any]] = []
+
+            if sec.get("has_table"):
+                children.append({
+                    "title": f"{sec_title} — Table",
+                    "kind": "table",
+                    "children": [],
+                    "meta": {
+                        "table_type": table_type if table_type in {"response_rate", "demographics"} else None,
+                        "objective": sec_objective,
+                    },
+                })
+            if sec.get("has_chart") and research_design in {"quantitative", "mixed"}:
+                children.append({
+                    "title": f"{sec_title} — Chart",
+                    "kind": "chart",
+                    "children": [],
+                    "meta": {
+                        "chart_type": "demographics" if table_type == "demographics" else None,
+                        "objective": sec_objective,
+                    },
+                })
+
+            node: dict[str, Any] = {"title": sec_title, "children": children}
+            if sec_objective:
+                node["kind"] = "objective_findings"
+                node["meta"] = {"objective": sec_objective}
+            nodes.append(node)
+
+        if nodes:
+            return [_normalize_subsection_node(n) for n in nodes]
+    except Exception as exc:
+        logger.warning("plan_chapter4_structure LLM planning failed, using heuristic fallback: %s", exc)
+
+    return _chapter4_subsections(research_design, objectives, topic, message)
 
 
 def _table_text_for_node(node_title: str, research_design: str, topic: str, objective: str | None = None) -> str:
@@ -1005,8 +1159,13 @@ def _ai_table_dataset(
     objective: str | None,
     sample_size: int,
     current_document_context: str,
+    table_type: str | None = None,
 ) -> dict[str, Any]:
-    """Generate structured table data as JSON for rendering via matplotlib."""
+    """Generate structured {headers, rows} table data, to be rendered as a real editable
+    table (not an image). table_type (from the calling node's meta, e.g. "response_rate",
+    "demographics", "key_terms") selects the deterministic fallback shape when the LLM is
+    unavailable; falls back further to a node_title substring match when not provided.
+    """
     prompt = (
         "Generate realistic table data for a dissertation results section. Return JSON only.\n"
         f"Node title: {node_title}\n"
@@ -1035,18 +1194,147 @@ def _ai_table_dataset(
 
     # Deterministic fallback aligned to sample size
     seed = sum(ord(c) for c in f"{node_title}|{topic}|{objective or ''}|{research_design}")
-    if "demographic" in node_title.lower() or "response rate" in node_title.lower():
-        male = max(1, int(round(sample_size * (0.42 + (seed % 12) / 100))))
-        female = max(1, sample_size - male)
+    title_lower = node_title.lower()
+    is_response_rate = table_type == "response_rate" or (table_type is None and "response rate" in title_lower)
+    is_demographics = table_type == "demographics" or (table_type is None and "demographic" in title_lower)
+    is_key_terms = table_type == "key_terms" or (table_type is None and "key terms" in title_lower)
+    is_empirical_summary = table_type == "empirical_summary" or (
+        table_type is None and "empirical studies" in title_lower
+    )
+    is_sampling = table_type == "sampling" or (table_type is None and "sampling frame" in title_lower)
+    is_instruments = table_type == "instruments" or (
+        table_type is None and "data collection instruments" in title_lower
+    )
+    is_reliability = table_type == "reliability" or (table_type is None and "reliability and validity" in title_lower)
+    is_findings_summary = table_type == "findings_summary" or (
+        table_type is None and "key findings by objective" in title_lower
+    )
+
+    def _topic_terms(n: int = 4) -> list[str]:
+        # Splits the topic phrase on connector words so each chunk is a plausible
+        # standalone term/glossary entry — works for any subject area since it derives
+        # the terms from whatever topic the student supplied, not a fixed domain list.
+        raw = re.split(r"\s+(?:and|of|in|for|using|with|on|to|the|an?)\s+", topic or "", flags=re.IGNORECASE)
+        terms = [t.strip() for t in raw if len(t.strip()) > 2]
+        return (terms or [(topic or "the study variable").strip()])[:n]
+
+    if is_key_terms:
+        terms = _topic_terms(4)
+        return {
+            "headers": ["Term", "Operational Definition"],
+            "rows": [
+                [
+                    t[:1].upper() + t[1:],
+                    f"As used in this study, refers to the construct or process of {t.lower()} within the "
+                    f"context of {(topic or 'the research focus').strip()[:60]}, operationally defined for the "
+                    "purposes of data collection and analysis.",
+                ]
+                for t in terms
+            ],
+        }
+
+    if is_empirical_summary:
+        terms = _topic_terms(3)
+        return {
+            "headers": ["Source", "Focus of Study", "Key Finding", "Relevance to Current Study"],
+            "rows": [
+                [
+                    f"Illustrative Study {chr(65 + i)}",
+                    f"Examined {t.lower()} in a related context",
+                    "Reported a measurable effect on the outcome of interest",
+                    "Supports the relevance and timeliness of the current study",
+                ]
+                for i, t in enumerate(terms)
+            ],
+        }
+
+    if is_sampling:
+        population = max(sample_size * (3 + seed % 3), sample_size + 10)
+        return {
+            "headers": ["Component", "Value", "Basis"],
+            "rows": [
+                ["Target Population", str(population), "Estimated population relevant to the study context"],
+                ["Sample Size (n)", str(sample_size), "Determined using a standard sample-size formula/justified allocation"],
+                ["Sampling Approach", "Stratified / Purposive (per design)", "Selected to ensure adequate coverage of the study units"],
+            ],
+        }
+
+    if is_instruments:
+        terms = _topic_terms(3)
+        return {
+            "headers": ["Instrument/Method", "Purpose", "Role in the Study"],
+            "rows": [
+                [f"Instrument {i + 1}", f"Captures data on {t.lower()}", "Primary data source for objective-level analysis"]
+                for i, t in enumerate(terms)
+            ],
+        }
+
+    if is_reliability:
+        if _uses_human_respondents(topic, ""):
+            a = round(0.70 + (seed % 21) * 0.01, 2)
+            b = round(0.72 + ((seed // 3) % 19) * 0.01, 2)
+            c = round(0.68 + ((seed // 7) % 22) * 0.01, 2)
+
+            def _alpha_note(v: float) -> str:
+                return "Acceptable internal consistency" if v >= 0.7 else "Marginal internal consistency"
+
+            return {
+                "headers": ["Construct", "Cronbach's Alpha", "Interpretation"],
+                "rows": [
+                    ["Construct 1", str(a), _alpha_note(a)],
+                    ["Construct 2", str(b), _alpha_note(b)],
+                    ["Construct 3", str(c), _alpha_note(c)],
+                ],
+            }
+        p1 = round(95.0 + (seed % 5) * 0.8, 1)
+        p2 = round(93.5 + ((seed // 3) % 6) * 0.7, 1)
+        return {
+            "headers": ["Measurement/Test", "Repeatability (%)", "Interpretation"],
+            "rows": [
+                ["Trial-to-trial consistency", str(p1), "High repeatability across repeated trials"],
+                ["Measurement/calibration check", str(p2), "Consistent readings within acceptable tolerance"],
+            ],
+        }
+
+    if is_findings_summary:
+        return {
+            "headers": ["Objective", "Key Finding", "Implication"],
+            "rows": [
+                [
+                    f"Objective {i + 1}",
+                    "Findings showed uneven performance across the indicators measured for this objective",
+                    "Highlights priority areas for improvement and further inquiry",
+                ]
+                for i in range(3)
+            ],
+        }
+
+    if is_response_rate:
         returned = max(1, int(round(sample_size * (0.80 + (seed % 9) / 100))))
         not_returned = max(0, sample_size - returned)
         return {
+            "headers": ["Category", "Frequency", "Percentage"],
+            "rows": [
+                ["Questionnaires Administered", str(sample_size), "100.0%"],
+                ["Questionnaires Returned and Usable", str(returned), f"{(returned / sample_size) * 100:.1f}%"],
+                ["Not Returned / Discarded", str(not_returned), f"{(not_returned / sample_size) * 100:.1f}%"],
+            ],
+        }
+
+    if is_demographics:
+        male = max(1, int(round(sample_size * (0.42 + (seed % 12) / 100))))
+        female = max(1, sample_size - male)
+        age1 = max(1, int(round(sample_size * (0.28 + (seed % 10) / 100))))
+        age2 = max(1, int(round(sample_size * (0.34 + ((seed // 3) % 10) / 100))))
+        age3 = max(1, sample_size - age1 - age2)
+        return {
             "headers": ["Variable", "Category", "Frequency", "Percentage"],
             "rows": [
-                ["Response Rate", "Returned Questionnaires", str(returned), f"{(returned / sample_size) * 100:.1f}%"],
-                ["Response Rate", "Not Returned", str(not_returned), f"{(not_returned / sample_size) * 100:.1f}%"],
                 ["Gender", "Male", str(male), f"{(male / sample_size) * 100:.1f}%"],
                 ["Gender", "Female", str(female), f"{(female / sample_size) * 100:.1f}%"],
+                ["Age", "18-29 years", str(age1), f"{(age1 / sample_size) * 100:.1f}%"],
+                ["Age", "30-39 years", str(age2), f"{(age2 / sample_size) * 100:.1f}%"],
+                ["Age", "40 years and above", str(age3), f"{(age3 / sample_size) * 100:.1f}%"],
             ],
         }
 
@@ -1076,7 +1364,30 @@ def _ai_table_dataset(
     }
 
 
-def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
+_LIKERT_LABELS = ["Strongly Disagree", "Disagree", "Neutral", "Agree", "Strongly Agree"]
+
+
+def _fallback_chart_labels(label_style: str, effective_n: int) -> list[str]:
+    """Domain-appropriate placeholder labels for when neither category_labels nor the LLM
+    are available. "likert" fits survey/respondent-based studies (5-point agreement scale);
+    "trial" fits experimental/engineering studies (repeated test runs); "generic" is the
+    least-informative last resort.
+    """
+    if label_style == "likert":
+        if effective_n <= len(_LIKERT_LABELS):
+            return _LIKERT_LABELS[:effective_n]
+        return [_LIKERT_LABELS[i % len(_LIKERT_LABELS)] for i in range(effective_n)]
+    if label_style == "trial":
+        return [f"Trial {i + 1}" for i in range(effective_n)]
+    return [f"Category {i + 1}" for i in range(effective_n)]
+
+
+def _ai_chart_series(
+    context: str,
+    n_points: int = 8,
+    category_labels: list[str] | None = None,
+    label_style: str = "generic",
+) -> dict[str, Any]:
     """Ask the LLM to produce realistic numeric data for a chart.
 
     Returns a dict with keys:
@@ -1084,13 +1395,25 @@ def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
       - chart_type: str       — suggested chart type (bar/line/scatter/area/pie)
       - x_labels: list[str]   — short label for each point (SAME length as series)
       - unit: str             — measurement unit, e.g. "%", "score", "count"
-    Falls back to seed-based data on any error so the pipeline never breaks.
+    Falls back to seed-based data on any error so the pipeline never breaks. When the
+    caller already knows the real category names (e.g. Gender/Age groups for a
+    demographic chart), pass category_labels so both the LLM prompt and the fallback use
+    those exact labels instead of inventing generic ones. Otherwise label_style picks a
+    domain-appropriate fallback label set ("likert" for respondent-based studies, "trial"
+    for experimental/engineering studies).
     """
     # Pie charts look cluttered with many slices; cap at 6 for pie-likely topics.
     pie_keywords = {"distribution", "composition", "proportion", "breakdown", "demographic", "share", "pie"}
     likely_pie = any(kw in context.lower() for kw in pie_keywords)
-    effective_n = min(n_points, 6) if likely_pie else n_points
+    effective_n = len(category_labels) if category_labels else (min(n_points, 6) if likely_pie else n_points)
 
+    label_instruction = (
+        f"3. x_labels: use EXACTLY these {effective_n} category labels, in this order: "
+        f"{json.dumps(category_labels)}.\n"
+        if category_labels else
+        f"3. x_labels: provide EXACTLY {effective_n} short labels (1-4 words each) describing each data point "
+        "(e.g. years like '2019', '2020'; categories like 'Urban', 'Rural'; groups like 'Group A').\n"
+    )
     prompt = (
         "You are an academic data analyst generating chart data for a dissertation figure.\n"
         f"Chart topic / section title: \"{context}\"\n\n"
@@ -1098,8 +1421,7 @@ def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
         f"1. Generate EXACTLY {effective_n} data points that are academically plausible for this topic.\n"
         "2. Choose the BEST chart_type: 'bar' for comparisons/categories, 'line' for trends over time, "
         "'scatter' for correlation/relationship, 'area' for cumulative trends, 'pie' for proportions.\n"
-        f"3. x_labels: provide EXACTLY {effective_n} short labels (1-4 words each) describing each data point "
-        "(e.g. years like '2019', '2020'; categories like 'Urban', 'Rural'; groups like 'Group A').\n"
+        f"{label_instruction}"
         "4. unit: the y-axis measurement unit as a short string, e.g. '%', 'score (1-5)', 'count', "
         "'USD millions', 'years', 'kg/ha'. Use '%' for percentages, not 'percent' or '%%'.\n"
         "5. Values must show meaningful variation — NOT all the same. Be realistic and grounded.\n"
@@ -1121,6 +1443,8 @@ def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
         if not series:
             raise ValueError("empty series")
         x_labels_raw = [str(lbl).strip() for lbl in (data.get("x_labels") or [])]
+        if category_labels:
+            x_labels_raw = list(category_labels)[: len(series)]
         # Ensure x_labels length matches series; pad or trim as needed
         while len(x_labels_raw) < len(series):
             x_labels_raw.append(str(len(x_labels_raw) + 1))
@@ -1142,7 +1466,7 @@ def _ai_chart_series(context: str, n_points: int = 8) -> dict[str, Any]:
         return {
             "series": [round(base + i * 3.5 + (seed + i) % 7, 1) for i in range(effective_n)],
             "chart_type": "bar",
-            "x_labels": [f"Item {i + 1}" for i in range(effective_n)],
+            "x_labels": list(category_labels) if category_labels else _fallback_chart_labels(label_style, effective_n),
             "unit": "",
         }
 
@@ -1346,14 +1670,17 @@ def llm_chapters_to_blueprints(
     chapters: list[dict[str, Any]],
     research_design: str = "quantitative",
     objectives: list[str] | None = None,
+    topic: str = "",
+    message: str = "",
 ) -> list[dict[str, Any]]:
     """Convert LLM plan chapters to the internal blueprint format used by _write_dissertation.
 
     Mirrors what the chat-driven single-chapter rewrite path already does via
     _chapter_nodes_for_generation: inject the standard table/chart visual nodes for
-    Chapters 1/2/3/5 (_inject_standard_visuals) and the objective-aware results
-    visuals for Chapter 4 (_chapter4_subsections), so a freshly-generated full
-    dissertation isn't all plain text.
+    Chapters 1/2/3/5 (_inject_standard_visuals) and plan the objective-aware results
+    visuals for Chapter 4 from the LLM's own topic-tailored section proposal
+    (_plan_chapter4_structure), so a freshly-generated full dissertation isn't all
+    plain text and isn't forced into a one-size-fits-all survey template.
     """
     objectives = objectives or []
     blueprints = []
@@ -1363,7 +1690,7 @@ def llm_chapters_to_blueprints(
         nodes = _sections_to_nodes(chapter.get("sections", []))
 
         if chapter_number == 4:
-            nodes = _chapter4_subsections(research_design, objectives)
+            nodes = _plan_chapter4_structure(chapter.get("sections", []), research_design, objectives, topic, message)
         elif chapter_number == 2:
             nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
             nodes = _ensure_framework_visual(nodes)
@@ -1675,35 +2002,121 @@ _SYNTHETIC_DATA_NOTE = (
 )
 
 
-def _table_discussion_text(node_title: str, research_design: str, objective: str | None = None) -> str:
-    if "response rate" in node_title.lower():
+def _response_rate_quality(pct: float) -> str:
+    if pct >= 85:
+        return "an excellent"
+    if pct >= 70:
+        return "a strong"
+    if pct >= 50:
+        return "an adequate"
+    return "a modest"
+
+
+def _table_discussion_text(
+    node_title: str,
+    research_design: str,
+    objective: str | None = None,
+    table_dataset: dict[str, Any] | None = None,
+) -> str:
+    """Build interpretation/discussion text that cites the ACTUAL values inside
+    table_dataset (real row/column data, not generic boilerplate), so the Chapter 4
+    narrative stays consistent with the table the reader is looking at. Deliberately
+    domain-agnostic — it reads whatever row labels and numbers are present, so it works
+    the same way for a survey response-rate table as for an engineering test-results table.
+    """
+    table_dataset = table_dataset or {}
+    headers = [str(h) for h in (table_dataset.get("headers") or [])]
+    rows = [[str(cell) for cell in row] for row in (table_dataset.get("rows") or []) if row]
+    title_lower = node_title.lower()
+
+    def num(cell: str) -> float | None:
+        try:
+            return float(cell.replace("%", "").replace(",", "").strip())
+        except (ValueError, AttributeError):
+            return None
+
+    if "response rate" in title_lower and rows:
+        returned_row = next(
+            (r for r in rows if "return" in r[0].lower() and "not" not in r[0].lower()), None
+        )
+        if returned_row:
+            pct = num(returned_row[-1])
+            count = returned_row[-2] if len(returned_row) >= 2 else returned_row[-1]
+            quality = _response_rate_quality(pct) if pct is not None else "an acceptable"
+            return (
+                f"Interpretation: {count} of the distributed instruments were returned and usable "
+                f"({returned_row[-1]}), representing {quality} response rate for this study.\n"
+                "Discussion: This level of return supports the adequacy of the dataset for the analysis "
+                "applied in the objective-level sections that follow, and reduces the risk that "
+                "non-response materially biases the findings."
+                f"{_SYNTHETIC_DATA_NOTE}"
+            )
+
+    if "demographic" in title_lower and rows:
+        groups: dict[str, list[tuple[str, float]]] = {}
+        for r in rows:
+            if len(r) >= 3:
+                pct = num(r[-1])
+                if pct is not None:
+                    groups.setdefault(r[0], []).append((r[1], pct))
+        highlights = [
+            f"{max(entries, key=lambda e: e[1])[0]} ({max(entries, key=lambda e: e[1])[1]:.1f}%) for {variable}"
+            for variable, entries in groups.items()
+        ]
+        highlight_text = "; ".join(highlights) if highlights else "a broad spread of categories"
         return (
-            "Interpretation: The response-rate table indicates the proportion of usable responses relative to the target sample, "
-            "providing evidence of dataset adequacy for statistical analysis.\n"
-            "Discussion: A strong response rate supports representativeness and reduces the risk of non-response bias, "
-            "thereby improving confidence in subsequent objective-level findings."
+            f"Interpretation: The respondent profile is led by {highlight_text}, "
+            "indicating where participation was concentrated.\n"
+            "Discussion: This composition should be borne in mind when generalizing the objective-level "
+            "findings, and is reported transparently so readers can judge the sample's representativeness."
             f"{_SYNTHETIC_DATA_NOTE}"
         )
 
-    if "demographic" in node_title.lower():
+    if research_design == "qualitative" and rows and headers and "theme" in headers[0].lower():
+        mention_idx = 1 if len(rows[0]) > 1 else 0
+        top_row = max(rows, key=lambda r: num(r[mention_idx]) or 0) if mention_idx else rows[0]
+        theme_name = top_row[0]
+        mentions = top_row[mention_idx] if len(top_row) > mention_idx else "several"
         return (
-            "Interpretation: The respondent profile indicates a reasonably balanced distribution across key demographic categories, "
-            "which supports broad coverage of participant perspectives.\n"
-            "Discussion: This distribution improves confidence that subsequent objective-level findings are not overly driven by a single subgroup."
+            f"Interpretation: \"{theme_name}\" emerged as the most frequently referenced theme "
+            f"({mentions} mentions), with the remaining themes showing comparatively fewer occurrences.\n"
+            "Discussion: This pattern of emphasis provides a basis for the thematic interpretation and "
+            "implications discussed later in this chapter."
             f"{_SYNTHETIC_DATA_NOTE}"
         )
 
-    if research_design == "qualitative":
-        return (
-            "Interpretation: The theme matrix shows recurring viewpoints across participants, with some themes appearing more frequently than others.\n"
-            "Discussion: The pattern suggests consistent experiential concerns and provides evidence for targeted policy and implementation recommendations."
-            f"{_SYNTHETIC_DATA_NOTE}"
-        )
+    if rows and len(rows[0]) > 1:
+        numeric_col_idx = None
+        for col_idx in range(1, len(rows[0])):
+            values = [num(r[col_idx]) for r in rows if len(r) > col_idx]
+            if values and all(v is not None for v in values):
+                numeric_col_idx = col_idx
+                break
+        if numeric_col_idx is not None:
+            values = [num(r[numeric_col_idx]) for r in rows]
+            best_idx = max(range(len(values)), key=lambda i: values[i])
+            worst_idx = min(range(len(values)), key=lambda i: values[i])
+            obj_label = (objective or node_title or "this objective").strip()
+            if best_idx == worst_idx:
+                return (
+                    f"Interpretation: {rows[best_idx][0]} recorded a value of {values[best_idx]:.2f}, "
+                    f"the only indicator measured for {obj_label[:70]}.\n"
+                    "Discussion: This result is discussed further in the sections that follow."
+                    f"{_SYNTHETIC_DATA_NOTE}"
+                )
+            return (
+                f"Interpretation: {rows[best_idx][0]} recorded the strongest value ({values[best_idx]:.2f}), while "
+                f"{rows[worst_idx][0]} recorded the weakest ({values[worst_idx]:.2f}), showing uneven performance "
+                f"across the indicators measured for {obj_label[:70]}.\n"
+                "Discussion: This spread highlights where attention is most needed and supports the "
+                "interpretation offered in the discussion section of this chapter."
+                f"{_SYNTHETIC_DATA_NOTE}"
+            )
 
     obj = (objective or node_title or "the objective").strip()
     return (
-        f"Interpretation: The metric pattern for {obj[:70]} shows uneven performance across indicators, with stronger outcomes in selected dimensions.\n"
-        "Discussion: The spread across indicators highlights where focused interventions are required to improve overall study outcomes."
+        f"Interpretation: The table summarizes the evidence gathered for {obj[:70]}.\n"
+        "Discussion: These results are discussed further in the sections that follow."
         f"{_SYNTHETIC_DATA_NOTE}"
     )
 
@@ -1888,17 +2301,14 @@ def _execute_subsection_nodes(
                 objective=objective,
                 sample_size=sample_size,
                 current_document_context=current_document_context,
+                table_type=meta.get("table_type"),
             )
             dataset_path = save_dataset_json(table_dataset, prefix="table-data")
-            table_path = generate_table_chart(
-                headers=table_dataset.get("headers", []),
-                rows=table_dataset.get("rows", []),
-                title=table_caption,
-            )
             block_id = f"tbl-{table_no}-{len(blocks) + 1}"
             blocks.append({
-                "type": "chart",
-                "src": table_path,
+                "type": "table",
+                "headers": table_dataset.get("headers", []),
+                "rows": table_dataset.get("rows", []),
                 "caption": table_caption,
                 "block_id": block_id,
                 "dataset_json": dataset_path,
@@ -1906,7 +2316,7 @@ def _execute_subsection_nodes(
             body = (
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
-                f"{_table_discussion_text(title, research_design, objective)}"
+                f"{_table_discussion_text(title, research_design, objective, table_dataset)}"
             )
         elif kind == "chart" and meta.get("chart_type") in {"framework", "theory_model"}:
             is_theory = meta.get("chart_type") == "theory_model"
@@ -1963,9 +2373,22 @@ def _execute_subsection_nodes(
                 figure_counter[0] += 1
                 figure_caption = f"Figure {figure_no}: {title}"
                 context_str = title + (f" — {objective}" if objective else "")
-                ai_data = _ai_chart_series(context_str, n_points=8)
+                is_demographics_chart = meta.get("chart_type") == "demographics" or any(
+                    k in title.lower() for k in ["demographic", "response rate", "respondent"]
+                )
+                category_labels = (
+                    ["Male", "Female", "18-29 years", "30-39 years", "40 years and above"]
+                    if is_demographics_chart else None
+                )
+                label_style = "likert" if _uses_human_respondents(topic, user_instruction) else "trial"
+                ai_data = _ai_chart_series(
+                    context_str,
+                    n_points=8,
+                    category_labels=category_labels,
+                    label_style=label_style,
+                )
                 sample_size = _infer_sample_size(document)
-                if any(k in title.lower() for k in ["demographic", "response rate", "respondent"]):
+                if is_demographics_chart:
                     raw_vals = [max(0.0, float(v)) for v in ai_data.get("series", [])]
                     if raw_vals:
                         total = sum(raw_vals)
@@ -3881,6 +4304,7 @@ def _chapter_nodes_for_generation(
     research_design: str,
     objectives: list[str],
     topic: str,
+    message: str = "",
 ) -> list[dict[str, Any]]:
     chapter_template = next(
         (
@@ -3897,13 +4321,15 @@ def _chapter_nodes_for_generation(
     if chapter_number in {2, 4}:
         dynamic = _dynamic_chapter_nodes(chapter_number, topic, research_design, objectives)
         if dynamic:
-            # Chapter 4 already has visuals from _chapter4_subsections; skip injection there.
-            if chapter_number != 4:
-                dynamic = _inject_standard_visuals(dynamic, chapter_number, research_design)
+            if chapter_number == 4:
+                # Plan the table/chart visuals for the LLM's own proposed Chapter 4
+                # sections instead of discarding them for a fixed survey template.
+                return _plan_chapter4_structure(dynamic, research_design, objectives, topic, message)
+            dynamic = _inject_standard_visuals(dynamic, chapter_number, research_design)
             return dynamic
 
     if "chapter 4" in chapter_title.lower():
-        return _chapter4_subsections(research_design, objectives)
+        return _plan_chapter4_structure([], research_design, objectives, topic, message)
 
     nodes = [_normalize_subsection_node(s) for s in chapter_template.get("subsections", [])]
     return _inject_standard_visuals(nodes, chapter_number, research_design)
@@ -5958,7 +6384,7 @@ def _write_section(
         design = _research_design(instruction, topic, document)
         objectives = _extract_objectives(document, topic)
         chapter_title = _chapter_title_from_number(chapter_hint)
-        chapter_nodes = _chapter_nodes_for_generation(chapter_hint, design, objectives, topic)
+        chapter_nodes = _chapter_nodes_for_generation(chapter_hint, design, objectives, topic, instruction)
 
         selected_node = _find_matching_node(chapter_nodes, query) if query and not _is_generic_section_query(query) else None
 
@@ -6174,7 +6600,7 @@ def _rewrite_chapter_batch(
     chapter_blueprints: list[dict[str, Any]] = []
     for chapter_number in chapter_numbers:
         chapter_title = _chapter_title_from_number(chapter_number)
-        nodes = _chapter_nodes_for_generation(chapter_number, design, objectives, topic)
+        nodes = _chapter_nodes_for_generation(chapter_number, design, objectives, topic, instruction)
         chapter_blueprints.append({
             "number": chapter_number,
             "title": chapter_title,
@@ -6294,7 +6720,7 @@ def build_dissertation_preview_plan(
         title = template["title"]
         ch_num = _chapter_number_from_title(title)
         if ch_num == 4:
-            nodes = _chapter4_subsections(design, [])
+            nodes = _chapter4_subsections(design, [], topic, message)
         else:
             nodes = [_normalize_subsection_node(s) for s in template.get("subsections", [])]
         status = "in_progress" if first_chapter else "pending"
@@ -6551,6 +6977,73 @@ def _write_article(
     return _plan_and_write_document(document, topic, instruction or f"Write an academic article on {topic}", plan)
 
 
+def _review_and_revise_chapter(
+    chapter_title: str,
+    chapter_text: str,
+    chapter_blocks: list[dict[str, Any]],
+    topic: str,
+    research_design: str,
+    objectives: list[str],
+) -> tuple[str, list[str]]:
+    """Self-review pass run right after a chapter is drafted.
+
+    Always runs two deterministic consistency checks regardless of LLM availability:
+    strip any [[BLOCK:...]] marker that doesn't correspond to a generated figure/table
+    (a broken reference), and re-attach any generated figure/table whose marker never
+    made it into the body (so nothing produced gets silently dropped). When the LLM is
+    available, also asks it to critique and tighten the chapter — that rewrite is only
+    accepted if it keeps the exact same set of block markers and isn't a drastic
+    truncation, so a "creative" rewrite can never break the figure/table linkage.
+    """
+    notes: list[str] = []
+    known_block_ids = {b.get("block_id") for b in chapter_blocks if b.get("block_id")}
+    text = chapter_text
+
+    referenced_ids = set(re.findall(r"\[\[BLOCK:([^\]]+)\]\]", text))
+    orphan_ids = referenced_ids - known_block_ids
+    if orphan_ids:
+        for bad_id in orphan_ids:
+            text = re.sub(rf"\[\[BLOCK:{re.escape(bad_id)}\]\]\n?", "", text)
+        notes.append(f"Removed {len(orphan_ids)} broken figure/table reference(s) in {chapter_title}.")
+
+    referenced_ids = set(re.findall(r"\[\[BLOCK:([^\]]+)\]\]", text))
+    unused = [b for b in chapter_blocks if b.get("block_id") and b["block_id"] not in referenced_ids]
+    if unused:
+        appendix = "\n\n".join(f"[[BLOCK:{b['block_id']}]]" for b in unused)
+        text = f"{text}\n\n{appendix}" if text.strip() else appendix
+        notes.append(f"Reattached {len(unused)} unreferenced figure/table block(s) in {chapter_title}.")
+
+    try:
+        objective_lines = "\n".join(f"- {o}" for o in objectives[:6]) or "- (none specified)"
+        prompt = (
+            "You are self-reviewing a dissertation chapter you just wrote. Read it for internal "
+            "consistency, repetition, and whether it stays on-topic and tied to the stated "
+            "objectives. Return ONLY the corrected full chapter text — no commentary, no markdown "
+            "fences. Every line that looks like '[[BLOCK:some-id]]' is a placeholder for a figure "
+            "or table; you may move surrounding prose around it but you must keep every one of "
+            "those marker lines exactly as written, and must not add new ones.\n\n"
+            f"Chapter: {chapter_title}\n"
+            f"Topic: {topic}\n"
+            f"Research design: {research_design}\n"
+            f"Research objectives:\n{objective_lines}\n\n"
+            "Chapter text:\n"
+            f"{text[:8000]}"
+        )
+        revised = generate_text(prompt).strip()
+        if revised.startswith("```"):
+            revised = re.sub(r"^```[a-zA-Z]*\n?", "", revised).rstrip("`").strip()
+
+        revised_marker_ids = set(re.findall(r"\[\[BLOCK:([^\]]+)\]\]", revised))
+        original_marker_ids = set(re.findall(r"\[\[BLOCK:([^\]]+)\]\]", text))
+        if revised and revised_marker_ids == original_marker_ids and len(revised) >= 0.6 * len(text):
+            text = revised
+            notes.append(f"Applied a self-review pass to {chapter_title} for consistency and flow.")
+    except Exception as exc:
+        logger.info("_review_and_revise_chapter: LLM self-review skipped for '%s': %s", chapter_title, exc)
+
+    return text, notes
+
+
 def _write_dissertation(
     document: Document,
     topic: str,
@@ -6614,12 +7107,13 @@ def _write_dissertation(
             guidelines=user_guidelines,
         )
 
-    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters, design, objectives_early)
+    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters, design, objectives_early, topic, instruction)
 
     # ── Step 2: Build the flat step list ─────────────────────────────────
     for chapter in chapter_blueprints:
         plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
         _append_node_plan_steps(plan, chapter["nodes"], depth=1)
+        plan.append({"step": f"  Reviewing {chapter['title']} for consistency", "status": "pending"})
 
     _done(plan, 0)  # mark "Creating dissertation to-do list" done
 
@@ -6646,6 +7140,7 @@ def _write_dissertation(
     citation_pool = _retrieve_citation_pool(topic, document.id)
     logger.info("_write_dissertation: retrieved %d candidate sources for citation grounding", len(citation_pool))
 
+    review_notes: list[str] = []
     for chapter in chapter_blueprints:
         chapter_title = chapter["title"]
         ch_num = _chapter_number_from_title(chapter_title)
@@ -6707,6 +7202,13 @@ def _write_dissertation(
             except Exception as exc:
                 logger.warning("_write_dissertation: citation repair failed for '%s': %s", chapter_title, exc)
 
+        chapter_text, chapter_review_notes = _review_and_revise_chapter(
+            chapter_title, chapter_text, chapter_blocks, topic, design, objectives,
+        )
+        review_notes.extend(chapter_review_notes)
+        _done(plan, plan_cursor[0])
+        plan_cursor[0] += 1
+
         section_payload["content"] = chapter_text if chapter_text.strip() else ""
         if chapter_blocks:
             section_payload["blocks"] = chapter_blocks
@@ -6745,10 +7247,12 @@ def _write_dissertation(
         " No verified external sources could be retrieved (e.g. no network access) — "
         "the References chapter contains clearly-labelled illustrative placeholders that must be replaced."
     )
+    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
     reply = (
         f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "
-        "The AI generated a tailored chapter and section plan, then wrote each section sequentially."
-        f"{citation_note}"
+        "The AI generated a tailored chapter and section plan, wrote each section sequentially, then "
+        "reviewed each chapter for consistency."
+        f"{citation_note}{review_note}"
     )
     return reply, True
 
