@@ -3163,6 +3163,170 @@ def _extract_subsection_block_if_present(section_text: str, subsection_query: st
     return heading, body
 
 
+# ── Table of contents / preliminary-pages assembly ───────────────────────────
+# _heading_positions() only matches decimal-numbered headings ("2.1 ...") or
+# "Chapter N" lines. The Preliminary Pages front matter instead uses roman-
+# numeral headings ("i. Abstract", "ii. Dedication", ...), which need their
+# own matcher.
+_ROMAN_HEADING_RE = re.compile(r"^([ivxlcdm]+)\.\s+(\S.*)$", re.IGNORECASE)
+
+_WORDS_PER_PAGE = 275  # rough double-spaced academic-page estimate, for ToC page numbers
+
+
+def _roman_heading_positions(text: str) -> list[tuple[int, int, str]]:
+    lines = text.splitlines(keepends=True)
+    positions: list[tuple[int, int, str]] = []
+    cursor = 0
+    for line in lines:
+        stripped = line.strip()
+        if _ROMAN_HEADING_RE.match(stripped):
+            positions.append((cursor, cursor + len(line), stripped))
+        cursor += len(line)
+    return positions
+
+
+def _to_roman(n: int) -> str:
+    vals = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+            (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+    out = []
+    for v, sym in vals:
+        while n >= v:
+            out.append(sym)
+            n -= v
+    return "".join(out)
+
+
+def _toc_line(title: str, page: str, width: int = 70) -> str:
+    """Format one Table-of-Contents row with dot leaders, e.g.
+    'Chapter 1: Introduction .................................. 1'."""
+    title = title.strip()
+    dots_len = max(3, width - len(title) - len(page))
+    return f"{title} {'.' * dots_len} {page}"
+
+
+def _insert_preliminary_page_breaks(content: str) -> str:
+    """Insert a [[PAGEBREAK]] marker before every roman-numeral preliminary-page
+    item except the first (Abstract, Dedication, Acknowledgements, ...) so each
+    renders starting on a fresh page. Idempotent — strips existing markers first
+    so it is safe to call again after edits."""
+    content = content.replace("[[PAGEBREAK]]\n\n", "").replace("[[PAGEBREAK]]", "")
+    positions = _roman_heading_positions(content)
+    if len(positions) < 2:
+        return content
+    rebuilt = content[: positions[0][0]]
+    for i, (start, _end, _heading) in enumerate(positions):
+        chunk_end = positions[i + 1][0] if i + 1 < len(positions) else len(content)
+        if i > 0:
+            rebuilt += "[[PAGEBREAK]]\n\n"
+        rebuilt += content[start:chunk_end]
+    return rebuilt
+
+
+def _build_table_of_contents(sections: list[dict[str, Any]]) -> str:
+    """Compute a real Table of Contents from the actual generated sections —
+    replaces the static placeholder (with fabricated page numbers) that used
+    to be returned unconditionally for every dissertation."""
+    lines: list[str] = []
+    cumulative_words = 0
+    roman_idx = 0
+    page_number = 1
+
+    for section in sections:
+        title = (section.get("title") or "").strip()
+        body = section.get("content") or ""
+        if not title:
+            continue
+
+        if title.lower() == "preliminary pages":
+            for _start, _end, heading in _roman_heading_positions(body):
+                roman_idx += 1
+                heading_text = re.sub(r"^[ivxlcdm]+\.\s+", "", heading, flags=re.IGNORECASE)
+                lines.append(_toc_line(heading_text, _to_roman(roman_idx)))
+            cumulative_words += len(body.split())
+            continue
+
+        lines.append(_toc_line(title, str(page_number)))
+        for start, _end, heading in _heading_positions(body):
+            words_before = len(body[:start].split())
+            sub_page = page_number + words_before // _WORDS_PER_PAGE
+            lines.append("    " + _toc_line(heading, str(sub_page), width=66))
+
+        cumulative_words += len(body.split())
+        page_number = max(page_number + 1, 1 + cumulative_words // _WORDS_PER_PAGE)
+
+    return "\n".join(lines)
+
+
+def _build_caption_list(sections: list[dict[str, Any]], kind: str) -> str:
+    """Build a List of Figures/Tables from the real blocks embedded across the
+    document — replaces the static placeholder that listed fabricated captions
+    unrelated to anything actually generated."""
+    token = "figure" if kind == "figure" else "table"
+    entries: list[tuple[int, str, int]] = []
+    cumulative_words = 0
+    page_number = 1
+
+    for section in sections:
+        title = (section.get("title") or "").strip()
+        body = section.get("content") or ""
+        if title.lower() != "preliminary pages":
+            for block in section.get("blocks", []) or []:
+                caption = (block.get("caption") or "").strip()
+                match = re.match(rf"{token}\s+(\d+)\s*:?\s*(.*)", caption, flags=re.IGNORECASE)
+                if not match:
+                    continue
+                num = int(match.group(1))
+                label = match.group(2).strip() or caption
+                entries.append((num, label, page_number))
+        cumulative_words += len(body.split())
+        page_number = max(page_number + 1, 1 + cumulative_words // _WORDS_PER_PAGE)
+
+    entries.sort(key=lambda e: e[0])
+    if not entries:
+        return f"No {token}s were generated in this document."
+    return "\n".join(
+        _toc_line(f"{token.capitalize()} {num}: {label}", str(page))
+        for num, label, page in entries
+    )
+
+
+def _refresh_preliminary_pages(sections: list[dict[str, Any]]) -> None:
+    """Replace the static Table of Contents / List of Figures / List of Tables
+    placeholders with real content computed from the generated document, and
+    (re)insert page breaks between each preliminary-page item. Mutates
+    `sections` in place. Idempotent — safe to call again after the user edits
+    the document (e.g. via a manual "Update Table of Contents" action)."""
+    prelim = next(
+        (s for s in sections if (s.get("title") or "").strip().lower() == "preliminary pages"),
+        None,
+    )
+    if not prelim:
+        return
+
+    body = prelim.get("content") or ""
+    positions = _roman_heading_positions(body)
+    if not positions:
+        return
+
+    replacements = {
+        "table of contents": _build_table_of_contents(sections),
+        "list of figures": _build_caption_list(sections, "figure"),
+        "list of tables": _build_caption_list(sections, "table"),
+    }
+
+    chunks: list[str] = [body[: positions[0][0]]]
+    for idx, (start, _end, heading) in enumerate(positions):
+        chunk_end = positions[idx + 1][0] if idx + 1 < len(positions) else len(body)
+        heading_l = heading.lower()
+        replacement = next((text for key, text in replacements.items() if key in heading_l), None)
+        if replacement is not None:
+            chunks.append(f"{heading}\n{replacement}\n\n")
+        else:
+            chunks.append(body[start:chunk_end])
+
+    prelim["content"] = _insert_preliminary_page_breaks("".join(chunks))
+
+
 def _extract_subsection_phrase(instruction: str) -> str:
     text = (instruction or "").lower()
     subsection_num = re.search(r"\b\d+\.\d+(?:\.\d+)*\b", text)
@@ -6289,6 +6453,19 @@ def _write_dissertation(
             "sections": sections,
         }
         _save(document, f"dissertation-step:{chapter_title}")
+
+    # Now that every chapter has its final content, replace the static
+    # Table of Contents / List of Figures / List of Tables placeholders in
+    # Preliminary Pages with real entries computed from what was actually
+    # written, and insert page breaks between each preliminary-page item.
+    _refresh_preliminary_pages(sections)
+    document.content = {
+        "topic": topic,
+        "research_design": design,
+        "research_objectives": objectives,
+        "sections": sections,
+    }
+    _save(document, "dissertation-step:table-of-contents")
 
     document.title = f"Dissertation: {topic}"
     document.save(update_fields=["title", "updated_at"])

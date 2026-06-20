@@ -112,6 +112,17 @@ def insert_section(document: Document, after_query: str, title: str, content: st
     return _save(document, f"insert-after:{after_query}")
 
 
+def update_table_of_contents(document: Document) -> Document:
+    """Recompute the Table of Contents / List of Figures / List of Tables from
+    the document's current sections, mirroring Word's "Update Table" action."""
+    from .autonomous import _refresh_preliminary_pages
+
+    sections = (document.content or {}).get("sections", [])
+    _refresh_preliminary_pages(sections)
+    document.content = {**(document.content or {}), "sections": sections}
+    return _save(document, "update-table-of-contents")
+
+
 def run_action(document: Document, action: str, payload: dict[str, Any]) -> Document:
     if action == "enhance_section":
         return enhance_section(document, payload["query"], payload["instruction"])
@@ -129,4 +140,6 @@ def run_action(document: Document, action: str, payload: dict[str, Any]) -> Docu
         return insert_concept_image(document, payload["query"], payload["prompt"])
     if action == "insert_section":
         return insert_section(document, payload["after_query"], payload["title"], payload["content"])
+    if action == "update_table_of_contents":
+        return update_table_of_contents(document)
     raise ValueError(f"unsupported action: {action}")

@@ -73,7 +73,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent, checkPlagiarism } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent, checkPlagiarism, runAgentAction } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -433,6 +433,9 @@ function renderFigureBlock(blk, key) {
 const _UL_RE = /^[-*•◦▪]\s+/;
 const _OL_RE = /^\d+[.):]\s+/;
 const _BLOCK_MARKER_RE = /\[\[BLOCK:([^\]]+)\]\]/g;
+const _PAGE_BREAK_MARKER = '[[PAGEBREAK]]';
+const _PAGE_BREAK_HTML = '<hr data-page-break="true" style="page-break-after:always;border:none;border-top:2px dashed #ccc;margin:16px 0;" />';
+const _CONTENT_MARKER_RE = /\[\[(?:BLOCK:([^\]]+)|PAGEBREAK)\]\]/g;
 
 function _isListLine(l) { return _UL_RE.test(l) || _OL_RE.test(l); }
 
@@ -496,21 +499,25 @@ function paragraphChunkToHtml(text) {
 function contentToHtmlWithBlocks(content, blocks) {
   const normalized = (content || '').replace(/<br\s*\/?>/gi, '\n');
   const blockList = Array.isArray(blocks) ? blocks : [];
-  if (!blockList.length || !normalized.includes('[[BLOCK:')) {
+  if (!normalized.includes('[[BLOCK:') && !normalized.includes(_PAGE_BREAK_MARKER)) {
     return paragraphChunkToHtml(normalized);
   }
-  const markerRe = new RegExp(_BLOCK_MARKER_RE.source, 'g');
+  const markerRe = new RegExp(_CONTENT_MARKER_RE.source, 'g');
   let last = 0;
   let match;
   let html = '';
   const placed = new Set();
   while ((match = markerRe.exec(normalized)) !== null) {
     html += paragraphChunkToHtml(normalized.slice(last, match.index));
-    const blockId = (match[1] || '').trim();
-    const block = blockList.find((b) => (b.block_id || '').trim() === blockId);
-    if (block) {
-      placed.add(blockId);
-      html += blockFigureHtmlString(block);
+    if (match[0] === _PAGE_BREAK_MARKER) {
+      html += _PAGE_BREAK_HTML;
+    } else {
+      const blockId = (match[1] || '').trim();
+      const block = blockList.find((b) => (b.block_id || '').trim() === blockId);
+      if (block) {
+        placed.add(blockId);
+        html += blockFigureHtmlString(block);
+      }
     }
     last = markerRe.lastIndex;
   }
@@ -867,6 +874,7 @@ export default function DocumentEditorPage({
   const fileInputRef = useRef(null);
   const [isThinking,   setIsThinking]   = useState(false);
   const [isSavingManual, setIsSavingManual] = useState(false);
+  const [isUpdatingToc, setIsUpdatingToc] = useState(false);
   const [isDirty,      setIsDirty]      = useState(false);
   const [autoSaved,    setAutoSaved]    = useState(false);
   const [manualError,  setManualError]  = useState('');
@@ -987,6 +995,8 @@ export default function DocumentEditorPage({
         const caption = figcaption ? figcaption.textContent.trim() : '';
         current.blocks.push({ block_id: blockId, type: blockType, src, caption });
         current.content += (current.content ? '\n\n' : '') + `[[BLOCK:${blockId}]]`;
+      } else if (tag === 'hr') {
+        current.content += (current.content ? '\n\n' : '') + _PAGE_BREAK_MARKER;
       } else if (tag !== '#comment') {
         const text = _textWithLineBreaks(node).trim();
         if (text) {
@@ -1403,6 +1413,51 @@ export default function DocumentEditorPage({
       setManualError(err?.message || 'Save failed');
     } finally {
       setIsSavingManual(false);
+    }
+  }
+
+  // Recompute the Table of Contents / List of Figures / List of Tables from the
+  // document's real headings and captions — mirrors Word's "Update Table" field
+  // refresh. Falls back to a simple heading-scan insertion for documents that
+  // were never generated through the dissertation pipeline (no Preliminary
+  // Pages section for the backend to refresh).
+  async function updateTableOfContents() {
+    const docId = document?.id;
+    if (!docId || isUpdatingToc) return;
+    const hasPreliminaryPages = draftSections.some(
+      (s) => (s?.title || '').trim().toLowerCase() === 'preliminary pages'
+    );
+    if (!hasPreliminaryPages) {
+      const editor = richEditorRef.current;
+      if (!editor) return;
+      editor.focus();
+      const headings = Array.from(editor.querySelectorAll('h1,h2,h3'));
+      if (!headings.length) { window.alert('No headings found. Add headings first.'); return; }
+      let toc = '<div style="border:1px solid #e2e8f0;padding:12px 16px;margin:12px 0;background:#f8fafc"><strong>Table of Contents</strong><br/>';
+      headings.forEach((h, i) => {
+        const indent = h.tagName === 'H1' ? 0 : h.tagName === 'H2' ? 16 : 32;
+        toc += `<div style="margin-left:${indent}px;padding:2px 0;font-size:11pt">${i + 1}. ${h.textContent}</div>`;
+      });
+      toc += '</div><p><br></p>';
+      editor.insertAdjacentHTML('afterbegin', toc);
+      handleEditorInput({ currentTarget: editor });
+      return;
+    }
+
+    setIsUpdatingToc(true);
+    try {
+      if (isDirty) {
+        await persistSectionsNow(draftSections);
+      }
+      const updated = await runAgentAction(docId, 'update_table_of_contents', {});
+      const nextSections = cloneSections(updated?.content?.sections || []);
+      setDraftSections(nextSections);
+      setIsDirty(false);
+      onDocumentChanged?.();
+    } catch (err) {
+      window.alert(err?.message || 'Failed to update table of contents');
+    } finally {
+      setIsUpdatingToc(false);
     }
   }
 
@@ -2697,20 +2752,10 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Insert Table of Contents" onClick={() => {
-                        const editor = richEditorRef.current; if (!editor) return;
-                        editor.focus();
-                        const headings = Array.from(editor.querySelectorAll('h1,h2,h3'));
-                        if (!headings.length) { window.alert('No headings found. Add headings first.'); return; }
-                        let toc = '<div style="border:1px solid #e2e8f0;padding:12px 16px;margin:12px 0;background:#f8fafc"><strong>Table of Contents</strong><br/>';
-                        headings.forEach((h, i) => {
-                          const indent = h.tagName === 'H1' ? 0 : h.tagName === 'H2' ? 16 : 32;
-                          toc += `<div style="margin-left:${indent}px;padding:2px 0;font-size:11pt">${i+1}. ${h.textContent}</div>`;
-                        });
-                        toc += '</div><p><br></p>';
-                        editor.insertAdjacentHTML('afterbegin', toc);
-                        handleEditorInput({ currentTarget: editor });
-                      }}><BookOpen size={13}/><span>Table of Contents</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Update Table of Contents" disabled={isUpdatingToc} onClick={updateTableOfContents}>
+                        {isUpdatingToc ? <RefreshCw size={13} style={{ animation: 'dplan-spin 1s linear infinite' }} /> : <BookOpen size={13} />}
+                        <span>{isUpdatingToc ? 'Updating...' : 'Update Table of Contents'}</span>
+                      </button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Table of Contents</span>
