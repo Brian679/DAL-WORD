@@ -3289,17 +3289,38 @@ _FALLBACK_ELABORATIONS: tuple[str, ...] = (
 )
 
 
-def _expand_fallback_text(body: str, topic: str, section_title: str, subsection: str, target_words: int) -> str:
+_FALLBACK_PERSONAL_ELABORATIONS: tuple[str, ...] = (
+    "Special thanks are due to family members whose patience, encouragement, and quiet sacrifices made the long "
+    "hours behind this work possible. Their belief in this undertaking, even when progress was slow, was a "
+    "constant source of motivation.",
+    "Appreciation is also extended to friends, classmates, and colleagues who provided moral support, practical "
+    "assistance, and honest feedback throughout the course of {topic}.",
+    "Gratitude is owed to the institution, its staff, and its administration for providing access to the "
+    "facilities, equipment, and resources without which this work could not have been completed.",
+    "Above all, this stands as a tribute to everyone — named and unnamed — whose belief in this undertaking, even "
+    "during its most difficult stretches, helped see it through to completion.",
+)
+
+
+def _expand_fallback_text(
+    body: str,
+    topic: str,
+    section_title: str,
+    subsection: str,
+    target_words: int,
+    pool: tuple[str, ...] = _FALLBACK_ELABORATIONS,
+) -> str:
     """Pad deterministic fallback prose toward target_words using generic, on-topic elaboration.
 
     The static branches in `_fallback_subsection_body` are deliberately short placeholders,
     calibrated for a quick safety-net response — without this, every fallback subsection stays
     fixed at ~150-300 words regardless of the chapter's word-count target, which was the main
     reason whole-document length fell far short of the requested page count when the LLM was
-    unavailable or rejected.
+    unavailable or rejected. `pool` lets personal/reflective sections (dedication, acknowledgements)
+    pad with appropriately-toned text instead of academic-register elaboration.
     """
     parts = [body]
-    for template in _FALLBACK_ELABORATIONS:
+    for template in pool:
         if _word_count("\n\n".join(parts)) >= target_words * 0.85:
             break
         parts.append(template.format(topic=topic, section_title=section_title, subsection=subsection))
@@ -3320,13 +3341,25 @@ def _fallback_subsection_text(
     target_words so total document length stays consistent with the chapter's target —
     the deterministic branches alone are far too short to hit a 50-100 page dissertation.
     """
+    sub_lower = subsection.strip().lower()
+    is_personal = "dedication" in sub_lower or "acknowledgement" in sub_lower or "acknowledgment" in sub_lower
+
     words_request = target_words or 200
-    prompt = (
-        f"Write a substantive academic subsection for '{subsection}' "
-        f"in a dissertation on '{topic}'. Use formal scholarly language and concrete claims. "
-        f"Produce approximately {words_request} words across 2-4 paragraphs. "
-        "Do NOT include the subsection heading in your response."
-    )
+    if is_personal:
+        prompt = (
+            f"Write a brief, sincere '{subsection}' page for a dissertation on '{topic}'. "
+            "Use warm, personal, first-person language — NOT academic or scholarly register, and do not "
+            "mention literature, theory, or research methodology. "
+            f"Produce approximately {words_request} words. "
+            "Do NOT include the subsection heading in your response."
+        )
+    else:
+        prompt = (
+            f"Write a substantive academic subsection for '{subsection}' "
+            f"in a dissertation on '{topic}'. Use formal scholarly language and concrete claims. "
+            f"Produce approximately {words_request} words across 2-4 paragraphs. "
+            "Do NOT include the subsection heading in your response."
+        )
     try:
         candidate = (generate_text(prompt) or "").strip()
         # Reject weak/placeholder outputs and keep fallback quality consistent.
@@ -3336,10 +3369,11 @@ def _fallback_subsection_text(
         pass
 
     body = _fallback_subsection_body(topic, section_title, subsection, objectives)
-    no_expand = any(k in subsection.strip().lower() for k in _FALLBACK_NO_EXPAND_KEYWORDS)
+    no_expand = any(k in sub_lower for k in _FALLBACK_NO_EXPAND_KEYWORDS)
     if no_expand or not target_words:
         return body
-    return _expand_fallback_text(body, topic, section_title, subsection, target_words)
+    pool = _FALLBACK_PERSONAL_ELABORATIONS if is_personal else _FALLBACK_ELABORATIONS
+    return _expand_fallback_text(body, topic, section_title, subsection, target_words, pool=pool)
 
 
 def _fallback_subsection_body(
