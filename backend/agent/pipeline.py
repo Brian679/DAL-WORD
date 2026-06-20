@@ -361,7 +361,7 @@ class RepairAgent:
     Retries a failed task using the strategy recommended by ErrorAnalyzer.
 
     fallback_fn signature:
-        (topic: str, chapter_title: str, section_title: str) -> str
+        (topic: str, chapter_title: str, section_title: str, word_count: int) -> str
     """
 
     def repair(
@@ -371,7 +371,7 @@ class RepairAgent:
         document_brief: str,
         rolling_context: str,
         generate_fn: Callable[[str, str, str, int], str],
-        fallback_fn: Callable[[str, str, str], str],
+        fallback_fn: Callable[[str, str, str, int], str],
     ) -> TaskResult:
         strategy = error_report.strategy
         generator = ContentGenerator()
@@ -418,7 +418,7 @@ class RepairAgent:
             )
 
         # USE_FALLBACK (default)
-        content = fallback_fn(task.topic, task.chapter_title, task.title)
+        content = fallback_fn(task.topic, task.chapter_title, task.title, task.word_count)
         return TaskResult(
             task_id=task.id, content=content, success=True,
             attempts=2, strategy_used=RepairStrategy.USE_FALLBACK,
@@ -471,7 +471,7 @@ class Pipeline:
         document_brief: str,
         rolling_context: str,
         generate_fn: Callable[[str, str, str, int], str],
-        fallback_fn: Callable[[str, str, str], str],
+        fallback_fn: Callable[[str, str, str, int], str],
         user_instruction: str = "",
     ) -> TaskResult:
         """
@@ -526,7 +526,7 @@ class Pipeline:
             "▶ [Pipeline] '%s' — repair did not produce acceptable content. Using static fallback.",
             task.title,
         )
-        fallback_content = fallback_fn(task.topic, task.chapter_title, task.title)
+        fallback_content = fallback_fn(task.topic, task.chapter_title, task.title, task.word_count)
         return TaskResult(
             task_id=task.id,
             content=fallback_content,
@@ -541,7 +541,7 @@ class Pipeline:
         document_brief: str,
         get_rolling_context: Callable[[], str],
         generate_fn: Callable[[str, str, str, int], str],
-        fallback_fn: Callable[[str, str, str], str],
+        fallback_fn: Callable[[str, str, str, int], str],
         user_instruction: str = "",
         on_node_done: Callable[[TaskSpec, TaskResult], None] | None = None,
     ) -> list[TaskResult]:
