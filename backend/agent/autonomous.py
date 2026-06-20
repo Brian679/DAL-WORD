@@ -1096,6 +1096,14 @@ def _truncate_label(text: str, max_len: int) -> str:
     return (cut or text[:max_len]) + "…"
 
 
+def _parse_numeric_cell(cell: str) -> float | None:
+    """Parse a table cell like '42', '41.7%', or '1,234' into a float, or None if not numeric."""
+    try:
+        return float(str(cell).replace("%", "").replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return None
+
+
 def _table_text_for_node(node_title: str, research_design: str, topic: str, objective: str | None = None) -> str:
     seed_text = f"{node_title}|{research_design}|{topic}|{objective or ''}"
     seed = sum(ord(c) for c in seed_text)
@@ -2062,12 +2070,7 @@ def _table_discussion_text(
     headers = [str(h) for h in (table_dataset.get("headers") or [])]
     rows = [[str(cell) for cell in row] for row in (table_dataset.get("rows") or []) if row]
     title_lower = node_title.lower()
-
-    def num(cell: str) -> float | None:
-        try:
-            return float(cell.replace("%", "").replace(",", "").strip())
-        except (ValueError, AttributeError):
-            return None
+    num = _parse_numeric_cell
 
     if "response rate" in title_lower and rows:
         returned_row = next(
@@ -2166,6 +2169,59 @@ def _chart_discussion_text(series: list[float], objective: str | None = None, no
         f"Discussion: For {objective_label}, the visual pattern reinforces the numerical evidence and clarifies priority areas for action."
         f"{_SYNTHETIC_DATA_NOTE}"
     )
+
+
+def _chart_data_from_table(table_dataset: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Derive chart series/x_labels directly from a sibling table's own rows, so a chart and
+    the table it accompanies report the same numbers instead of being generated independently.
+    Returns None when no matching table was supplied or it has no usable numeric column (e.g. a
+    purely textual table like Key Terms or Data Collection Instruments) so the caller can fall
+    back to _ai_chart_series.
+    """
+    if not table_dataset:
+        return None
+    headers = [str(h) for h in (table_dataset.get("headers") or [])]
+    rows = [[str(cell) for cell in row] for row in (table_dataset.get("rows") or []) if row]
+    if len(rows) < 2 or not headers:
+        return None
+
+    headers_lower = [h.lower() for h in headers]
+    if "category" in headers_lower and "frequency" in headers_lower:
+        label_idx = headers_lower.index("category")
+        value_idx: int | None = headers_lower.index("frequency")
+    else:
+        label_idx = 0
+        value_idx = None
+        for col_idx in range(1, len(headers)):
+            values = [_parse_numeric_cell(r[col_idx]) for r in rows if len(r) > col_idx]
+            if len(values) == len(rows) and all(v is not None for v in values):
+                value_idx = col_idx
+                break
+    if value_idx is None:
+        return None
+
+    values = [_parse_numeric_cell(r[value_idx]) if len(r) > value_idx else None for r in rows]
+    if any(v is None for v in values):
+        return None
+    # Drop a trailing "(objective excerpt)" parenthetical before truncating, so axis labels
+    # read as "Indicator A" rather than a mid-word cut like "Indicator A (To…".
+    labels = [
+        _truncate_label(re.sub(r"\s*\([^()]*\)\s*$", "", r[label_idx]).strip(), 18) if len(r) > label_idx else ""
+        for r in rows
+    ]
+
+    value_header_lower = headers_lower[value_idx]
+    sample_cell = rows[0][value_idx] if rows and len(rows[0]) > value_idx else ""
+    if "%" in sample_cell or "percent" in value_header_lower:
+        unit = "%"
+    elif value_header_lower in {"frequency", "mentions", "count"}:
+        unit = "count"
+    elif value_header_lower == "value":
+        unit = ""
+    else:
+        unit = headers[value_idx]
+
+    return {"series": values, "x_labels": labels, "chart_type": "bar", "unit": unit}
 
 
 def _append_node_plan_steps(plan: list[dict[str, Any]], nodes: list[dict[str, Any]], depth: int = 1) -> None:
@@ -2293,6 +2349,12 @@ def _execute_subsection_nodes(
     blocks: list[dict[str, str]] = []
     local_context = rolling_context
 
+    # Tracks table datasets already generated in this call, keyed by objective and by
+    # table_type, so a later chart sibling for the same objective/type can reuse the exact
+    # same numbers instead of generating its own independently.
+    tables_by_objective: dict[str, dict[str, Any]] = {}
+    tables_by_type: dict[str, dict[str, Any]] = {}
+
     # Build study brief ONCE per call (shared by every node in this invocation)
     document_brief = _extract_document_brief(document, topic, research_design)
     if citation_pool:
@@ -2347,6 +2409,11 @@ def _execute_subsection_nodes(
                 "block_id": block_id,
                 "dataset_json": dataset_path,
             })
+            if objective:
+                tables_by_objective[objective.strip().lower()] = table_dataset
+            table_type_key = str(meta.get("table_type") or "").strip().lower()
+            if table_type_key:
+                tables_by_type[table_type_key] = table_dataset
             body = (
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
@@ -2415,21 +2482,36 @@ def _execute_subsection_nodes(
                     if is_demographics_chart else None
                 )
                 label_style = "likert" if _uses_human_respondents(topic, user_instruction) else "trial"
-                ai_data = _ai_chart_series(
-                    context_str,
-                    n_points=8,
-                    category_labels=category_labels,
-                    label_style=label_style,
-                )
                 sample_size = _infer_sample_size(document)
-                if is_demographics_chart:
-                    raw_vals = [max(0.0, float(v)) for v in ai_data.get("series", [])]
-                    if raw_vals:
-                        total = sum(raw_vals)
-                        if total > 0:
-                            ai_data["series"] = [round((v / total) * sample_size, 2) for v in raw_vals]
-                    if ai_data.get("chart_type") not in {"pie", "bar"}:
+
+                # Prefer the sibling table's own numbers (matched by objective, falling back
+                # to table_type/chart_type, e.g. "demographics") so the chart never contradicts
+                # the table it accompanies. Only generate independent data when no matching
+                # table was processed earlier in this same call.
+                matched_table = tables_by_objective.get((objective or "").strip().lower()) if objective else None
+                if matched_table is None:
+                    chart_type_key = str(meta.get("chart_type") or "").strip().lower()
+                    if chart_type_key:
+                        matched_table = tables_by_type.get(chart_type_key)
+                ai_data = _chart_data_from_table(matched_table)
+                if ai_data is not None:
+                    if is_demographics_chart:
                         ai_data["chart_type"] = "pie"
+                else:
+                    ai_data = _ai_chart_series(
+                        context_str,
+                        n_points=8,
+                        category_labels=category_labels,
+                        label_style=label_style,
+                    )
+                    if is_demographics_chart:
+                        raw_vals = [max(0.0, float(v)) for v in ai_data.get("series", [])]
+                        if raw_vals:
+                            total = sum(raw_vals)
+                            if total > 0:
+                                ai_data["series"] = [round((v / total) * sample_size, 2) for v in raw_vals]
+                        if ai_data.get("chart_type") not in {"pie", "bar"}:
+                            ai_data["chart_type"] = "pie"
                 dataset_path = save_dataset_json(
                     {
                         "title": figure_caption,
