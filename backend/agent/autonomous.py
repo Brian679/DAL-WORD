@@ -403,6 +403,11 @@ _SECTION_VISUAL_SPECS: list[dict[str, Any]] = [
         "kind": "chart", "title": "Conceptual Framework Diagram",
         "meta": {"chart_type": "framework"}, "designs_only": None,
     },
+    {
+        "chapter": 2, "keyword": "theoretical framework",
+        "kind": "chart", "title": "Theoretical Framework Diagram",
+        "meta": {"chart_type": "theory_model"}, "designs_only": None,
+    },
     # Chapter 3
     {
         "chapter": 3, "keyword": "sampling technique",
@@ -639,26 +644,27 @@ def _inject_standard_visuals(
     return result
 
 
-def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Guarantee Chapter 2 gets a conceptual-framework diagram even if the LLM-tailored
-    section titles don't literally contain one of the _SECTION_VISUAL_SPECS keywords
-    (the plan prompt deliberately encourages topic-specific, non-generic headings).
+def _has_chart_type(nodes: list[dict[str, Any]], chart_type: str) -> bool:
+    for n in nodes:
+        if n.get("kind") == "chart" and (n.get("meta") or {}).get("chart_type") == chart_type:
+            return True
+        if _has_chart_type(n.get("children", []) or [], chart_type):
+            return True
+    return False
+
+
+def _ensure_chart_visual(
+    nodes: list[dict[str, Any]], chart_type: str, title: str, keywords: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Guarantee a Chapter 2 diagram of the given chart_type exists even if the LLM-tailored
+    section titles don't literally contain one of the _SECTION_VISUAL_SPECS keywords (the plan
+    prompt deliberately encourages topic-specific, non-generic headings).
     """
-
-    def _has_framework_chart(node_list: list[dict[str, Any]]) -> bool:
-        for n in node_list:
-            if n.get("kind") == "chart" and (n.get("meta") or {}).get("chart_type") == "framework":
-                return True
-            if _has_framework_chart(n.get("children", []) or []):
-                return True
-        return False
-
-    if not nodes or _has_framework_chart(nodes):
+    if not nodes or _has_chart_type(nodes, chart_type):
         return nodes
 
-    framework_kws = ("conceptual", "theoretical", "framework", "model")
     target_idx = next(
-        (i for i, n in enumerate(nodes) if any(kw in (n.get("title") or "").lower() for kw in framework_kws)),
+        (i for i, n in enumerate(nodes) if any(kw in (n.get("title") or "").lower() for kw in keywords)),
         None,
     )
     if target_idx is None:
@@ -669,13 +675,23 @@ def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]
     result = list(nodes)
     target = dict(result[target_idx])
     target["children"] = list(target.get("children", [])) + [{
-        "title": "Conceptual Framework Diagram",
+        "title": title,
         "kind": "chart",
         "children": [],
-        "meta": {"chart_type": "framework"},
+        "meta": {"chart_type": chart_type},
     }]
     result[target_idx] = target
     return result
+
+
+def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Guarantee Chapter 2 gets both a conceptual-framework diagram and a theoretical-framework
+    (named theory) diagram. Theory is ensured first so it claims a "theoretical"-titled node
+    before the conceptual fallback would otherwise grab it.
+    """
+    nodes = _ensure_chart_visual(nodes, "theory_model", "Theoretical Framework Diagram", ("theoretical", "theory"))
+    nodes = _ensure_chart_visual(nodes, "framework", "Conceptual Framework Diagram", ("conceptual", "framework", "model"))
+    return nodes
 
 
 def _detect_visual_injection_request(
@@ -1223,6 +1239,11 @@ def generate_dissertation_plan_llm(
         "'Conceptual Framework' (e.g. 'X.X Conceptual Framework of <topic-specific qualifier>') — this is "
         "where the conceptual framework diagram will be placed, so do not omit or rename it away from "
         "that exact phrase even while keeping other Chapter 2 headings topic-specific.\n"
+        "- Chapter 2 must also include exactly one separate section whose title literally contains the "
+        "words 'Theoretical Framework' (e.g. 'X.X Theoretical Framework: <Named Theory>'), distinct from "
+        "the Conceptual Framework section — this is where a diagram of the underlying theory's own "
+        "constructs will be placed, so name an actual theory relevant to the topic rather than a "
+        "generic placeholder.\n"
         "- Chapter 2 must end with a 'Chapter Summary' section.\n"
         "- Chapter 3 sections must reflect the stated research design "
         f"({research_design}): include appropriate data collection and analysis subsections. "
@@ -1384,8 +1405,21 @@ def _sections_to_steps(
         _sections_to_steps(steps, sec.get("sections", []), depth + 1)
 
 
-def _default_framework_spec(topic: str, prompt: str) -> dict[str, Any]:
+def _default_framework_spec(topic: str, prompt: str, kind: str = "conceptual") -> dict[str, Any]:
     short_topic = (topic or "the study").strip()
+    if kind == "theory":
+        return {
+            "title": f"Theoretical Framework: {short_topic}",
+            "left_label": "Antecedent Constructs",
+            "left_items": ["External factors", "Individual characteristics", "Contextual conditions"],
+            "middle_label": "Core Theoretical Constructs",
+            "middle_items": ["Perceived attributes", "Attitudes/beliefs"],
+            "right_label": "Outcome Construct",
+            "right_items": ["Behavioral intention / adoption"],
+            "control_label": "Boundary Conditions",
+            "control_items": ["Scope of theory", "Underlying assumptions"],
+            "notes": (prompt or "").strip()[:180],
+        }
     return {
         "title": f"Conceptual Framework: {short_topic}",
         "left_label": "Independent Variables",
@@ -1413,24 +1447,38 @@ def _framework_target_index(document: Document, target: str | None, prompt: str)
     text = f"{(target or '')} {(prompt or '')}".lower()
     looks_framework = any(k in text for k in ["conceptual", "theoretical", "framework", "model"])
     if looks_framework:
-        # Ordered most-specific-first. Numbered prefixes are deliberately omitted: different
-        # templates number Chapter 2 differently (DISSERTATION_TEMPLATE uses "2.2 Conceptual
-        # Review" / "2.3 Theoretical Framework", _fallback_dissertation_chapters uses "2.2
-        # Theoretical Framework" / "2.3 Conceptual Framework"), and find_section's numeric-token
-        # tier would otherwise match on the number alone and pick the wrong section.
-        preferred_titles = [
-            "Conceptual Framework",
-            "Conceptual Review",
-            "Theoretical Framework",
-            "Literature Review",
-            "Chapter 2",
-        ]
+        # Ordered most-specific-first, based on whichever framework type the prompt actually
+        # names. Numbered prefixes are deliberately omitted: different templates number
+        # Chapter 2 differently (DISSERTATION_TEMPLATE uses "2.2 Conceptual Review" / "2.3
+        # Theoretical Framework", _fallback_dissertation_chapters uses "2.2 Theoretical
+        # Framework" / "2.3 Conceptual Framework"), and find_section's numeric-token tier
+        # would otherwise match on the number alone and pick the wrong section.
+        wants_theoretical = "theoretical" in text and "conceptual" not in text
+        if wants_theoretical:
+            preferred_titles = [
+                "Theoretical Framework",
+                "Conceptual Framework",
+                "Conceptual Review",
+                "Literature Review",
+                "Chapter 2",
+            ]
+            keyword_groups = (("theoretical framework",), ("conceptual framework",), ("conceptual review",), ("framework",))
+        else:
+            preferred_titles = [
+                "Conceptual Framework",
+                "Conceptual Review",
+                "Theoretical Framework",
+                "Literature Review",
+                "Chapter 2",
+            ]
+            keyword_groups = (("conceptual framework",), ("conceptual review",), ("theoretical framework",), ("framework",))
+
         for query in preferred_titles:
             idx = find_section(document.content, query)
             if idx is not None:
                 return idx
 
-        for keywords in (("conceptual framework",), ("conceptual review",), ("theoretical framework",), ("framework",)):
+        for keywords in keyword_groups:
             for i, section in enumerate(sections):
                 combined = f"{section.get('title', '')}\n{section.get('content', '')}".lower()
                 if any(k in combined for k in keywords):
@@ -1447,17 +1495,57 @@ def _framework_spec_from_inputs(
     full_context: str,
     prompt: str,
     document_title: str = "",
+    kind: str = "conceptual",
 ) -> dict[str, Any]:
-    """Ask the LLM for a structured conceptual-framework figure spec given already-located
-    context. Shared by _build_framework_spec (chat 'add image' command, document-located
-    context) and the automatic Chapter 2 visual injected during full dissertation writing
-    (in-progress chapter context, no document lookup needed).
+    """Ask the LLM for a structured boxes-and-arrows figure spec given already-located context.
+
+    kind="conceptual" builds the study's own conceptual framework (its IV/mediator/DV/control
+    variables). kind="theory" builds a diagram of the named theory discussed in a Theoretical
+    Framework section instead (the theory's own antecedent/core/outcome constructs), since that
+    section describes an existing theory rather than the study's variable model.
+
+    Shared by _build_framework_spec (chat 'add image' command, document-located context) and the
+    automatic Chapter 2 visual injected during full dissertation writing (in-progress chapter
+    context, no document lookup needed).
     """
     objective_text = "\n".join(f"- {item}" for item in objectives[:4])
 
+    if kind == "theory":
+        task_line = (
+            "Identify the specific theory/model named or implied in the section content below "
+            "(e.g. Technology Acceptance Model, Diffusion of Innovation Theory) and build a "
+            "specification for a diagram of THAT THEORY'S OWN structure (its antecedent, core, "
+            "and outcome constructs) — not the study's variables."
+        )
+        shape_hint = (
+            '"title":"Theoretical Framework: <Theory Name>",'
+            '"left_label":"Antecedent Constructs",'
+            '"left_items":["...","..."],'
+            '"middle_label":"Core Theoretical Constructs",'
+            '"middle_items":["...","..."],'
+            '"right_label":"Outcome Construct",'
+            '"right_items":["..."],'
+            '"control_label":"Boundary Conditions",'
+            '"control_items":["...","..."],'
+            '"notes":"Short rationale under 180 chars"'
+        )
+    else:
+        task_line = "Build a specification for the study's own conceptual framework figure."
+        shape_hint = (
+            '"title":"...",'
+            '"left_label":"Independent Variables",'
+            '"left_items":["...","..."],'
+            '"middle_label":"Mediating/Moderating Variables",'
+            '"middle_items":["...","..."],'
+            '"right_label":"Dependent Variable",'
+            '"right_items":["..."],'
+            '"control_label":"Control Variables",'
+            '"control_items":["...","..."],'
+            '"notes":"Short rationale under 180 chars"'
+        )
+
     llm_prompt = (
-        "You are an academic research assistant. Build a professional conceptual framework specification "
-        "for a dissertation figure.\n\n"
+        f"You are an academic research assistant. {task_line}\n\n"
         f"Document title: {document_title or topic}\n"
         f"Topic: {topic}\n"
         f"Target section title: {local_title or 'N/A'}\n"
@@ -1469,38 +1557,33 @@ def _framework_spec_from_inputs(
         "Whole document context:\n"
         f"{full_context[:5000]}\n\n"
         "Return JSON only with this exact shape:\n"
-        "{"
-        '"title":"...",'
-        '"left_label":"Independent Variables",'
-        '"left_items":["...","..."],'
-        '"middle_label":"Mediating/Moderating Variables",'
-        '"middle_items":["...","..."],'
-        '"right_label":"Dependent Variable",'
-        '"right_items":["..."],'
-        '"control_label":"Control Variables",'
-        '"control_items":["...","..."],'
-        '"notes":"Short rationale under 180 chars"'
-        "}\n"
+        "{" + shape_hint + "}\n"
         "Rules: keep labels short, items concrete and topic-aware, no markdown."
     )
+
+    default_left = "Antecedent Constructs" if kind == "theory" else "Independent Variables"
+    default_middle = "Core Theoretical Constructs" if kind == "theory" else "Mediating Variables"
+    default_right = "Outcome Construct" if kind == "theory" else "Dependent Variable"
+    default_control = "Boundary Conditions" if kind == "theory" else "Control Variables"
+    default_title = f"Theoretical Framework: {topic}" if kind == "theory" else f"Conceptual Framework: {topic}"
 
     try:
         data = _extract_json_obj(generate_text(llm_prompt))
         return {
-            "title": str(data.get("title") or f"Conceptual Framework: {topic}"),
-            "left_label": str(data.get("left_label") or "Independent Variables"),
+            "title": str(data.get("title") or default_title),
+            "left_label": str(data.get("left_label") or default_left),
             "left_items": [str(x) for x in (data.get("left_items") or [])][:4],
-            "middle_label": str(data.get("middle_label") or "Mediating Variables"),
+            "middle_label": str(data.get("middle_label") or default_middle),
             "middle_items": [str(x) for x in (data.get("middle_items") or [])][:4],
-            "right_label": str(data.get("right_label") or "Dependent Variable"),
+            "right_label": str(data.get("right_label") or default_right),
             "right_items": [str(x) for x in (data.get("right_items") or [])][:4],
-            "control_label": str(data.get("control_label") or "Control Variables"),
+            "control_label": str(data.get("control_label") or default_control),
             "control_items": [str(x) for x in (data.get("control_items") or [])][:4],
             "notes": str(data.get("notes") or "")[0:180],
         }
     except Exception as exc:
         logger.warning("_framework_spec_from_inputs fallback: %s", exc)
-        return _default_framework_spec(topic, prompt)
+        return _default_framework_spec(topic, prompt, kind=kind)
 
 
 def _build_framework_spec(document: Document, target: str | None, prompt: str) -> dict[str, Any]:
@@ -1516,6 +1599,9 @@ def _build_framework_spec(document: Document, target: str | None, prompt: str) -
     topic = str((document.content or {}).get("topic") or document.title or "Study")
     objectives = _extract_objectives(document, topic)
 
+    lowered = f"{local_title} {target or ''} {prompt or ''}".lower()
+    kind = "theory" if ("theoretical" in lowered and "conceptual" not in lowered) else "conceptual"
+
     return _framework_spec_from_inputs(
         topic=topic,
         objectives=objectives,
@@ -1524,6 +1610,7 @@ def _build_framework_spec(document: Document, target: str | None, prompt: str) -
         full_context=full_context,
         prompt=prompt,
         document_title=document.title,
+        kind=kind,
     )
 
 
@@ -1538,10 +1625,15 @@ def _insert_block_marker(section_text: str, block_id: str, prompt: str) -> str:
     framework_request = any(k in lowered_prompt for k in ["conceptual", "theoretical", "framework", "model"])
 
     if framework_request:
-        # Prefer the most specific heading match: a literal "conceptual framework" line
-        # wins even if a generic "framework"/"theoretical framework" line appears earlier
-        # in the section (e.g. "2.2 Theoretical Framework" before "2.3 Conceptual Framework").
-        for keywords in (("conceptual framework",), ("theoretical framework",), ("framework",)):
+        # Prefer the most specific heading match: whichever framework type the prompt
+        # actually names wins even if the other type's heading appears earlier in the
+        # section (e.g. "2.2 Theoretical Framework" before "2.3 Conceptual Framework").
+        wants_theoretical = "theoretical" in lowered_prompt and "conceptual" not in lowered_prompt
+        if wants_theoretical:
+            keyword_groups = (("theoretical framework",), ("conceptual framework",), ("framework",))
+        else:
+            keyword_groups = (("conceptual framework",), ("theoretical framework",), ("framework",))
+        for keywords in keyword_groups:
             for i, line in enumerate(lines):
                 lower_line = line.lower().strip()
                 if any(kw in lower_line for kw in keywords):
@@ -1636,7 +1728,7 @@ def _append_node_plan_steps(plan: list[dict[str, Any]], nodes: list[dict[str, An
         verb = "Writing"
         if kind == "table":
             verb = "Creating table for"
-        elif kind == "chart" and (node.get("meta") or {}).get("chart_type") == "framework":
+        elif kind == "chart" and (node.get("meta") or {}).get("chart_type") in {"framework", "theory_model"}:
             verb = "Creating diagram for"
         elif kind == "chart":
             verb = "Creating chart for"
@@ -1816,22 +1908,26 @@ def _execute_subsection_nodes(
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective)}"
             )
-        elif kind == "chart" and meta.get("chart_type") == "framework":
+        elif kind == "chart" and meta.get("chart_type") in {"framework", "theory_model"}:
+            is_theory = meta.get("chart_type") == "theory_model"
             figure_no = figure_counter[0]
             figure_counter[0] += 1
             objectives_list = (document.content or {}).get("research_objectives") or []
+            diagram_prompt = (
+                f"Theoretical framework diagram for: {topic}" if is_theory
+                else f"Conceptual framework diagram for: {topic}"
+            )
             framework_spec = _framework_spec_from_inputs(
                 topic=topic,
                 objectives=objectives_list,
                 local_title=title,
                 local_content=local_context[-1400:],
                 full_context=current_document_context,
-                prompt=f"Conceptual framework diagram for: {topic}",
+                prompt=diagram_prompt,
                 document_title=document.title,
+                kind="theory" if is_theory else "conceptual",
             )
-            image_path = generate_image(
-                f"Conceptual framework diagram for {topic}", framework_spec=framework_spec
-            )
+            image_path = generate_image(diagram_prompt, framework_spec=framework_spec)
             figure_caption = f"Figure {figure_no}: {framework_spec.get('title') or title}"
             block_id = f"fig-{figure_no}-{len(blocks) + 1}"
             blocks.append({
@@ -1841,11 +1937,17 @@ def _execute_subsection_nodes(
                 "block_id": block_id,
             })
             framework_notes = framework_spec.get("notes") or ""
+            interpretation = (
+                "Interpretation: The diagram maps the antecedent, core, and outcome constructs of "
+                "the theory underpinning this study."
+                if is_theory else
+                "Interpretation: The diagram maps how the independent, mediating, and control variables "
+                "identified in this study relate to the dependent variable."
+            )
             body = (
                 f"{figure_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
-                "Interpretation: The diagram maps how the independent, mediating, and control variables "
-                "identified in this study relate to the dependent variable.\n"
+                f"{interpretation}\n"
                 f"Discussion: {framework_notes or 'This framework guides the analysis and interpretation presented in subsequent chapters.'}"
             )
         elif kind == "chart":
@@ -2046,6 +2148,23 @@ def _execute_subsection_nodes(
     return "\n\n".join(chunks), local_context, blocks
 
 
+def _extract_topic_phrase(text: str, lead_words: tuple[str, ...] = ("on", "about")) -> str | None:
+    """Pull a topic phrase out of a free-form instruction like 'write a dissertation about X.
+    Use a quantitative design.' Stops at the first sentence boundary and strips a trailing
+    research-design clause so unpunctuated, voice-transcribed prompts (no period before
+    'use a ... design') don't bleed the whole rest of the message into the topic.
+    """
+    pattern = r"\b(?:" + "|".join(lead_words) + r")\b\s+(.+?)(?:[.!?]|$)"
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    topic = match.group(1).strip()
+    topic = re.sub(
+        r"\s+(?:use|using)\s+a\s+\w+(?:\s+\w+){0,2}\s+(?:research\s+)?design\s*$", "", topic
+    ).strip()
+    return topic or None
+
+
 def _heuristic_intent(message: str) -> dict[str, Any]:
     text = (message or "").strip().lower()
 
@@ -2175,21 +2294,18 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "thesis" in text
         and any(k in text for k in ["write", "full", "complete", "entire", "create", "do", "generate"])
     ):
-        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
-        topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
+        topic = _extract_topic_phrase(text)
         return {"intent": "write_dissertation", "target_section": None, "topic": topic}
 
     if (
         "project" in text
         and any(k in text for k in ["full", "complete", "entire", "whole", "write", "create", "build", "do", "generate"])
     ):
-        topic_match = re.search(r"\b(?:on|about)\b\s+(.+)$", text)
-        topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
+        topic = _extract_topic_phrase(text)
         return {"intent": "write_dissertation", "target_section": None, "topic": topic}
 
     if "outline" in text:
-        topic_match = re.search(r"\bon\b\s+(.+)$", text)
-        topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
+        topic = _extract_topic_phrase(text, ("on",))
         return {"intent": "create_outline", "target_section": None, "topic": topic}
 
     _visual_verbs = {"add", "put", "insert", "include", "place", "attach", "generate", "create", "make", "draw", "build", "design"}
@@ -2230,8 +2346,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     # Use word-boundary matching for verbs to prevent "do" matching "document",
     # "make" matching "remake", etc.
     if any(re.search(r'\b' + re.escape(v) + r'\b', text) for v in _write_verbs) and any(n in text for n in _write_nouns):
-        topic_match = re.search(r"\b(?:on|about|for|regarding)\b\s+(.+)$", text)
-        topic = topic_match.group(1).strip().rstrip(".") if topic_match else None
+        topic = _extract_topic_phrase(text, ("on", "about", "for", "regarding"))
         return {"intent": "write_document", "target_section": None, "topic": topic}
 
     if any(k in text for k in [
