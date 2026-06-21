@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 import re
 from statistics import mean
-from textwrap import fill
+from textwrap import fill, shorten
 from typing import Any
 from uuid import uuid4
 
@@ -321,13 +321,13 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
         fig, ax = plt.subplots(figsize=(9, 7), dpi=160)
         fig.patch.set_facecolor("#f8f9fa")
         ax.set_facecolor("#f8f9fa")
-        _draw_timeline(ax, phases, title=prompt.strip()[:72])
+        _draw_timeline(ax, phases, title=shorten(prompt.strip(), width=72, placeholder="..."))
     elif _is_process:
         steps = _ai_generate_process_steps(5)
         fig, ax = plt.subplots(figsize=(13, 5), dpi=160)
         fig.patch.set_facecolor("#f7f9fc")
         ax.set_facecolor("#f7f9fc")
-        _draw_process_flow(ax, steps, title=prompt.strip()[:72])
+        _draw_process_flow(ax, steps, title=shorten(prompt.strip(), width=72, placeholder="..."))
     else:
         tokens = [
             t.capitalize() for t in re.split(r"[^a-z0-9]+", (prompt or "").lower())
