@@ -43,6 +43,30 @@ _FILLER_PHRASES: tuple[str, ...] = (
     "critical rules",
 )
 
+# ── Phrases indicating the LLM reviewed/critiqued the document instead of writing
+# the requested chapter content (e.g. asked to write a "Chapter Summary" and
+# instead produced a strengths/weaknesses assessment of the whole document) ──
+_META_COMMENTARY_PHRASES: tuple[str, ...] = (
+    "this document currently",
+    "the document currently",
+    "key strength is that",
+    "main weakness is that",
+    "main gap is that",
+    "area of improvement",
+    "areas of improvement",
+    "areas for improvement",
+    "i have reviewed",
+    "upon reviewing",
+    "as a reviewer",
+    "as an academic reviewer",
+    "overall, the document",
+    "the writer should",
+    "could be strengthened by",
+    "i recommend revising",
+    "this section is currently",
+    "in summary, this document",
+)
+
 
 # ---------------------------------------------------------------------------
 # Error taxonomy
@@ -318,6 +342,14 @@ class ErrorAnalyzer:
                 detail="LLM echoed the prompt or returned a filler placeholder.",
             )
 
+        # ── Meta-commentary (reviewed the document instead of writing it) ──
+        if any(phrase in body_lower for phrase in _META_COMMENTARY_PHRASES):
+            return ErrorReport(
+                category=ErrorCategory.FILLER_DETECTED,
+                strategy=RepairStrategy.RETRY_SIMPLER,
+                detail="LLM produced a review/critique of the document instead of section content.",
+            )
+
         # ── Structural format error ───────────────────────────────────────
         if "hypoth" in task.title.lower():
             missing_h0 = "h0" not in body_lower and "null hypothesis" not in body_lower
@@ -343,6 +375,8 @@ class ErrorAnalyzer:
             return False
         body_lower = body.lower()
         if any(phrase in body_lower for phrase in _FILLER_PHRASES):
+            return False
+        if any(phrase in body_lower for phrase in _META_COMMENTARY_PHRASES):
             return False
         if "hypoth" in task.title.lower():
             missing = ("h0" not in body_lower and "null hypothesis" not in body_lower) or \

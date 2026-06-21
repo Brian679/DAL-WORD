@@ -1202,6 +1202,41 @@ def _infer_sample_size(document: Document) -> int:
     return 120
 
 
+def _llm_table_data_is_consistent(
+    headers: list[str], rows: list[list[str]], table_type: str | None, node_title: str, sample_size: int,
+) -> bool:
+    """Reject LLM-generated table data that numerically contradicts the document's own
+    stated sample size. The generation prompt only asks the model to make frequencies
+    "sum to the sample size" as a soft instruction with no enforcement, so a response-rate
+    or demographics table can come back internally plausible-looking but arithmetically
+    wrong (e.g. frequencies that sum to some other number entirely) — unlike the
+    deterministic fallback below, which guarantees this by construction. When this check
+    fails, the caller falls through to that guaranteed-consistent fallback instead.
+    """
+    title_lower = node_title.lower()
+    needs_sum_check = table_type in {"response_rate", "demographics"} or (
+        table_type is None and ("response rate" in title_lower or "demographic" in title_lower)
+    )
+    if not needs_sum_check or sample_size <= 0:
+        return True
+    tolerance = max(2, sample_size * 0.05)
+    # Some tables include an explicit "Total"/"Administered" row equal to the sample size,
+    # with the remaining rows being its breakdown (which themselves sum to that same total).
+    # Others are a pure breakdown with no total row at all. Either layout is consistent, so
+    # accept if any single cell already matches the sample size, or if any column's full sum does.
+    all_values = [v for r in rows for v in (_parse_numeric_cell(c) for c in r) if v is not None]
+    if any(abs(v - sample_size) <= tolerance for v in all_values):
+        return True
+    for col_idx in range(max((len(r) for r in rows), default=0)):
+        values = [_parse_numeric_cell(r[col_idx]) for r in rows if len(r) > col_idx]
+        if len(values) < 2 or any(v is None for v in values):
+            continue
+        total = sum(v for v in values if v is not None)
+        if abs(total - sample_size) <= tolerance:
+            return True
+    return False
+
+
 def _ai_table_dataset(
     node_title: str,
     research_design: str,
@@ -1237,7 +1272,7 @@ def _ai_table_dataset(
         headers = [str(h) for h in (data.get("headers") or []) if str(h).strip()]
         rows_raw = data.get("rows") or []
         rows = [[str(cell) for cell in row] for row in rows_raw if isinstance(row, list)]
-        if headers and rows:
+        if headers and rows and _llm_table_data_is_consistent(headers, rows, table_type, node_title, sample_size):
             return {"headers": headers, "rows": rows}
     except Exception as exc:
         logger.warning("_ai_table_dataset fallback (%s): %s", node_title[:60], exc)
@@ -2311,6 +2346,41 @@ def _sanitize_body(text: str) -> str:
     return text.strip()
 
 
+_META_COMMENTARY_PHRASES: tuple[str, ...] = (
+    "this document currently",
+    "the document currently",
+    "key strength is that",
+    "main weakness is that",
+    "main gap is that",
+    "area of improvement",
+    "areas of improvement",
+    "areas for improvement",
+    "i have reviewed",
+    "upon reviewing",
+    "as a reviewer",
+    "as an academic reviewer",
+    "overall, the document",
+    "the writer should",
+    "could be strengthened by",
+    "i recommend revising",
+    "this section is currently",
+    "in summary, this document",
+    "the strongest opportunity is",
+    "my take on your document",
+    "what is working is that",
+)
+
+
+def _looks_like_meta_commentary(text: str) -> bool:
+    """True when generated body text reads like a review/critique of the document itself
+    (e.g. the model treats a 'write the chapter summary' request as 'review the document')
+    rather than genuine chapter prose. Content like this must never be saved as a section
+    body — callers should treat it the same as a generation failure and fall back.
+    """
+    low = (text or "").lower()
+    return any(p in low for p in _META_COMMENTARY_PHRASES)
+
+
 def _retrieve_citation_pool(topic: str, document_id: int | None) -> list[Any]:
     """Fetch real papers from the open scholarly web (Crossref, arXiv, PubMed, SSRN,
     Semantic Scholar) to ground dissertation citations in verifiable sources.
@@ -2635,6 +2705,8 @@ def _execute_subsection_nodes(
                     ),
                     word_count=default_word_count,
                 )
+                if _looks_like_meta_commentary(body):
+                    raise ValueError("Generated body reads like document meta-commentary, not findings prose.")
             except Exception:
                 body = _fallback_subsection_text(
                     topic, section_title, title,
@@ -4818,6 +4890,8 @@ def _build_section_content(
                 ),
                 word_count=220,
             )
+            if _looks_like_meta_commentary(subsection_text):
+                raise ValueError("Generated body reads like document meta-commentary, not section prose.")
         except Exception:
             subsection_text = _fallback_subsection_text(topic, section_title, subsection)
         subsection_text = _sanitize_body(subsection_text)
@@ -7657,6 +7731,8 @@ def _write_section(
             context=f"User request: {instruction}\n\nDocument context:\n{existing_context[:1800]}",
             word_count=320,
         )
+        if _looks_like_meta_commentary(content):
+            raise ValueError("Generated body reads like document meta-commentary, not section prose.")
     except Exception:
         content = _fallback_subsection_text(
             topic, section_name, section_name,
@@ -8023,6 +8099,8 @@ def _plan_and_write_document(
                 ),
                 word_count=wc,
             )
+            if _looks_like_meta_commentary(text):
+                raise ValueError("Generated body reads like document meta-commentary, not section prose.")
         except Exception:
             text = _fallback_subsection_text(
                 topic, doc_type.capitalize(), title,
