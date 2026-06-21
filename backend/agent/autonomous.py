@@ -442,6 +442,11 @@ _SECTION_VISUAL_SPECS: list[dict[str, Any]] = [
     },
     # Chapter 3
     {
+        "chapter": 3, "keyword": "research design",
+        "kind": "image", "title": "Research Process Flow Diagram",
+        "meta": {"image_kind": "process_flow"}, "designs_only": None,
+    },
+    {
         "chapter": 3, "keyword": "sampling technique",
         "kind": "table", "title": "Sampling Frame and Allocation",
         "meta": {"table_type": "sampling"}, "designs_only": None,
@@ -3623,6 +3628,32 @@ def _execute_subsection_nodes(
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective, table_dataset, has_hypotheses)}"
+            )
+        elif kind == "image" and meta.get("image_kind") == "process_flow":
+            figure_no = figure_counter[0]
+            figure_counter[0] += 1
+            specific = specific_design or research_design
+            diagram_prompt = (
+                f"Methodology process flow diagram showing the sequential steps of the "
+                f"{specific} research design adopted for {topic}, from the initial design "
+                "decision through to data or source analysis"
+            )
+            image_path = generate_image(diagram_prompt)
+            figure_caption = f"Figure {figure_no}: Research Process Flow for {topic}"
+            block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+            blocks.append({
+                "type": "image",
+                "src": image_path,
+                "caption": figure_caption,
+                "block_id": block_id,
+            })
+            body = (
+                f"{figure_caption}\n"
+                f"[[BLOCK:{block_id}]]\n"
+                "Interpretation: The diagram traces the sequential stages followed in carrying out "
+                "this study, from the initial research design decision through to the final "
+                "analysis stage, providing a visual summary of the procedure described in this "
+                "chapter."
             )
         elif kind == "chart" and meta.get("chart_type") in {"framework", "theory_model"}:
             is_theory = meta.get("chart_type") == "theory_model"

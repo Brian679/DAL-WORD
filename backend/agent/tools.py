@@ -99,196 +99,23 @@ def insert_image_block(doc: dict[str, Any], section_idx: int, src: str, caption:
     return doc
 
 
-# ── per-subject matplotlib drawers ─────────────────────────────────────────
-
-def _draw_apple(ax: Any) -> None:
-    from matplotlib.patches import Ellipse
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#e8f5e9")
-    ax.add_patch(Ellipse((0.50, 0.46), 0.46, 0.43, color="#e63946", zorder=3))
-    ax.add_patch(Ellipse((0.39, 0.55), 0.13, 0.09, color="#ff8fa3", alpha=0.52, zorder=4))
-    ax.add_patch(Ellipse((0.50, 0.675), 0.055, 0.032, color="#c1121f", zorder=4))
-    sx = [0.500, 0.508, 0.518, 0.528]; sy = [0.675, 0.730, 0.780, 0.815]
-    ax.plot(sx, sy, color="#5c3a1e", lw=5, zorder=5, solid_capstyle="round")
-    ax.add_patch(Ellipse((0.585, 0.815), 0.18, 0.065, angle=-32, color="#40916c", zorder=4))
-    ax.plot([0.528, 0.618], [0.815, 0.823], color="#2d6a4f", lw=1.2, zorder=5, alpha=0.75)
-
-
-def _draw_tree(ax: Any) -> None:
-    from matplotlib.patches import Rectangle, Circle
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#e3f2fd")
-    ax.add_patch(plt.Rectangle((0, 0), 1, 0.14, color="#8fbc5c", zorder=2))
-    ax.add_patch(Rectangle((0.44, 0.14), 0.12, 0.28, color="#795548", zorder=3))
-    for cy, r, col in [(0.62, 0.21, "#66bb6a"), (0.73, 0.19, "#43a047"), (0.82, 0.155, "#2e7d32")]:
-        ax.add_patch(Circle((0.50, cy), r, color=col, zorder=4))
-
-
-def _draw_sun(ax: Any) -> None:
-    from matplotlib.patches import Circle
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#fffde7")
-    ax.add_patch(Circle((0.50, 0.50), 0.22, color="#fdd835", zorder=3))
-    ax.add_patch(Circle((0.50, 0.50), 0.19, color="#ffee58", zorder=4))
-    for angle in range(0, 360, 30):
-        rad = angle * 3.14159 / 180
-        x0 = 0.50 + 0.25 * np.cos(rad); y0 = 0.50 + 0.25 * np.sin(rad)
-        x1 = 0.50 + 0.36 * np.cos(rad); y1 = 0.50 + 0.36 * np.sin(rad)
-        ax.plot([x0, x1], [y0, y1], color="#f9a825", lw=4, solid_capstyle="round", zorder=2)
-
-
-def _draw_heart(ax: Any) -> None:
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#fce4ec")
-    t = np.linspace(0, 2 * np.pi, 400)
-    x = 0.50 + 0.22 * (16 * np.sin(t) ** 3) / 16
-    y = 0.50 + 0.22 * (13 * np.cos(t) - 5 * np.cos(2*t) - 2 * np.cos(3*t) - np.cos(4*t)) / 13
-    ax.fill(x, y, color="#e91e63", zorder=3, alpha=0.9)
-
-
-def _draw_star(ax: Any) -> None:
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#fffde7")
-    angles_outer = np.linspace(np.pi / 2, 5 * np.pi / 2, 6)[:-1]
-    angles_inner = angles_outer + np.pi / 5
-    pts = []
-    for ao, ai in zip(angles_outer, angles_inner):
-        pts.append((0.50 + 0.35 * np.cos(ao), 0.50 + 0.35 * np.sin(ao)))
-        pts.append((0.50 + 0.15 * np.cos(ai), 0.50 + 0.15 * np.sin(ai)))
-    xs, ys = zip(*pts)
-    ax.fill(list(xs), list(ys), color="#fdd835", zorder=3)
-    ax.plot(list(xs) + [xs[0]], list(ys) + [ys[0]], color="#f57f17", lw=2, zorder=4)
-
-
-def _draw_house(ax: Any) -> None:
-    from matplotlib.patches import Rectangle, Polygon, FancyBboxPatch as FBP
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#e3f2fd")
-    ax.add_patch(plt.Rectangle((0, 0), 1, 0.12, color="#a5d6a7", zorder=2))
-    ax.add_patch(Rectangle((0.18, 0.12), 0.64, 0.40, color="#ef9a9a", zorder=3, ec="#c62828", lw=1.5))
-    ax.add_patch(Rectangle((0.44, 0.12), 0.12, 0.20, color="#5d4037", zorder=4))
-    ax.add_patch(plt.Circle((0.462, 0.22), 0.012, color="#ffd54f", zorder=5))
-    for wx in [0.24, 0.66]:
-        ax.add_patch(Rectangle((wx, 0.27), 0.11, 0.11, color="#b3e5fc", zorder=4, ec="#0277bd", lw=1.2))
-    ax.add_patch(Polygon([[0.12, 0.52], [0.50, 0.80], [0.88, 0.52]], closed=True,
-                          color="#b71c1c", zorder=3, ec="#7f0000", lw=1.5))
-
-
-def _draw_flower(ax: Any) -> None:
-    from matplotlib.patches import Circle, Ellipse
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#f3e5f5")
-    ax.plot([0.50, 0.50], [0.10, 0.44], color="#388e3c", lw=5, solid_capstyle="round", zorder=2)
-    ax.add_patch(Ellipse((0.38, 0.30), 0.16, 0.07, angle=25, color="#66bb6a", zorder=3))
-    ax.add_patch(Ellipse((0.62, 0.35), 0.16, 0.07, angle=-25, color="#66bb6a", zorder=3))
-    petal_colors = ["#ce93d8", "#ab47bc", "#9c27b0", "#7b1fa2", "#e040fb", "#ea80fc"]
-    for i, angle in enumerate(range(0, 360, 60)):
-        rad = angle * np.pi / 180
-        cx = 0.50 + 0.155 * np.cos(rad); cy = 0.50 + 0.155 * np.sin(rad)
-        ax.add_patch(Ellipse((cx, cy), 0.17, 0.10, angle=angle, color=petal_colors[i % 6], zorder=4))
-    ax.add_patch(Circle((0.50, 0.50), 0.085, color="#fdd835", zorder=5))
-
-
-def _draw_book(ax: Any) -> None:
-    from matplotlib.patches import Rectangle, FancyBboxPatch as FBP
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#fff8e1")
-    ax.add_patch(Rectangle((0.18, 0.18), 0.58, 0.62, color="#4527a0", zorder=2))
-    for i in range(8):
-        shade = 220 + i * 4
-        ax.add_patch(Rectangle((0.76 + i * 0.008, 0.21), 0.006, 0.56,
-                                color=(shade/255, shade/255, shade/255), zorder=3))
-    ax.add_patch(FBP((0.20, 0.20), 0.54, 0.58, boxstyle="round,pad=0.008",
-                     color="#7c43bd", zorder=4, ec="#4527a0", lw=1.5))
-    ax.add_patch(Rectangle((0.20, 0.20), 0.055, 0.58, color="#5e35b1", zorder=5))
-    for y_pos, w_frac in [(0.61, 0.32), (0.55, 0.26), (0.45, 0.18)]:
-        ax.add_patch(Rectangle((0.34, y_pos), w_frac, 0.03, color="#ede7f6", zorder=6))
-
-
-def _draw_cloud(ax: Any) -> None:
-    from matplotlib.patches import Circle
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#e3f2fd")
-    for cx, cy, r in [(0.50, 0.52, 0.18), (0.35, 0.46, 0.14), (0.65, 0.46, 0.14),
-                      (0.42, 0.40, 0.12), (0.58, 0.40, 0.12)]:
-        ax.add_patch(Circle((cx, cy), r, color="white", zorder=3, ec="#b0bec5", lw=1.0))
-
-
-def _draw_banana(ax: Any) -> None:
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#fffde7")
-    t = np.linspace(0, np.pi, 300)
-    xo = 0.50 + 0.34 * np.cos(t); yo = 0.50 + 0.28 * np.sin(t)
-    xi = 0.50 + 0.20 * np.cos(t); yi = 0.50 + 0.16 * np.sin(t)
-    px = list(xo) + list(xi[::-1]); py = list(yo) + list(yi[::-1])
-    ax.fill(px, py, color="#fdd835", zorder=3)
-    ax.plot(xo, yo, color="#f9a825", lw=3, zorder=4)
-    for tip_x, tip_y in [(xo[0], yo[0]), (xo[-1], yo[-1])]:
-        ax.plot(tip_x, tip_y, "o", color="#795548", ms=7, zorder=5)
-
-
-def _draw_fish(ax: Any) -> None:
-    from matplotlib.patches import Ellipse
-    import numpy as np
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#e0f7fa")
-    ax.add_patch(Ellipse((0.46, 0.50), 0.50, 0.26, color="#29b6f6", zorder=3))
-    tail = np.array([[0.21, 0.50], [0.08, 0.65], [0.06, 0.50], [0.08, 0.35]])
-    ax.fill(tail[:, 0], tail[:, 1], color="#0288d1", zorder=3)
-    ax.add_patch(plt.Circle((0.66, 0.52), 0.030, color="white", zorder=5))
-    ax.add_patch(plt.Circle((0.665, 0.52), 0.015, color="#212121", zorder=6))
-
-
-def _draw_car(ax: Any) -> None:
-    from matplotlib.patches import Rectangle, FancyBboxPatch as FBP, Ellipse
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal"); ax.axis("off")
-    ax.set_facecolor("#eceff1")
-    ax.add_patch(plt.Rectangle((0, 0), 1, 0.22, color="#607d8b", zorder=2))
-    ax.add_patch(FBP((0.08, 0.22), 0.84, 0.22, boxstyle="round,pad=0.02",
-                     color="#ef5350", zorder=3, ec="#b71c1c", lw=1.5))
-    ax.add_patch(FBP((0.22, 0.44), 0.56, 0.20, boxstyle="round,pad=0.015",
-                     color="#e53935", zorder=4, ec="#b71c1c", lw=1.5))
-    ax.add_patch(FBP((0.27, 0.47), 0.20, 0.12, boxstyle="round,pad=0.01",
-                     color="#b3e5fc", zorder=5, ec="#0277bd", lw=1))
-    ax.add_patch(FBP((0.53, 0.47), 0.20, 0.12, boxstyle="round,pad=0.01",
-                     color="#b3e5fc", zorder=5, ec="#0277bd", lw=1))
-    for wx in [0.24, 0.76]:
-        ax.add_patch(plt.Circle((wx, 0.21), 0.10, color="#212121", zorder=6))
-        ax.add_patch(plt.Circle((wx, 0.21), 0.055, color="#bdbdbd", zorder=7))
-
-
-_SUBJECT_DRAWERS: dict[str, Any] = {
-    "apple": _draw_apple,
-    "tree": _draw_tree,
-    "sun": _draw_sun,
-    "heart": _draw_heart,
-    "star": _draw_star,
-    "house": _draw_house,
-    "flower": _draw_flower,
-    "book": _draw_book,
-    "cloud": _draw_cloud,
-    "banana": _draw_banana,
-    "fish": _draw_fish,
-    "car": _draw_car,
-}
-
+# ── academic concept-diagram drawer ─────────────────────────────────────────
 
 def _draw_concept_diagram(ax: Any, prompt: str, keywords: list[str]) -> None:
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
-    ax.text(0.06, 0.93, "Concept Illustration", fontsize=20, fontweight="bold",
+    heading = " & ".join(keywords[:2]) if keywords else "Conceptual Overview"
+    ax.text(0.06, 0.93, fill(heading, width=44), fontsize=19, fontweight="bold",
             color="#6b3f1d", ha="left", va="center")
     ax.text(0.06, 0.86, fill(prompt.strip() or "Generated concept image", width=52),
             fontsize=11, color="#5a524a", ha="left", va="top", linespacing=1.4)
     positions = [(0.07, 0.18, 0.23, 0.24), (0.385, 0.18, 0.23, 0.24), (0.70, 0.18, 0.23, 0.24)]
     colors = ["#f4b183", "#a9d18e", "#9dc3e6"]
-    descs = ["Key context and source inputs", "Processing, controls, or evaluation",
-             "Resulting impact or recommendation"]
+    k0, k1, k2 = (keywords + ["this topic"] * 3)[:3]
+    descs = [
+        f"Context and inputs shaping {k0}",
+        f"How {k0} relates to {k1}",
+        f"Outcomes associated with {k2}",
+    ]
     for i, (x, y, w, h) in enumerate(positions):
         ax.add_patch(FancyBboxPatch((x, y), w, h,
                                     boxstyle="round,pad=0.018,rounding_size=0.03",
@@ -456,9 +283,6 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
     file_name = f"generated-{uuid4().hex[:10]}.png"
     output_path = images_dir / file_name
 
-    words = re.split(r"[^a-z]+", (prompt or "").lower())
-    drawer = next((fn for w in words if (fn := _SUBJECT_DRAWERS.get(w))), None)
-
     # ── Detect academic diagram type from prompt keywords ────────────────────
     _is_process = any(k in (prompt or "").lower() for k in [
         "process", "step", "procedure", "methodology", "flowchart", "flow chart",
@@ -504,17 +328,6 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
         fig.patch.set_facecolor("#f7f9fc")
         ax.set_facecolor("#f7f9fc")
         _draw_process_flow(ax, steps, title=prompt.strip()[:72])
-    elif drawer:
-        fig, ax = plt.subplots(figsize=(8, 8), dpi=140)
-        drawer(ax)
-        fig.patch.set_facecolor(ax.get_facecolor())
-        subject_label = next(w.capitalize() for w in words if w in _SUBJECT_DRAWERS)
-        caption = prompt.strip()
-        ax.text(0.50, 0.955, subject_label, ha="center", va="top", fontsize=20,
-                fontweight="bold", color="#212121", transform=ax.transAxes)
-        if caption.lower() != subject_label.lower():
-            ax.text(0.50, 0.025, fill(caption, width=55), ha="center", va="bottom",
-                    fontsize=9, color="#555", transform=ax.transAxes, linespacing=1.3)
     else:
         tokens = [
             t.capitalize() for t in re.split(r"[^a-z0-9]+", (prompt or "").lower())
