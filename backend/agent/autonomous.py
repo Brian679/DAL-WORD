@@ -3702,6 +3702,7 @@ def _fallback_subsection_body(
     """Deterministic, per-topic placeholder text for one dissertation subsection."""
     survey_based = _uses_human_respondents(topic, "", objectives)
     is_qualitative = research_design == "qualitative"
+    is_mixed = research_design == "mixed"
     sub = subsection.strip()
     sub_lower = sub.lower()
     sec = section_title.strip().lower()
@@ -3716,6 +3717,18 @@ def _fallback_subsection_body(
                     "primary data collected from a purposively selected group of participants.\n\n"
                     "Findings indicate recurring themes and patterns across participant accounts, with implications for "
                     "practice, policy, and future research. The study concludes by offering targeted recommendations and "
+                    "identifying areas warranting further investigation."
+                )
+            if is_mixed:
+                return (
+                    f"This study examines {topic}, combining a quantitative strand testing relationships between key "
+                    "variables with a qualitative strand exploring the meanings and experiences underlying those "
+                    "relationships. A mixed-methods research design was adopted, drawing on survey data from a "
+                    "statistically determined sample alongside semi-structured interviews with a purposively selected "
+                    "subset of participants.\n\n"
+                    "Quantitative findings indicate significant relationships between the study variables, while "
+                    "qualitative findings surface recurring themes that help explain those relationships in context. "
+                    "The study concludes by integrating both strands of evidence into targeted recommendations and "
                     "identifying areas warranting further investigation."
                 )
             return (
@@ -4151,6 +4164,18 @@ def _fallback_subsection_body(
                         "responsive to emerging issues, while still being guided by the research objectives set out "
                         "in Chapter 1."
                     )
+                if is_mixed:
+                    return (
+                        "A mixed-methods research design was adopted, combining a quantitative strand with a qualitative "
+                        "strand within a single study. This explanatory sequential approach was selected because the "
+                        "research objectives require both the statistical testing of hypothesised relationships and an "
+                        "in-depth understanding of the experiences and perspectives underlying those relationships.\n\n"
+                        "The quantitative strand, conducted first, establishes the strength and direction of relationships "
+                        "between the study variables using a structured instrument; the qualitative strand then builds on "
+                        "these results to explore the reasons behind them through semi-structured engagement with a "
+                        "purposively selected subset of participants. Integrating both strands provides a more complete "
+                        "account than either approach could offer in isolation."
+                    )
                 return (
                     "A quantitative research design was adopted, consistent with the positivist epistemological stance that "
                     "underpins the study. Quantitative approaches are well suited to the research objectives because they "
@@ -4181,6 +4206,20 @@ def _fallback_subsection_body(
                         "balancing the need for rich, detailed accounts against the practical constraints of time and "
                         "resource availability."
                     )
+                if is_mixed:
+                    qual_n = 8 + (seed % 8)
+                    quant_n = 80 + (seed % 161)
+                    return (
+                        "A two-phase sampling strategy was used, consistent with the mixed-methods design. For the "
+                        "quantitative strand, a stratified random sample was drawn from the target population, with "
+                        "sample size determined using Krejcie and Morgan's (1970) table for determining sample size "
+                        f"from a known population, yielding a sample size of {quant_n} respondents sufficient to achieve "
+                        "a 95% confidence level with a ±5% margin of error.\n\n"
+                        f"For the qualitative strand, a purposive subsample of {qual_n} participants was then drawn from "
+                        "respondents who completed the quantitative instrument, selected to represent a range of "
+                        "response patterns observed in the quantitative data, in order to explore the reasons behind "
+                        "the statistical relationships identified."
+                    )
                 sample_n = 80 + (seed % 161)
                 return (
                     "A stratified random sample was drawn from the target population to ensure that respondents possess "
@@ -4203,6 +4242,18 @@ def _fallback_subsection_body(
                         "flexibility in the protocol to allow follow-up questions and probe emerging issues not "
                         "anticipated in the original interview guide."
                     )
+                if is_mixed:
+                    return (
+                        "Data were collected in two phases, consistent with the mixed-methods design. In the first "
+                        "phase, a structured questionnaire comprising closed-ended items measured on a five-point "
+                        "Likert scale (1 = Strongly Disagree to 5 = Strongly Agree) was administered to the "
+                        "quantitative sample, with items developed from validated instruments in the existing "
+                        "literature.\n\n"
+                        "In the second phase, semi-structured interviews were conducted with the qualitative "
+                        "subsample, guided by an interview protocol informed by the quantitative results, allowing "
+                        "participants to elaborate on the reasons behind their survey responses. Interviews were "
+                        "audio-recorded with consent and transcribed verbatim for analysis."
+                    )
                 return (
                     "Data were collected via a structured questionnaire comprising closed-ended items measured on a "
                     "five-point Likert scale (1 = Strongly Disagree to 5 = Strongly Agree). The instrument was developed "
@@ -4219,6 +4270,18 @@ def _fallback_subsection_body(
                         "represented participants' accounts.\n\n"
                         "Results of this analysis are presented and interpreted in Chapter 4 in relation to the study's "
                         "research questions, with representative excerpts used to illustrate each theme."
+                    )
+                if is_mixed:
+                    return (
+                        "Quantitative responses were coded, screened for missing or inconsistent data, and analysed "
+                        "using SPSS v.28. Descriptive statistics were used to summarise the sample and key variables, "
+                        "while inferential tests — including Pearson correlation and multiple linear regression — were "
+                        "used to test the relationships specified in the research objectives.\n\n"
+                        "Interview transcripts from the qualitative strand were analysed separately using thematic "
+                        "analysis, following an iterative process of familiarisation, coding, and theme development. "
+                        "The two sets of results were then merged at the interpretation stage, with qualitative themes "
+                        "used to explain and contextualise the statistical relationships identified, consistent with "
+                        "the explanatory sequential mixed-methods design."
                     )
                 return (
                     "Completed responses were coded, screened for missing or inconsistent data, and analysed using SPSS "
@@ -4238,6 +4301,18 @@ def _fallback_subsection_body(
                         "Dependability and confirmability were supported by maintaining a clear audit trail of coding "
                         "decisions, while thick description of the context and findings supports the transferability "
                         "of conclusions to similar settings."
+                    )
+                if is_mixed:
+                    return (
+                        "For the quantitative strand, reliability of the measurement instrument was assessed using "
+                        "Cronbach's Alpha, with values above 0.70 accepted as indicating satisfactory internal "
+                        "consistency; the reliability table presented later in this chapter reports the alpha values "
+                        "obtained for each construct. Validity was established through content review by domain "
+                        "experts and, where applicable, confirmatory factor analysis.\n\n"
+                        "For the qualitative strand, trustworthiness was established using Lincoln and Guba's (1985) "
+                        "criteria of credibility, transferability, dependability, and confirmability, supported "
+                        "through member checking and a clear audit trail of coding decisions. Triangulating both "
+                        "strands further strengthens confidence in the overall study findings."
                     )
                 return (
                     "Reliability of the measurement instrument was assessed using Cronbach's Alpha, with values above "
@@ -4265,7 +4340,7 @@ def _fallback_subsection_body(
                     "The next chapter presents and discusses the findings obtained using this methodology, organised "
                     "around the research questions set out in Chapter 1."
                 )
-            design_label = "qualitative" if is_qualitative else "quantitative"
+            design_label = "qualitative" if is_qualitative else ("mixed-methods" if is_mixed else "quantitative")
             return (
                 f"This section describes a further methodological aspect of the study on {topic}, situated within "
                 f"the overall {design_label} research design adopted for this dissertation and consistent with the "
@@ -4380,6 +4455,17 @@ def _fallback_subsection_body(
                     "The presentation follows a structured sequence: each theme is introduced, illustrated with representative "
                     "excerpts from participant accounts, and then discussed in relation to the existing body of knowledge."
                 )
+            if is_mixed:
+                return (
+                    f"This chapter presents the findings of the study on {topic}, drawing on both the quantitative and "
+                    "qualitative strands of the mixed-methods design. Results are organised in accordance with the "
+                    "research objectives and questions set out in Chapter 1, with quantitative results reported first "
+                    "using descriptive and inferential statistics, followed by the qualitative themes that help explain "
+                    "those statistical results.\n\n"
+                    "The presentation follows a structured sequence: descriptive and inferential statistics are reported "
+                    "first, followed by the qualitative themes identified through interview analysis, and then an "
+                    "integrated discussion that triangulates both strands within the existing body of knowledge."
+                )
             return (
                 f"This chapter presents the empirical findings of the study on {topic}. "
                 "Results are organised in accordance with the research objectives and questions set out in Chapter 1. "
@@ -4397,6 +4483,18 @@ def _fallback_subsection_body(
                     "Closer reading of the transcripts further surfaces points of divergence between participants, "
                     "offering a more nuanced picture than a single dominant narrative would suggest. "
                     "These themes provide a basis for the conceptual interpretation offered in the discussion that follows."
+                )
+            if survey_based and is_mixed:
+                return (
+                    f"Analysis of the quantitative strand reveals several significant patterns relating to {topic}. "
+                    "Descriptive statistics indicate that the majority of respondents reported moderate to high levels of "
+                    "exposure to the study variables, and inferential analysis confirms statistically significant "
+                    "relationships between the primary variables, as detailed in the correlation and regression tables "
+                    "presented in this chapter.\n\n"
+                    "Thematic analysis of the qualitative strand surfaces recurring patterns that help explain these "
+                    "statistical relationships, with participants consistently emphasising the practical and contextual "
+                    "factors underlying their survey responses. Triangulating both strands provides a more complete "
+                    "account than either approach could offer in isolation."
                 )
             if survey_based:
                 return (
@@ -4595,6 +4693,21 @@ def _fallback_subsection_body(
                 "Appendix D: Sample Interview Transcript\n"
                 "[An anonymised, representative excerpt from one participant transcript, illustrating the coding process.]\n\n"
                 "Appendix E: Informed Consent Form\n"
+                "[Consent document provided to all research participants before data collection commenced.]"
+            )
+        if survey_based and is_mixed:
+            return (
+                "Appendix A: Research Questionnaire\n"
+                "[Survey instrument used for the quantitative strand. Items measured on a five-point Likert scale: 1 = Strongly Disagree to 5 = Strongly Agree.]\n\n"
+                "Appendix B: Interview Guide\n"
+                "[Semi-structured interview protocol used for the qualitative strand.]\n\n"
+                "Appendix C: Ethical Clearance Certificate\n"
+                "[Clearance document issued by the institutional ethics review board prior to data collection.]\n\n"
+                "Appendix D: Raw Statistical Output\n"
+                "[SPSS/R output tables from regression, correlation, and reliability analysis.]\n\n"
+                "Appendix E: Sample Interview Transcript\n"
+                "[An anonymised, representative excerpt from one participant transcript, illustrating the coding process.]\n\n"
+                "Appendix F: Informed Consent Form\n"
                 "[Consent document provided to all research participants before data collection commenced.]"
             )
         if survey_based:
