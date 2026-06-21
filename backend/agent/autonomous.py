@@ -176,12 +176,17 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
 
     if "hypothes" in lowered:
         return (
-            "Write the Research Hypotheses as a numbered list of null/alternative hypothesis pairs. "
-            "Format each pair as: "
+            "Write the Research Hypotheses. If this study is quantitative or mixed-methods and its "
+            "objectives genuinely test a relationship, effect, or difference between measurable "
+            "variables, write a numbered list of null/alternative hypothesis pairs, one pair per "
+            "such objective (typically 3–5 pairs). Format each pair as: "
             "N. H0: [null hypothesis — states no significant relationship/effect]. "
             "   H1: [alternative hypothesis — states a significant relationship/effect]. "
-            "Include 3–5 hypothesis pairs, each corresponding to a research objective. "
-            "Use formal statistical language."
+            "Use formal statistical language. "
+            "If the study is qualitative, purely descriptive, or exploratory — with no measurable "
+            "variables to correlate — do NOT force statistical H0/H1 pairs onto it. Instead write "
+            "numbered working propositions or guiding assumptions the study explores, phrased as "
+            "plain declarative statements tied to the actual objectives."
         )
 
     if "significance of the study" in lowered or "significance of study" in lowered or (
@@ -190,9 +195,14 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
         return (
             "Write the Significance of the Study in a structured format. "
             "Open with 1–2 paragraphs on the theoretical/academic contribution. "
-            "Then present practical significance using clearly labelled sub-headings or numbered points: "
-            "e.g., '1.5.1 Significance to the Researcher', '1.5.2 Significance to the Institution', "
-            "'1.5.3 Significance to the Organisation', '1.5.4 Significance to Policy'. "
+            "Then present practical significance using clearly labelled sub-headings or numbered "
+            "points — but choose the beneficiaries that genuinely apply to THIS study rather than "
+            "reusing the same four labels regardless of fit. Common options include 'Significance to "
+            "the Researcher', 'Significance to the Institution', 'Significance to the Organisation' "
+            "(only if the study is set within or studies a specific organisation/sector), "
+            "'Significance to Policy/Policymakers' (only if the findings plausibly inform policy), "
+            "'Significance to Practitioners', or 'Significance to Future Researchers'. Pick 3–4 "
+            "beneficiaries that make sense for this topic and drop any that would be a stretch. "
             "Each sub-section should be 2–4 sentences explaining who benefits and how. "
             "Write in formal academic prose within each sub-section."
         )
@@ -221,8 +231,10 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
 
     if "scope and delimitation" in lowered or lowered.endswith("scope") or "delimitation" in lowered:
         return (
-            "Write the Scope and Delimitations (200–300 words). "
-            "Cover: (1) the geographical scope, (2) the target population/participants, "
+            "Write the Scope and Delimitations (200–300 words). Cover whichever of these genuinely "
+            "apply to this study — skip any that don't fit rather than forcing them: "
+            "(1) the geographical scope, (2) the target population/participants (or unit of analysis "
+            "— e.g. documents, systems, datasets — for studies with no human subjects), "
             "(3) the time frame of the study, (4) the variables or concepts studied, and "
             "(5) what is deliberately excluded and why. "
             "Be specific and academic."
@@ -303,12 +315,16 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
 
     if "method" in lowered and "research" not in lowered and "data collection" not in lowered:
         return (
-            "Write the Methods section with full procedural clarity. "
-            "Cover: (1) study design and rationale, (2) participants/sample with inclusion criteria, "
-            "(3) data collection instruments (name them, describe them, justify them), "
-            "(4) data collection procedure (step-by-step), "
+            "Write the Methods section with full procedural clarity. Cover whichever of the "
+            "following genuinely apply — for a study with no human subjects (e.g. a build, "
+            "simulation, document/data analysis), replace 'participants' with the actual unit of "
+            "analysis (datasets, artefacts, systems, documents) rather than inventing participants: "
+            "(1) study design and rationale, (2) participants/sample with inclusion criteria, or the "
+            "materials/data sources used, "
+            "(3) data collection instruments or tools (name them, describe them, justify them), "
+            "(4) procedure (step-by-step), "
             "(5) data analysis approach (specific technique, software if used), "
-            "(6) ethical considerations. "
+            "(6) ethical considerations, where relevant. "
             "Use past tense for completed studies. Be precise enough for replication."
         )
 
@@ -1445,6 +1461,25 @@ def _extract_document_brief(
     )
 
 
+# Keyword set for _objectives_are_relational(). A correlation/regression apparatus only
+# makes sense when the study actually tests a relationship/effect between two or more
+# measurable constructs — a purely descriptive objective (the level/extent/status of one
+# thing) has nothing to correlate against and should not be forced into one.
+_RELATIONAL_OBJECTIVE_RE = re.compile(
+    r"\b(effect[s]? of|impact of|influence of|relationship between|relationship of|"
+    r"association between|correlat\w*|link between|predict\w*|determinant[s]? of|"
+    r"contribut\w* (?:of|to)|moderat\w*|mediat\w*|drivers? of|effect on|impact on|"
+    r"influence on)\b",
+    re.IGNORECASE,
+)
+
+
+def _objectives_are_relational(objectives: list[str]) -> bool:
+    """True if at least one objective genuinely tests a relationship/effect between
+    two or more constructs, rather than only describing the level/extent/status of one."""
+    return any(_RELATIONAL_OBJECTIVE_RE.search(o or "") for o in (objectives or []))
+
+
 def _chapter4_subsections(
     research_design: str,
     objectives: list[str],
@@ -1533,12 +1568,18 @@ def _chapter4_subsections(
         nodes.append(obj_node)
 
     last_idx = obj_start + len(objectives)
-    # Quantitative/mixed studies with at least two measurable dimensions get a real
-    # correlation + regression apparatus, not just a vague promise of one — earlier
-    # versions of the Discussion/Chapter-Summary fallback text claimed findings were
-    # "detailed in the correlation and regression tables presented in this chapter"
-    # when no such tables actually existed anywhere in the document.
-    if research_design in {"quantitative", "mixed"} and len(objectives) >= 2:
+    # Quantitative/mixed studies whose objectives genuinely test a relationship/effect
+    # between measurable constructs get a real correlation + regression apparatus, not
+    # just a vague promise of one — earlier versions of the Discussion/Chapter-Summary
+    # fallback text claimed findings were "detailed in the correlation and regression
+    # tables presented in this chapter" when no such tables actually existed anywhere in
+    # the document. A purely descriptive study (the level/extent/status of one thing)
+    # has nothing to correlate, so it should not be forced into this apparatus.
+    if (
+        research_design in {"quantitative", "mixed"}
+        and len(objectives) >= 2
+        and _objectives_are_relational(objectives)
+    ):
         nodes.append({
             "title": f"4.{last_idx} Correlation Analysis",
             "kind": "table",
@@ -1615,13 +1656,16 @@ def _plan_chapter4_structure(
         "titled like '4.X Descriptive Statistics of Study Variables' (table_type='descriptive_stats', "
         "has_table=true, has_chart=false), reporting Mean/SD/Min/Max for the constructs this study "
         "measures, before any of the per-objective results sections.\n"
-        "- If the research design is quantitative or mixed AND there are at least two research "
-        "objectives, add exactly two more sections after the objective sections and before the "
-        "discussion of findings: one titled like '4.X Correlation Analysis' (table_type='correlation', "
-        "has_table=true, has_chart=false) and one titled like '4.X+1 Regression Analysis' "
-        "(table_type='regression', has_table=true, has_chart=false). Never claim a correlation or "
-        "regression table exists in the discussion/summary text unless you have actually added one of "
-        "these two sections.\n"
+        "- If the research design is quantitative or mixed AND at least one research objective "
+        "genuinely tests a relationship, effect, or influence between two or more measurable "
+        "constructs (e.g. 'the effect of X on Y', 'the relationship between X and Y') — NOT a purely "
+        "descriptive objective like 'the level/extent/status/prevalence of X' — add exactly two more "
+        "sections after the objective sections and before the discussion of findings: one titled like "
+        "'4.X Correlation Analysis' (table_type='correlation', has_table=true, has_chart=false) and "
+        "one titled like '4.X+1 Regression Analysis' (table_type='regression', has_table=true, "
+        "has_chart=false). If every objective is purely descriptive, skip both sections entirely — do "
+        "not invent a relationship to test. Never claim a correlation or regression table exists in "
+        "the discussion/summary text unless you have actually added one of these two sections.\n"
         "- Use concise academic numbering (4.1, 4.2, ...).\n"
         "- Return ONLY the JSON object, no markdown fences."
     )
@@ -1633,6 +1677,7 @@ def _plan_chapter4_structure(
             raise ValueError("no sections returned for chapter 4 plan")
 
         needs_respondents = bool(data.get("needs_respondent_profile", has_respondents_hint))
+        allow_relational = _objectives_are_relational(objectives)
         nodes: list[dict[str, Any]] = []
         for sec in sections:
             if not isinstance(sec, dict):
@@ -1645,6 +1690,10 @@ def _plan_chapter4_structure(
 
             sec_objective = str(sec.get("objective") or "").strip()
             table_type = str(sec.get("table_type") or "").strip().lower()
+            if table_type in {"correlation", "regression"} and not allow_relational:
+                # The objectives are purely descriptive — no relationship/effect to test —
+                # so skip a correlation/regression section even if the LLM proposed one.
+                continue
             children: list[dict[str, Any]] = []
 
             if sec.get("has_table"):
@@ -4685,6 +4734,324 @@ _FALLBACK_PERSONAL_ELABORATIONS: tuple[str, ...] = (
 )
 
 
+def _seeded_pick(seed_text: str, options: tuple[str, ...]) -> str:
+    """Deterministically choose one of options based on seed_text.
+
+    Used so the highest-traffic deterministic fallback blocks (Background, Statement of
+    the Problem, Discussion, Conclusion, Recommendations) vary in opening hook and
+    paragraph structure across different topics/documents, rather than every document
+    rendering the exact same skeleton with only the topic name swapped in.
+    """
+    return options[sum(ord(c) for c in seed_text) % len(options)]
+
+
+# Background of the Study — multiple structurally distinct openings (trend-led,
+# gap-led, historical-arc) so the fallback doesn't read as one fixed skeleton.
+_BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "The rapid growth of {topic} has emerged as a defining trend, prompting both practitioners and researchers "
+        "to examine the mechanisms through which this development shapes institutional performance, governance structures, "
+        "and stakeholder outcomes. The background of this study situates the research problem within its broader "
+        "socioeconomic and technological context, drawing on contemporary evidence to justify the relevance and urgency "
+        "of the inquiry.\n\n"
+        "Globally, organisations operating in this domain have reported significant transformations in operational "
+        "efficiency, risk management, and client engagement, driven by advances in data analytics, artificial intelligence, "
+        "and digital infrastructure. However, empirical understanding remains uneven — many jurisdictions lack "
+        "context-specific evidence linking these developments to measurable performance outcomes. This gap is particularly "
+        "pronounced in emerging market environments, where institutional capacity, regulatory maturity, and digital "
+        "readiness vary substantially.\n\n"
+        "Against this backdrop, the present study addresses a clear research need: to generate systematic, primary "
+        "evidence on the nature, direction, and magnitude of outcomes attributable to the study domain. By anchoring "
+        "its findings in locally relevant data, the study contributes actionable insights that are transferable to "
+        "policy discourse, practitioner decision-making, and scholarly debate."
+    ),
+    (
+        "Although {topic} has attracted growing attention from researchers and practitioners alike, much of what informs "
+        "current practice rests on assumption, anecdote, or evidence drawn from markedly different settings. This study "
+        "begins from that gap: it situates the research problem within the specific socioeconomic and institutional "
+        "conditions of the present context, rather than extrapolating from generalised models.\n\n"
+        "Across the wider field, observers report meaningful shifts in how organisations manage performance, governance, "
+        "and stakeholder relationships, driven in large part by developments in data analytics, digital infrastructure, "
+        "and shifting regulatory expectations. Yet these shifts have not been matched by a comparable volume of "
+        "context-specific empirical work — a shortfall that is especially pronounced in emerging-market settings, where "
+        "institutional capacity and digital readiness differ markedly from the contexts most studies are drawn from.\n\n"
+        "It is this shortfall that the present study sets out to address, by generating primary evidence grounded in the "
+        "actual conditions of the study context rather than imported assumptions. In doing so, it aims to produce findings "
+        "that speak directly to policy discourse, practitioner decision-making, and the wider scholarly conversation on "
+        "{topic}."
+    ),
+    (
+        "The trajectory of {topic} over recent years illustrates how quickly practice in this area can outpace the "
+        "evidence base meant to guide it. What began as a relatively narrow concern has, over a comparatively short "
+        "period, become a central preoccupation for institutions seeking to remain competitive, compliant, and "
+        "responsive to stakeholder expectations.\n\n"
+        "This evolution has not been uniform. Some organisations have moved decisively to embed new practices into their "
+        "operating models, while others continue to grapple with constraints of capacity, governance, or readiness that "
+        "slow adoption. The resulting variation is precisely the kind of pattern that warrants systematic empirical "
+        "investigation rather than broad generalisation from a handful of visible cases.\n\n"
+        "The present study responds to this need directly. By collecting and analysing primary data from within the "
+        "specific context under investigation, it aims to clarify how, and under what conditions, {topic} translates into "
+        "measurable outcomes — generating evidence that is transferable to policy discourse, practitioner decision-making, "
+        "and ongoing scholarly debate."
+    ),
+)
+
+_BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "Interest in {topic} has grown substantially as advances in sensing, computation, and materials have made "
+        "increasingly capable systems practical to design, build, and evaluate. The background of this study situates "
+        "the research problem within this broader technical trajectory, drawing on prior engineering work and "
+        "established design principles to justify the relevance and timing of the present effort.\n\n"
+        "Across the field, developers have reported steady gains in performance, reliability, and efficiency, "
+        "driven by improvements in component technology, control algorithms, and testing methodology. However, "
+        "published evaluations vary widely in rigor and scope — many implementations are demonstrated under "
+        "narrow conditions without systematic performance testing across realistic operating scenarios. This gap "
+        "is particularly evident where cost, complexity, or environmental variability constrain what a thorough "
+        "evaluation can practically cover.\n\n"
+        "Against this backdrop, the present study addresses a clear technical need: to design, implement, and "
+        "rigorously evaluate a solution for the problem at hand, generating measurable evidence of its performance "
+        "under defined test conditions. By documenting its design choices and test results in detail, the study "
+        "contributes findings that are transferable to further development, comparative benchmarking, and practical "
+        "deployment decisions."
+    ),
+    (
+        "Although {topic} sits at the intersection of several fast-moving technical fields, much of the published work "
+        "describing similar systems stops short of a rigorous, repeatable performance evaluation. This study begins from "
+        "that gap: rather than assuming a design will perform adequately because comparable designs have been reported "
+        "elsewhere, it commits to building and testing one under clearly defined conditions.\n\n"
+        "Across the wider field, practitioners report steady improvements in component capability, control sophistication, "
+        "and overall system reliability, driven by advances that have made previously impractical designs newly feasible. "
+        "Yet detailed, reproducible performance data describing exactly how these gains are achieved — and under what "
+        "conditions they hold — remains comparatively scarce, particularly for designs built under realistic resource "
+        "constraints rather than in a fully equipped research laboratory.\n\n"
+        "It is this shortfall that the present study sets out to address, by producing a working implementation together "
+        "with a transparent, structured record of its test performance. In doing so, it aims to generate findings that are "
+        "directly transferable to further development, benchmarking, and practical deployment decisions."
+    ),
+    (
+        "The development of systems addressing {topic} has accelerated noticeably as advances in sensing, computation, "
+        "and materials have lowered the practical barriers to building increasingly capable designs. What was once "
+        "feasible only with specialised laboratory equipment is now within reach of a much wider range of developers and "
+        "researchers.\n\n"
+        "This broadening of access has not been matched by an equivalent broadening of rigorous evaluation practice. Many "
+        "reported implementations describe a single successful demonstration rather than systematic testing across the "
+        "range of conditions a design is likely to encounter in practice, making it difficult to compare designs fairly "
+        "or to anticipate where a given approach is likely to fail.\n\n"
+        "The present study responds to this gap directly, committing to a design-and-test approach that documents not "
+        "only what was built but precisely how it performed, under what conditions, and against what baseline. The "
+        "resulting evidence is intended to be transferable to further development, comparative benchmarking, and "
+        "practical deployment decisions."
+    ),
+)
+
+# Statement of the Problem — varied framing (gap-led, cost-of-inaction-led, evidence-thinness-led).
+_PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "Despite growing interest in {topic}, a critical gap persists in the empirical literature: there is insufficient "
+        "context-specific evidence to explain how and under what conditions the key variables produce observed outcomes. "
+        "Existing studies tend to rely on generalised frameworks that do not adequately capture the institutional "
+        "and environmental specificity of the research context.\n\n"
+        "This limitation has practical consequences — policymakers and practitioners operate with incomplete evidence, "
+        "increasing the risk of misaligned interventions and suboptimal resource allocation. The problem, therefore, "
+        "is not merely theoretical; it carries direct implications for how institutions design, implement, and evaluate "
+        "strategies within this domain. This study is designed to address that gap directly by generating primary, "
+        "context-grounded evidence on the relationships central to the research."
+    ),
+    (
+        "A central difficulty facing researchers and practitioners working on {topic} is the scarcity of evidence that is "
+        "both rigorous and specific to the context in which decisions actually have to be made. Much of the available "
+        "literature draws on settings, samples, or institutional arrangements that differ materially from the present "
+        "context, leaving a gap between what is generally known and what is actually true here.\n\n"
+        "That gap is not merely an academic inconvenience. Where decision-makers lack context-specific evidence, they are "
+        "left to rely on assumption, precedent, or evidence imported from elsewhere — any of which can lead to "
+        "interventions that are poorly matched to local conditions, with resources allocated on a weaker evidential "
+        "footing than the stakes would warrant. This study is designed to close that gap by generating primary, "
+        "context-grounded evidence on the relationships central to the research."
+    ),
+    (
+        "{topic} continues to attract considerable attention, yet the evidence base available to those who must act on "
+        "it remains thinner than the level of interest would suggest. Existing studies frequently rely on frameworks "
+        "developed elsewhere and applied to this setting without adequate adaptation, raising legitimate questions about "
+        "how well their conclusions actually transfer.\n\n"
+        "Left unaddressed, this evidentiary gap carries real costs: institutions and practitioners continue to make "
+        "resourcing and strategic decisions without a clear, locally grounded understanding of how the relevant variables "
+        "actually interact in this context, increasing the likelihood that well-intentioned interventions miss their "
+        "mark. This study addresses that gap directly, generating primary, context-specific evidence rather than relying "
+        "on inference from settings that may not be comparable."
+    ),
+)
+
+_PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "Despite growing interest in {topic}, a practical gap persists: many existing implementations are described "
+        "without a clearly documented design rationale or a rigorous, repeatable evaluation against defined performance "
+        "criteria. Reported results are often anecdotal or limited to a single demonstration run rather than systematic "
+        "testing across varied operating conditions.\n\n"
+        "This limitation has real consequences — developers and adopters operate with incomplete evidence about how a "
+        "given design performs outside the specific conditions under which it was first demonstrated, increasing the "
+        "risk of unreliable behaviour when deployed more broadly. The problem, therefore, is not merely academic; it "
+        "carries direct implications for how such systems should be designed, tested, and refined. This study is "
+        "designed to address that gap directly by producing a working implementation and subjecting it to structured, "
+        "repeatable performance testing."
+    ),
+    (
+        "A recurring difficulty in published work related to {topic} is that designs are frequently described without a "
+        "clearly documented rationale for the choices made, or without test results detailed enough to support a fair "
+        "comparison against alternative approaches. A single successful demonstration is often presented as sufficient "
+        "evidence of a design's merit.\n\n"
+        "That gap matters in practice. Developers and adopters working from such reports are left to estimate how a "
+        "design will behave outside the narrow conditions under which it was first shown to work, increasing the risk "
+        "that a design judged adequate in one context performs unreliably in another. This study addresses that gap "
+        "directly, producing a working implementation together with a structured, repeatable evaluation against clearly "
+        "defined performance criteria."
+    ),
+    (
+        "Despite the volume of work published on systems related to {topic}, comparatively little of it offers a level "
+        "of testing detail sufficient to support confident replication or fair comparison. Reported figures are often "
+        "presented without the operating conditions, tolerances, or trial counts needed to interpret them rigorously.\n\n"
+        "The practical cost of this gap falls on exactly the people best placed to build on existing work: developers and "
+        "researchers attempting to extend or compare designs are forced to re-derive baseline performance from scratch, "
+        "slowing progress across the field. This study is designed to close that gap by subjecting a working "
+        "implementation to systematic, clearly documented testing against defined performance criteria."
+    ),
+)
+
+# Discussion of Findings (Chapter 4) — varied closing framing while keeping the same
+# evidentiary content (consistency with the literature, plausible source of deviation).
+_DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "The findings are broadly consistent with the theoretical propositions advanced in the literature review. "
+        "The observed relationships between the study variables confirm that {topic} is a multidimensional phenomenon shaped by "
+        "institutional capacity, governance quality, and contextual readiness.\n\n"
+        "Where deviations from prior research are observed, these may be attributed to sector-specific characteristics or differences "
+        "in measurement approach. In particular, the relatively stronger effect sizes recorded in this study compared to earlier work "
+        "may reflect the more advanced stage of adoption within the sampled organisations, or the more targeted sampling frame employed."
+    ),
+    (
+        "On the whole, the pattern of results aligns with what the literature reviewed in Chapter 2 would lead one to "
+        "expect, lending support to the conceptual framework that guided the analysis. {topic} emerges from this evidence "
+        "as a multidimensional phenomenon — one in which institutional capacity, governance quality, and contextual "
+        "readiness interact rather than operate independently.\n\n"
+        "Where the present results diverge from earlier work, the most plausible explanation lies in features specific "
+        "to this study's context: the particular stage of adoption reached within the sampled organisations, or "
+        "differences in how key constructs were measured relative to prior studies. These are differences of degree "
+        "rather than of kind, and they do not undermine the overall pattern so much as refine it."
+    ),
+)
+
+_DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "The findings are broadly consistent with the design expectations established in the literature review. "
+        "The observed performance characteristics confirm that {topic} is a multidimensional engineering problem shaped by "
+        "component selection, control strategy, and the range of operating conditions under which the system is tested.\n\n"
+        "Where deviations from prior implementations are observed, these may be attributed to differences in hardware "
+        "specification, test environment, or measurement methodology. In particular, the relatively stronger performance "
+        "recorded in this study compared to earlier work may reflect refinements made during iterative testing, or the use "
+        "of a more tightly controlled set of trial conditions."
+    ),
+    (
+        "On the whole, the observed performance pattern aligns with what the design rationale set out in Chapter 3 would "
+        "lead one to expect. {topic} emerges from this evidence as a multidimensional engineering problem — one in which "
+        "component selection, control strategy, and operating-condition range interact rather than operate independently.\n\n"
+        "Where the present results diverge from earlier implementations, the most plausible explanation lies in features "
+        "specific to this study's test setup: refinements introduced during iterative testing, or a more tightly "
+        "controlled set of trial conditions than comparable prior work. These are differences of degree rather than of "
+        "kind, and they do not undermine the overall pattern so much as refine it."
+    ),
+)
+
+# Conclusion (Chapter 5) — varied opening framing while preserving the evidentiary claim.
+_CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "Based on the empirical evidence presented, the study concludes that {topic} represents a significant and measurable influence "
+        "on the outcomes under investigation. The data confirm that well-governed, adequately resourced environments yield substantially "
+        "stronger results than those characterised by implementation gaps or resource constraints.\n\n"
+        "The study's conclusions are grounded in primary evidence and corroborated by the existing literature, lending confidence to "
+        "the interpretation that targeted investment in institutional capacity and process design is essential for maximising value."
+    ),
+    (
+        "Taken as a whole, the evidence gathered in this study supports the conclusion that {topic} exerts a measurable "
+        "and consistent influence on the outcomes under investigation. Where institutional environments are well governed "
+        "and adequately resourced, the results obtained are markedly stronger than in settings marked by implementation "
+        "gaps or constrained resources.\n\n"
+        "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, the wider "
+        "body of literature reviewed earlier in the dissertation. Together, they support the view that deliberate "
+        "investment in institutional capacity and process design is a precondition for realising the full value available "
+        "in this domain."
+    ),
+)
+
+_CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "Based on the test evidence presented, the study concludes that {topic} can be addressed by a design that delivers measurable, "
+        "repeatable performance under the evaluated conditions. The data confirm that careful component selection, calibration, and "
+        "control-strategy tuning yield substantially stronger and more consistent results than a naive or untuned implementation.\n\n"
+        "The study's conclusions are grounded in primary test data and corroborated by comparable work in the literature, lending "
+        "confidence to the interpretation that targeted attention to design detail and systematic testing is essential for achieving "
+        "reliable system performance."
+    ),
+    (
+        "Taken as a whole, the test evidence gathered in this study supports the conclusion that {topic} can be addressed "
+        "through a design capable of measurable, repeatable performance under the conditions evaluated. Where component "
+        "selection, calibration, and control-strategy tuning receive deliberate attention, the results obtained are "
+        "markedly stronger and more consistent than those of a naive or untuned implementation.\n\n"
+        "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, comparable "
+        "work reviewed earlier in the dissertation. Together, they support the view that careful attention to design "
+        "detail and systematic testing is a precondition for achieving reliable system performance."
+    ),
+)
+
+# Recommendations (Chapter 5) — varied list framing/wording while keeping the same four
+# recommendation slots (capacity, governance/strategy, regulatory/practice, future research).
+_RECOMMENDATION_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "Based on the findings, the following recommendations are offered to practitioners, policymakers, and future researchers:\n\n"
+        "1. Organisations should invest in structured capacity-building programmes to strengthen readiness for technology adoption.\n"
+        "2. Governance frameworks should be reviewed to ensure alignment between strategic objectives and implementation mechanisms.\n"
+        "3. Policymakers should develop enabling regulatory environments that incentivise responsible innovation while managing systemic risk.\n"
+        "4. Future research should employ longitudinal designs to track outcome trajectories over time and across different institutional contexts."
+    ),
+    (
+        "The evidence generated by this study points toward several concrete actions for practitioners, policymakers, and "
+        "future researchers:\n\n"
+        "1. Institutional leaders should prioritise structured capacity-building initiatives that directly target the "
+        "readiness gaps identified in this study's findings.\n"
+        "2. Existing governance frameworks should be reassessed to close the gap between stated strategic objectives and "
+        "the mechanisms actually used to implement them.\n"
+        "3. Regulators and policymakers should work toward enabling frameworks that reward responsible innovation without "
+        "losing sight of systemic risk.\n"
+        "4. Subsequent research should adopt longitudinal designs capable of tracking how these outcomes evolve over time "
+        "and across differing institutional contexts."
+    ),
+)
+
+_RECOMMENDATION_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "Based on the findings, the following recommendations are offered to developers, students, and future researchers:\n\n"
+        "1. Future builds should invest in higher-precision components or additional calibration where the current design shows the "
+        "greatest performance variance.\n"
+        "2. The control strategy should be reviewed periodically to ensure it remains well matched to the operating conditions encountered "
+        "in deployment.\n"
+        "3. Developers should document test protocols and raw performance data in detail to support reproducibility and comparison "
+        "with future designs.\n"
+        "4. Future work should evaluate the system across a wider range of operating conditions and over longer continuous-operation "
+        "periods to assess long-term reliability."
+    ),
+    (
+        "The test evidence generated by this study points toward several concrete actions for developers, students, and "
+        "future researchers:\n\n"
+        "1. Subsequent builds should prioritise higher-precision components or additional calibration in exactly the "
+        "areas where this design showed the greatest performance variance.\n"
+        "2. The control strategy should be revisited periodically to confirm it remains well matched as operating "
+        "conditions change.\n"
+        "3. Developers should record test protocols and raw performance data in enough detail to support independent "
+        "reproduction and fair comparison with future designs.\n"
+        "4. Future work should extend testing to a wider range of operating conditions and longer continuous-operation "
+        "periods to establish long-term reliability."
+    ),
+)
+
+
 def _expand_fallback_text(
     body: str,
     topic: str,
@@ -4943,67 +5310,12 @@ def _fallback_subsection_body(
 
     # ── Chapter 1 Introduction subsections ─────────────────────────────────
     if "background" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
-        if survey_based:
-            return (
-                f"The rapid growth of {topic} has emerged as a defining trend, prompting both practitioners and researchers "
-                "to examine the mechanisms through which this development shapes institutional performance, governance structures, "
-                "and stakeholder outcomes. The background of this study situates the research problem within its broader "
-                "socioeconomic and technological context, drawing on contemporary evidence to justify the relevance and urgency "
-                "of the inquiry.\n\n"
-                "Globally, organisations operating in this domain have reported significant transformations in operational "
-                "efficiency, risk management, and client engagement, driven by advances in data analytics, artificial intelligence, "
-                "and digital infrastructure. However, empirical understanding remains uneven — many jurisdictions lack "
-                "context-specific evidence linking these developments to measurable performance outcomes. This gap is particularly "
-                "pronounced in emerging market environments, where institutional capacity, regulatory maturity, and digital "
-                "readiness vary substantially.\n\n"
-                "Against this backdrop, the present study addresses a clear research need: to generate systematic, primary "
-                "evidence on the nature, direction, and magnitude of outcomes attributable to the study domain. By anchoring "
-                "its findings in locally relevant data, the study contributes actionable insights that are transferable to "
-                "policy discourse, practitioner decision-making, and scholarly debate."
-            )
-        return (
-            f"Interest in {topic} has grown substantially as advances in sensing, computation, and materials have made "
-            "increasingly capable systems practical to design, build, and evaluate. The background of this study situates "
-            "the research problem within this broader technical trajectory, drawing on prior engineering work and "
-            "established design principles to justify the relevance and timing of the present effort.\n\n"
-            "Across the field, developers have reported steady gains in performance, reliability, and efficiency, "
-            "driven by improvements in component technology, control algorithms, and testing methodology. However, "
-            "published evaluations vary widely in rigor and scope — many implementations are demonstrated under "
-            "narrow conditions without systematic performance testing across realistic operating scenarios. This gap "
-            "is particularly evident where cost, complexity, or environmental variability constrain what a thorough "
-            "evaluation can practically cover.\n\n"
-            "Against this backdrop, the present study addresses a clear technical need: to design, implement, and "
-            "rigorously evaluate a solution for the problem at hand, generating measurable evidence of its performance "
-            "under defined test conditions. By documenting its design choices and test results in detail, the study "
-            "contributes findings that are transferable to further development, comparative benchmarking, and practical "
-            "deployment decisions."
-        )
+        pool = _BACKGROUND_VARIANTS_SURVEY if survey_based else _BACKGROUND_VARIANTS_TECHNICAL
+        return _seeded_pick(topic, pool).format(topic=topic)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
-        if survey_based:
-            return (
-                f"Despite growing interest in {topic}, a critical gap persists in the empirical literature: there is insufficient "
-                "context-specific evidence to explain how and under what conditions the key variables produce observed outcomes. "
-                "Existing studies tend to rely on generalised frameworks that do not adequately capture the institutional "
-                "and environmental specificity of the research context.\n\n"
-                "This limitation has practical consequences — policymakers and practitioners operate with incomplete evidence, "
-                "increasing the risk of misaligned interventions and suboptimal resource allocation. The problem, therefore, "
-                "is not merely theoretical; it carries direct implications for how institutions design, implement, and evaluate "
-                "strategies within this domain. This study is designed to address that gap directly by generating primary, "
-                "context-grounded evidence on the relationships central to the research."
-            )
-        return (
-            f"Despite growing interest in {topic}, a practical gap persists: many existing implementations are described "
-            "without a clearly documented design rationale or a rigorous, repeatable evaluation against defined performance "
-            "criteria. Reported results are often anecdotal or limited to a single demonstration run rather than systematic "
-            "testing across varied operating conditions.\n\n"
-            "This limitation has real consequences — developers and adopters operate with incomplete evidence about how a "
-            "given design performs outside the specific conditions under which it was first demonstrated, increasing the "
-            "risk of unreliable behaviour when deployed more broadly. The problem, therefore, is not merely academic; it "
-            "carries direct implications for how such systems should be designed, tested, and refined. This study is "
-            "designed to address that gap directly by producing a working implementation and subjecting it to structured, "
-            "repeatable performance testing."
-        )
+        pool = _PROBLEM_VARIANTS_SURVEY if survey_based else _PROBLEM_VARIANTS_TECHNICAL
+        return _seeded_pick(f"{topic}|problem", pool).format(topic=topic)
 
     if "significance" in sub_lower:
         if survey_based:
@@ -5583,7 +5895,7 @@ def _fallback_subsection_body(
                 "The presentation follows a structured sequence: descriptive statistics are reported first, followed by inferential analysis, "
                 "and then an integrated discussion that contextualises each major finding within the existing body of knowledge."
             )
-        if "presentation" in sub_lower or "finding" in sub_lower:
+        if ("presentation" in sub_lower or "finding" in sub_lower) and "discussion" not in sub_lower:
             if survey_based and is_qualitative:
                 return (
                     f"Thematic analysis of the interview data reveals several recurring patterns relating to {topic}. "
@@ -5650,24 +5962,8 @@ def _fallback_subsection_body(
                 "These results provide empirical support for the design choices outlined in Chapter 3."
             )
         if "discussion" in sub_lower:
-            if survey_based:
-                return (
-                    "The findings are broadly consistent with the theoretical propositions advanced in the literature review. "
-                    f"The observed relationships between the study variables confirm that {topic} is a multidimensional phenomenon shaped by "
-                    "institutional capacity, governance quality, and contextual readiness.\n\n"
-                    "Where deviations from prior research are observed, these may be attributed to sector-specific characteristics or differences "
-                    "in measurement approach. In particular, the relatively stronger effect sizes recorded in this study compared to earlier work "
-                    "may reflect the more advanced stage of adoption within the sampled organisations, or the more targeted sampling frame employed."
-                )
-            return (
-                "The findings are broadly consistent with the design expectations established in the literature review. "
-                f"The observed performance characteristics confirm that {topic} is a multidimensional engineering problem shaped by "
-                "component selection, control strategy, and the range of operating conditions under which the system is tested.\n\n"
-                "Where deviations from prior implementations are observed, these may be attributed to differences in hardware "
-                "specification, test environment, or measurement methodology. In particular, the relatively stronger performance "
-                "recorded in this study compared to earlier work may reflect refinements made during iterative testing, or the use "
-                "of a more tightly controlled set of trial conditions."
-            )
+            pool = _DISCUSSION_VARIANTS_SURVEY if survey_based else _DISCUSSION_VARIANTS_TECHNICAL
+            return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic)
         if survey_based:
             return (
                 "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends and areas of divergence across indicators. "
@@ -5717,42 +6013,11 @@ def _fallback_subsection_body(
                 "advanced in the design framework presented in Chapter 3."
             )
         if "conclusion" in sub_lower:
-            if survey_based:
-                return (
-                    f"Based on the empirical evidence presented, the study concludes that {topic} represents a significant and measurable influence "
-                    "on the outcomes under investigation. The data confirm that well-governed, adequately resourced environments yield substantially "
-                    "stronger results than those characterised by implementation gaps or resource constraints.\n\n"
-                    "The study's conclusions are grounded in primary evidence and corroborated by the existing literature, lending confidence to "
-                    "the interpretation that targeted investment in institutional capacity and process design is essential for maximising value."
-                )
-            return (
-                f"Based on the test evidence presented, the study concludes that {topic} can be addressed by a design that delivers measurable, "
-                "repeatable performance under the evaluated conditions. The data confirm that careful component selection, calibration, and "
-                "control-strategy tuning yield substantially stronger and more consistent results than a naive or untuned implementation.\n\n"
-                "The study's conclusions are grounded in primary test data and corroborated by comparable work in the literature, lending "
-                "confidence to the interpretation that targeted attention to design detail and systematic testing is essential for achieving "
-                "reliable system performance."
-            )
+            pool = _CONCLUSION_VARIANTS_SURVEY if survey_based else _CONCLUSION_VARIANTS_TECHNICAL
+            return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic)
         if "recommendation" in sub_lower:
-            if survey_based:
-                return (
-                    "Based on the findings, the following recommendations are offered to practitioners, policymakers, and future researchers:\n\n"
-                    "1. Organisations should invest in structured capacity-building programmes to strengthen readiness for technology adoption.\n"
-                    "2. Governance frameworks should be reviewed to ensure alignment between strategic objectives and implementation mechanisms.\n"
-                    "3. Policymakers should develop enabling regulatory environments that incentivise responsible innovation while managing systemic risk.\n"
-                    "4. Future research should employ longitudinal designs to track outcome trajectories over time and across different institutional contexts."
-                )
-            return (
-                "Based on the findings, the following recommendations are offered to developers, students, and future researchers:\n\n"
-                "1. Future builds should invest in higher-precision components or additional calibration where the current design shows the "
-                "greatest performance variance.\n"
-                "2. The control strategy should be reviewed periodically to ensure it remains well matched to the operating conditions encountered "
-                "in deployment.\n"
-                "3. Developers should document test protocols and raw performance data in detail to support reproducibility and comparison "
-                "with future designs.\n"
-                "4. Future work should evaluate the system across a wider range of operating conditions and over longer continuous-operation "
-                "periods to assess long-term reliability."
-            )
+            pool = _RECOMMENDATION_VARIANTS_SURVEY if survey_based else _RECOMMENDATION_VARIANTS_TECHNICAL
+            return _seeded_pick(f"{topic}|recommendation", pool).format(topic=topic)
         if "limitation" in sub_lower:
             if survey_based:
                 return (
