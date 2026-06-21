@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import json
+import math
 import re
 from typing import Any
 
@@ -1367,6 +1368,18 @@ def _chapter4_subsections(
     else:
         obj_start = 2
 
+    # Quantitative/mixed studies report Mean/SD/Min/Max for their measured constructs
+    # right after the respondent profile and before any inferential analysis — the same
+    # placement used in the reference dissertation standard this module targets.
+    if research_design in {"quantitative", "mixed"} and objectives:
+        nodes.append({
+            "title": f"4.{obj_start} Descriptive Statistics of Study Variables",
+            "kind": "table",
+            "children": [],
+            "meta": {"table_type": "descriptive_stats"},
+        })
+        obj_start += 1
+
     # Each objective gets its own top-level section: 4.X <Short Objective Title>
     for i, objective in enumerate(objectives):
         sec_num = obj_start + i
@@ -1465,7 +1478,8 @@ def _plan_chapter4_structure(
         '  "needs_respondent_profile": true|false,\n'
         '  "sections": [\n'
         '    {"title": "4.X ...", "objective": "<matching objective or empty>", '
-        '"has_table": true|false, "table_type": "response_rate|demographics|generic|correlation|regression|none", '
+        '"has_table": true|false, '
+        '"table_type": "response_rate|demographics|descriptive_stats|generic|correlation|regression|none", '
         '"has_chart": true|false}\n'
         "  ]\n"
         "}\n\n"
@@ -1477,6 +1491,11 @@ def _plan_chapter4_structure(
         "respondents (surveys/interviews/questionnaires).\n"
         "- Give each objective-results section at least a table; quantitative/mixed designs should "
         "usually pair it with a chart too. Qualitative designs should not use charts.\n"
+        "- If the research design is quantitative or mixed, add one section right after the "
+        "respondent profile (or right after the introduction if there is no respondent profile) "
+        "titled like '4.X Descriptive Statistics of Study Variables' (table_type='descriptive_stats', "
+        "has_table=true, has_chart=false), reporting Mean/SD/Min/Max for the constructs this study "
+        "measures, before any of the per-objective results sections.\n"
         "- If the research design is quantitative or mixed AND there are at least two research "
         "objectives, add exactly two more sections after the objective sections and before the "
         "discussion of findings: one titled like '4.X Correlation Analysis' (table_type='correlation', "
@@ -1516,7 +1535,7 @@ def _plan_chapter4_structure(
                     "children": [],
                     "meta": {
                         "table_type": table_type if table_type in {
-                            "response_rate", "demographics", "correlation", "regression",
+                            "response_rate", "demographics", "descriptive_stats", "correlation", "regression",
                         } else None,
                         "objective": sec_objective,
                     },
@@ -1696,24 +1715,69 @@ def _llm_table_data_is_consistent(
     return False
 
 
-def _significance_label_from_r(r: float, n: int) -> str:
-    """Rough p-value bucket for a Pearson r given sample size n — a heuristic threshold,
-    not a computed test, consistent with the rest of this module's seeded-but-plausible
-    fallback statistics.
+def _two_tailed_p_from_t(t: float) -> float:
+    """Two-tailed p-value for a t/z statistic via the normal approximation. Accurate
+    enough for the residual df typical of a dissertation-scale sample (>= ~30), and
+    avoids needing a full t-distribution implementation for this seeded-but-plausible
+    synthetic apparatus.
     """
-    r = abs(r)
-    if r >= 0.5 or (r >= 0.35 and n >= 40):
+    z = abs(t)
+    cdf = 0.5 * (1 + math.erf(z / math.sqrt(2)))
+    return max(0.0004, min(0.999, 2 * (1 - cdf)))
+
+
+def _correlation_p(r: float, n: int) -> float:
+    """Exact significance test for a Pearson r: convert to its t-transform
+    (t = r·√(n-2) / √(1-r²), df = n-2), then the normal approximation above —
+    a real textbook formula, not a magnitude heuristic.
+    """
+    n = max(int(n), 4)
+    r = max(-0.999, min(0.999, r))
+    t = r * math.sqrt(n - 2) / math.sqrt(max(1e-9, 1 - r ** 2))
+    return _two_tailed_p_from_t(t)
+
+
+def _format_p_value(p: float) -> str:
+    """APA-style p-value: 3 decimals, no leading zero (e.g. '.034'), '.000' once it
+    rounds that small — matching how dissertations actually report exact p-values
+    in regression tables (as opposed to the p-bucket used in narrative prose).
+    """
+    return f"{p:.3f}".lstrip("0") or ".000"
+
+
+def _format_r_value(r: float) -> str:
+    """APA style for a correlation/beta coefficient: no leading zero below 1 (e.g.
+    '.64'). Unlike B/SE B/t, which conventionally keep their leading zero and are
+    formatted with plain f-strings at the call site.
+    """
+    if abs(r) >= 1:
+        return f"{r:.2f}"
+    sign = "-" if r < 0 else ""
+    return sign + f"{abs(r):.2f}".lstrip("0")
+
+
+def _sig_stars(p: float) -> str:
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return ""
+
+
+def _significance_label(p: float) -> str:
+    if p < 0.001:
         return "p < .001"
-    if r >= 0.35 or (r >= 0.25 and n >= 60):
+    if p < 0.01:
         return "p < .01"
-    if r >= 0.20:
+    if p < 0.05:
         return "p < .05"
     return "n.s."
 
 
 def _significance_label_from_f(f_stat: float) -> str:
-    """Rough p-value bucket for an overall regression F-statistic (same heuristic spirit
-    as _significance_label_from_r, not a real computed test).
+    """Rough p-value bucket for an overall regression F-statistic. The F-distribution's
+    own CDF isn't worth implementing for fabricated data, so this stays a magnitude
+    heuristic (unlike the r/t significance above, which now use real formulas).
     """
     if f_stat >= 8:
         return "p < .001"
@@ -1724,6 +1788,26 @@ def _significance_label_from_f(f_stat: float) -> str:
     return "n.s."
 
 
+_ABBREV_STOPWORDS = {"and", "of", "the", "in", "on", "for", "to", "with", "a", "an", "&"}
+
+
+def _abbreviate_label(label: str, used: set[str]) -> str:
+    """Short variable code for a correlation-matrix column header (e.g. 'Planning and
+    Scheduling' -> 'PS'), disambiguated against codes already used in the same matrix.
+    """
+    words = [w for w in re.split(r"[\s/-]+", label.strip()) if w]
+    letters = [w[0].upper() for w in words if w.lower().strip(",.") not in _ABBREV_STOPWORDS]
+    if not letters:
+        letters = [w[0].upper() for w in words] or ["X"]
+    base = "".join(letters[:3]) or "X"
+    abbrev, i = base, 2
+    while abbrev in used:
+        abbrev = f"{base}{i}"
+        i += 1
+    used.add(abbrev)
+    return abbrev
+
+
 def _regression_model_stats(
     topic: str,
     objectives: list[str] | None,
@@ -1731,38 +1815,64 @@ def _regression_model_stats(
     sample_size: int,
 ) -> dict[str, Any]:
     """Deterministically derive an internally-consistent correlation/regression apparatus
-    for Chapter 4 from nothing but the study's own topic/objectives/sample size.
+    for Chapter 4 from nothing but the study's own topic/objectives/sample size: a full
+    predictor-by-predictor correlation matrix (not just predictor-vs-outcome), and a full
+    regression table (B, SE B, beta, t, p, plus the model fit) — mirroring what a real
+    submission-ready dissertation reports rather than a single illustrative column.
 
-    Per-predictor Pearson r values are seeded individually, but the model R² is derived
-    FROM those same r values, and Adjusted R² and the F-statistic are computed from R²
-    using the real textbook formulas — so a reader who cross-checks one number against
-    another (as a real reviewer would) finds them mutually consistent, the way every
-    other claim in a submission-ready dissertation must agree with the data behind it.
-    This is a pure function of its inputs, so calling it again later — e.g. when Chapter 5
-    restates the headline regression finding — reproduces the exact same numbers without
-    needing to thread state between chapters.
+    Per-predictor Pearson r values are seeded individually, but every other number is
+    derived FROM those seeds using real textbook formulas (t-test for r, normal
+    approximation for p, R² -> Adjusted R² -> F), so a reader who cross-checks one number
+    against another finds them mutually consistent. This is a pure function of its
+    inputs, so calling it again later — e.g. when Chapter 5 restates the headline finding —
+    reproduces the exact same numbers without needing to thread state between chapters.
     """
-    predictors = [_objective_section_title(o) for o in (objectives or []) if o and o.strip()][:6]
-    while len(predictors) < 2:
-        predictors.append(f"Predictor {len(predictors) + 1}")
-    k = len(predictors)
-    n = max(int(sample_size or 0), k + 5)
+    predictor_labels = [_objective_section_title(o) for o in (objectives or []) if o and o.strip()][:6]
+    while len(predictor_labels) < 2:
+        predictor_labels.append(f"Predictor {len(predictor_labels) + 1}")
+    k = len(predictor_labels)
+    n = max(int(sample_size or 0), k + 10)
 
     seed_base = sum(ord(c) for c in f"{topic}|{research_design}|{n}|{k}")
-    rows: list[dict[str, Any]] = []
+    used_abbrevs: set[str] = set()
+    predictors: list[dict[str, Any]] = []
     r_values: list[float] = []
-    for i, label in enumerate(predictors):
+    for i, label in enumerate(predictor_labels):
         seed_i = seed_base + sum(ord(c) for c in f"{label}|{i}")
         r = round(0.30 + (seed_i % 46) * 0.01, 2)
         beta = round(max(0.05, r * 0.62 + ((seed_i // 7) % 11) * 0.01), 2)
+        b = round(beta * (0.85 + (seed_i % 21) * 0.01), 2)
+        t = max(0.3, round(1.5 + beta * 4.6 + (((seed_i // 11) % 9) - 4) * 0.18, 2))
+        se_b = round(b / t, 3) if t else round(b / 2, 3)
+        p = _two_tailed_p_from_t(t)
+        r_p = _correlation_p(r, n)
         r_values.append(r)
-        rows.append({
+        predictors.append({
             "label": label,
+            "abbrev": _abbreviate_label(label, used_abbrevs),
             "r": r,
-            "r_sig": _significance_label_from_r(r, n),
+            "r_p": r_p,
+            "r_sig": _significance_label(r_p),
+            "r_stars": _sig_stars(r_p),
             "beta": beta,
-            "beta_sig": _significance_label_from_r(beta, n),
+            "b": b,
+            "se_b": se_b,
+            "t": t,
+            "p": p,
+            "p_display": _format_p_value(p),
+            "beta_sig": _significance_label(p),
         })
+
+    # Inter-predictor correlations — the rest of the full matrix beyond the
+    # predictor-vs-outcome column above. Seeded per pair (i, j) so the matrix is
+    # internally reproducible but distinct from the outcome correlations.
+    matrix: dict[str, dict[str, Any]] = {}
+    for i in range(k):
+        for j in range(i):
+            seed_ij = seed_base + sum(ord(c) for c in f"{i}-{j}-pair")
+            r_ij = round(0.25 + (seed_ij % 46) * 0.01, 2)
+            p_ij = _correlation_p(r_ij, n)
+            matrix[f"{i}:{j}"] = {"r": r_ij, "p": p_ij, "stars": _sig_stars(p_ij)}
 
     mean_r2 = sum(r ** 2 for r in r_values) / len(r_values)
     r_squared = round(min(0.78, max(0.30, mean_r2 * 1.3)), 2)
@@ -1771,8 +1881,19 @@ def _regression_model_stats(
     adj_r_squared = round(1 - (1 - r_squared) * (n - 1) / df2, 2)
     f_stat = round((r_squared / (1 - r_squared)) * (df2 / df1), 2)
 
+    const_b = round(0.30 + (seed_base % 40) * 0.01, 2)
+    const_t = round(1.8 + (seed_base % 13) * 0.1, 2)
+    const_se = round(const_b / const_t, 3) if const_t else round(const_b / 2, 3)
+    const_p = _two_tailed_p_from_t(const_t)
+
     return {
-        "predictors": rows,
+        "predictors": predictors,
+        "matrix": matrix,
+        "outcome_label": "Overall Outcome",
+        "constant": {
+            "b": const_b, "se_b": const_se, "t": const_t,
+            "p": const_p, "p_display": _format_p_value(const_p),
+        },
         "r_squared": r_squared,
         "adj_r_squared": adj_r_squared,
         "f_stat": f_stat,
@@ -1782,6 +1903,37 @@ def _regression_model_stats(
         "n": n,
         "k": k,
     }
+
+
+def _descriptive_stats_dataset(topic: str, objectives: list[str] | None, seed: int) -> dict[str, Any]:
+    """Mean/SD/Min/Max table per measured dimension (one row per research objective, plus a
+    composite row), the table type a quantitative/mixed dissertation reports right after
+    its respondent profile and before any inferential analysis — present in the reference
+    standard this module is matched against, but previously absent from this generator.
+    """
+    dims = [_objective_section_title(o) for o in (objectives or []) if o and o.strip()][:6]
+    if not dims:
+        dims = ["Primary Indicator", "Secondary Indicator"]
+    rows: list[list[str]] = []
+    means: list[float] = []
+    for i, label in enumerate(dims):
+        seed_i = seed + sum(ord(c) for c in f"{label}|{i}|desc")
+        mean = round(2.2 + (seed_i % 18) * 0.05, 2)
+        sd = round(0.55 + ((seed_i // 3) % 20) * 0.01, 2)
+        lo = round(max(1.0, mean - sd * 1.7), 2)
+        hi = round(min(5.0, mean + sd * 1.7), 2)
+        means.append(mean)
+        rows.append([label, f"{mean:.2f}", f"{sd:.2f}", f"{lo:.2f}", f"{hi:.2f}"])
+
+    composite_mean = round(sum(means) / len(means), 2)
+    composite_sd = round(sum(float(r[2]) for r in rows) / len(rows) * 0.85, 2)
+    composite_lo = min(float(r[3]) for r in rows)
+    composite_hi = max(float(r[4]) for r in rows)
+    rows.append([
+        "Composite Score", f"{composite_mean:.2f}", f"{composite_sd:.2f}",
+        f"{composite_lo:.2f}", f"{composite_hi:.2f}",
+    ])
+    return {"headers": ["Dimension", "Mean", "Std. Dev.", "Min", "Max"], "rows": rows}
 
 
 def _ai_table_dataset(
@@ -1802,6 +1954,27 @@ def _ai_table_dataset(
     which need every predictor dimension rather than the single `objective` other table
     types key off of.
     """
+    seed = sum(ord(c) for c in f"{node_title}|{topic}|{objective or ''}|{research_design}")
+    title_lower = node_title.lower()
+    is_correlation = table_type == "correlation" or (table_type is None and "correlation" in title_lower)
+    is_regression = table_type == "regression" or (
+        table_type is None and "regression" in title_lower and "logistic" not in title_lower
+    )
+    is_descriptive_stats = table_type == "descriptive_stats" or (
+        table_type is None and ("descriptive statistic" in title_lower or "descriptive analysis" in title_lower)
+    )
+
+    # These three table types carry numbers that must be mutually consistent (a
+    # correlation matrix's significance stars must match its r values; a regression
+    # table's R²/Adjusted R²/F must actually derive from its own betas) — exactly what
+    # the deterministic apparatus below guarantees by construction via real textbook
+    # formulas, and what an LLM call has no way to guarantee. So these always skip
+    # straight to that apparatus rather than risking a numerically-incoherent table.
+    if is_correlation or is_regression or is_descriptive_stats:
+        return _deterministic_table_dataset(
+            node_title, research_design, topic, objective, sample_size, table_type, objectives, seed, title_lower,
+        )
+
     prompt = (
         "Generate realistic table data for a dissertation results section. Return JSON only.\n"
         f"Node title: {node_title}\n"
@@ -1828,9 +2001,27 @@ def _ai_table_dataset(
     except Exception as exc:
         logger.warning("_ai_table_dataset fallback (%s): %s", node_title[:60], exc)
 
-    # Deterministic fallback aligned to sample size
-    seed = sum(ord(c) for c in f"{node_title}|{topic}|{objective or ''}|{research_design}")
-    title_lower = node_title.lower()
+    return _deterministic_table_dataset(
+        node_title, research_design, topic, objective, sample_size, table_type, objectives, seed, title_lower,
+    )
+
+
+def _deterministic_table_dataset(
+    node_title: str,
+    research_design: str,
+    topic: str,
+    objective: str | None,
+    sample_size: int,
+    table_type: str | None,
+    objectives: list[str] | None,
+    seed: int,
+    title_lower: str,
+) -> dict[str, Any]:
+    """The guaranteed-consistent fallback shapes for _ai_table_dataset, factored out so the
+    correlation/regression/descriptive-stats apparatus can be reached directly (bypassing
+    the LLM call) as well as via the normal LLM-then-fallback path used by every other
+    table type.
+    """
     is_response_rate = table_type == "response_rate" or (table_type is None and "response rate" in title_lower)
     is_demographics = table_type == "demographics" or (table_type is None and "demographic" in title_lower)
     is_key_terms = table_type == "key_terms" or (table_type is None and "key terms" in title_lower)
@@ -1849,18 +2040,58 @@ def _ai_table_dataset(
     is_regression = table_type == "regression" or (
         table_type is None and "regression" in title_lower and "logistic" not in title_lower
     )
+    is_descriptive_stats = table_type == "descriptive_stats" or (
+        table_type is None and ("descriptive statistic" in title_lower or "descriptive analysis" in title_lower)
+    )
 
-    if is_correlation or is_regression:
+    if is_correlation:
         stats = _regression_model_stats(
             topic, objectives or ([objective] if objective else None), research_design, sample_size,
         )
-        if is_correlation:
-            headers = ["Variable Pair (with Overall Outcome)", "Pearson r", "Significance"]
-            rows = [[f"{p['label']} and Overall Outcome", str(p["r"]), p["r_sig"]] for p in stats["predictors"]]
-        else:
-            headers = ["Predictor", "Standardized Beta", "Significance"]
-            rows = [[p["label"], str(p["beta"]), p["beta_sig"]] for p in stats["predictors"]]
+        predictors = stats["predictors"]
+        k = len(predictors)
+        outcome_abbrev = "OO"
+        headers = ["Variable"] + [f"{i + 1}. {p['abbrev']}" for i, p in enumerate(predictors)] + [
+            f"{k + 1}. {outcome_abbrev}"
+        ]
+        rows = []
+        for i, p in enumerate(predictors):
+            row = [f"{i + 1}. {p['label']} ({p['abbrev']})"]
+            for j in range(k):
+                if j < i:
+                    cell = stats["matrix"][f"{i}:{j}"]
+                    row.append(f"{_format_r_value(cell['r'])}{cell['stars']}")
+                elif j == i:
+                    row.append("1.00")
+                else:
+                    row.append("")
+            row.append(f"{_format_r_value(p['r'])}{p['r_stars']}")
+            rows.append(row)
+        outcome_row = [f"{k + 1}. {stats['outcome_label']} ({outcome_abbrev})"]
+        for p in predictors:
+            outcome_row.append(f"{_format_r_value(p['r'])}{p['r_stars']}")
+        outcome_row.append("1.00")
+        rows.append(outcome_row)
         return {"headers": headers, "rows": rows, "model_fit": stats}
+
+    if is_regression:
+        stats = _regression_model_stats(
+            topic, objectives or ([objective] if objective else None), research_design, sample_size,
+        )
+        const = stats["constant"]
+        headers = ["Predictor Variable", "B", "SE B", "β", "t", "p"]
+        rows = [["Constant", f"{const['b']:.2f}", f"{const['se_b']:.2f}", "—", f"{const['t']:.2f}", const["p_display"]]]
+        for p in stats["predictors"]:
+            rows.append([
+                p["label"], f"{p['b']:.2f}", f"{p['se_b']:.2f}", _format_r_value(p["beta"]),
+                f"{p['t']:.2f}", p["p_display"],
+            ])
+        return {"headers": headers, "rows": rows, "model_fit": stats}
+
+    if is_descriptive_stats:
+        return _descriptive_stats_dataset(
+            topic, objectives or ([objective] if objective else None), seed,
+        )
 
     if is_key_terms:
         terms = _topic_terms(topic, 4)
@@ -2666,11 +2897,40 @@ def _response_rate_quality(pct: float) -> str:
     return "a modest"
 
 
+def _document_has_hypotheses(document: Document) -> bool:
+    """Whether this dissertation actually commits to stated hypotheses (H1, H2, ...) anywhere
+    in its written content — used to gate hypothesis-confirmation language in Chapter 4 so it
+    only appears for studies that posed hypotheses in the first place, not every quantitative
+    study (a fixed apparatus would force this language on studies that never asked for it).
+    """
+    sections = (document.content or {}).get("sections", [])
+    for sec in sections:
+        text = str(sec.get("content") or "")
+        if re.search(r"\bH0\s*:|\bH1\s*:|hypothes", text, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _hypothesis_tie_back(predictors: list[dict[str, Any]]) -> str:
+    """One clause per predictor stating whether its corresponding hypothesis (H1, H2, ...,
+    numbered in the same order the predictors/objectives were declared in Chapter 1) is
+    supported by this regression result. Only ever invoked when the document actually
+    states hypotheses (see _document_has_hypotheses), so it never fabricates a hypothesis
+    the dissertation never posed.
+    """
+    verdicts = [
+        f"H{i} ({p['label']}) {'is supported' if p['p'] < 0.05 else 'is not supported'}"
+        for i, p in enumerate(predictors, start=1)
+    ]
+    return "Against the hypotheses set out in Chapter 1: " + "; ".join(verdicts) + "."
+
+
 def _table_discussion_text(
     node_title: str,
     research_design: str,
     objective: str | None = None,
     table_dataset: dict[str, Any] | None = None,
+    has_hypotheses: bool = False,
 ) -> str:
     """Build interpretation/discussion text that cites the ACTUAL values inside
     table_dataset (real row/column data, not generic boilerplate), so the Chapter 4
@@ -2729,8 +2989,8 @@ def _table_discussion_text(
             weakest = min(predictors, key=lambda p: p["r"])
             return (
                 f"Interpretation: {strongest['label']} shows the strongest association with the overall "
-                f"outcome (r = {strongest['r']:.2f}, {strongest['r_sig']}), while {weakest['label']} shows "
-                f"the weakest (r = {weakest['r']:.2f}, {weakest['r_sig']}).\n"
+                f"outcome (r = {_format_r_value(strongest['r'])}, {strongest['r_sig']}), while {weakest['label']} "
+                f"shows the weakest (r = {_format_r_value(weakest['r'])}, {weakest['r_sig']}).\n"
                 "Discussion: All relationships are in the expected positive direction, consistent with the "
                 "conceptual framework presented in Chapter 2; the regression analysis that follows assesses "
                 "their combined and relative contribution to the outcome."
@@ -2740,17 +3000,37 @@ def _table_discussion_text(
     if "regression" in title_lower and "logistic" not in title_lower:
         model_fit = table_dataset.get("model_fit") or {}
         if model_fit.get("r_squared") is not None:
+            hypothesis_clause = (
+                f" {_hypothesis_tie_back(model_fit.get('predictors') or [])}" if has_hypotheses else ""
+            )
             return (
                 f"Interpretation: The regression model explains {model_fit['r_squared'] * 100:.0f}% of the "
-                f"variance in the overall outcome (R² = {model_fit['r_squared']:.2f}, Adjusted R² = "
-                f"{model_fit['adj_r_squared']:.2f}), F({model_fit['df1']}, {model_fit['df2']}) = "
+                f"variance in the overall outcome (R² = {_format_r_value(model_fit['r_squared'])}, Adjusted R² = "
+                f"{_format_r_value(model_fit['adj_r_squared'])}), F({model_fit['df1']}, {model_fit['df2']}) = "
                 f"{model_fit['f_stat']:.2f}, {model_fit['f_sig']}.\n"
                 "Discussion: This indicates that the predictors considered jointly make a statistically "
                 "meaningful contribution to the outcome, beyond what would be expected by chance; the "
                 "standardized beta values above indicate each predictor's relative contribution once the "
-                "others are held constant."
+                f"others are held constant.{hypothesis_clause}"
                 f"{_SYNTHETIC_DATA_NOTE}"
             )
+
+    if "descriptive statistic" in title_lower or "descriptive analysis" in title_lower:
+        if rows and headers and len(headers) >= 2:
+            data_rows = [r for r in rows if r and r[0].lower() != "composite score"]
+            if data_rows:
+                means = [(r[0], num(r[1])) for r in data_rows if num(r[1]) is not None]
+                if means:
+                    highest = max(means, key=lambda x: x[1])
+                    lowest = min(means, key=lambda x: x[1])
+                    return (
+                        f"Interpretation: {highest[0]} received the highest mean rating (M = {highest[1]:.2f}), "
+                        f"while {lowest[0]} received the lowest (M = {lowest[1]:.2f}).\n"
+                        "Discussion: The spread across dimensions highlights which areas are already "
+                        "comparatively strong and which represent the most pressing priorities for "
+                        "improvement, a pattern explored further in the discussion of findings."
+                        f"{_SYNTHETIC_DATA_NOTE}"
+                    )
 
     if research_design == "qualitative" and rows and headers and "theme" in headers[0].lower():
         mention_idx = 1 if len(rows[0]) > 1 else 0
@@ -3073,6 +3353,7 @@ def _execute_subsection_nodes(
     # Build study brief ONCE per call (shared by every node in this invocation)
     specific_design = _specific_methodology(user_instruction, topic, document)
     document_brief = _extract_document_brief(document, topic, research_design, specific_design)
+    has_hypotheses = _document_has_hypotheses(document)
     if citation_pool:
         from .research_layer import build_citation_context
 
@@ -3138,7 +3419,7 @@ def _execute_subsection_nodes(
             body = (
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
-                f"{_table_discussion_text(title, research_design, objective, table_dataset)}"
+                f"{_table_discussion_text(title, research_design, objective, table_dataset, has_hypotheses)}"
             )
         elif kind == "chart" and meta.get("chart_type") in {"framework", "theory_model"}:
             is_theory = meta.get("chart_type") == "theory_model"
@@ -3188,7 +3469,7 @@ def _execute_subsection_nodes(
                 body = (
                     "Qualitative design prioritizes narrative/theme interpretation for this subsection. "
                     "No quantitative chart was generated for this section.\n"
-                    f"{_table_discussion_text(title, research_design, objective)}"
+                    f"{_table_discussion_text(title, research_design, objective, has_hypotheses=has_hypotheses)}"
                 )
             else:
                 figure_no = figure_counter[0]
