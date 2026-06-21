@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import json
 import math
+import random
 import re
 from typing import Any
 
@@ -4745,6 +4746,120 @@ def _seeded_pick(seed_text: str, options: tuple[str, ...]) -> str:
     return options[sum(ord(c) for c in seed_text) % len(options)]
 
 
+# ── Synthetic citation pool (deterministic fallback / offline mode) ─────────
+# When _retrieve_citation_pool() returns nothing (no network access to Crossref/arXiv/
+# PubMed/Semantic Scholar) and no LLM key is configured, the dissertation is written
+# entirely from the deterministic templates below. Real dissertations cite sources
+# throughout the Literature Review and discuss findings against the literature in
+# Chapters 1, 4 and 5 — so the deterministic path needs its own citation pool, used
+# consistently for both the in-text "(Author, Year)" citations woven into the prose
+# and the final References chapter, so the two always match each other.
+_CITATION_SURNAMES: tuple[str, ...] = (
+    "Adeyemi", "Brown", "Chen", "Diallo", "Edwards", "Fernandez", "Garcia", "Hassan",
+    "Ibrahim", "Johansson", "Kumar", "Lindqvist", "Mensah", "Nguyen", "Okafor", "Patel",
+    "Quresh", "Rossi", "Santos", "Tanaka", "Umeh", "Varga", "Wang", "Yilmaz", "Zhao",
+)
+
+_CITATION_TITLE_TEMPLATES: tuple[str, ...] = (
+    "a review of {topic}",
+    "examining the determinants of {topic}",
+    "methodological approaches to studying {topic}",
+    "theoretical foundations of {topic}",
+    "contemporary perspectives on {topic}",
+    "{topic}: a systematic review",
+    "evaluating outcomes associated with {topic}",
+    "{topic} and organisational performance: an empirical study",
+    "towards a framework for understanding {topic}",
+    "{topic} in comparative perspective",
+)
+
+
+def _build_synthetic_citation_pool(topic: str, field_label: str, n: int = 14) -> list[dict[str, Any]]:
+    """Deterministic, topic-seeded set of plausible-looking (but fictitious) sources.
+
+    Same topic always yields the same pool, so in-text citations and the References
+    chapter stay consistent with each other across the whole document, even though
+    each subsection is generated independently and statelessly.
+    """
+    rng = random.Random(f"citation-pool|{topic}")
+    venues = (
+        f"Journal of {field_label} Research",
+        f"International Journal of {field_label} Studies",
+        f"{field_label} Quarterly",
+        f"Journal of Applied {field_label}",
+        f"Annual Review of {field_label}",
+        f"{field_label} Policy and Practice",
+        f"Journal of Contemporary {field_label}",
+    )
+    used: set[tuple[str, ...]] = set()
+    pool: list[dict[str, Any]] = []
+    for _ in range(n):
+        surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
+        attempts = 0
+        while surnames in used and attempts < 10:
+            surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
+            attempts += 1
+        used.add(surnames)
+        initials = ["".join(rng.sample("ABCDEFGHJKLMNPQRSTUVWXYZ", k=rng.choice([1, 2]))) for _ in surnames]
+        year = rng.randint(2015, 2024)
+        title = rng.choice(_CITATION_TITLE_TEMPLATES).format(topic=topic)
+        pages_start = rng.randint(1, 210)
+        pool.append({
+            "surnames": surnames,
+            "initials": initials,
+            "year": year,
+            "title": title[:1].upper() + title[1:],
+            "venue": rng.choice(venues),
+            "volume": rng.randint(4, 22),
+            "issue": rng.randint(1, 4),
+            "pages": f"{pages_start}-{pages_start + rng.randint(8, 26)}",
+        })
+    return pool
+
+
+def _citation_paren(entry: dict[str, Any]) -> str:
+    """'(Surname, Year)' or '(Surname1 & Surname2, Year)' parenthetical in-text citation."""
+    surnames = entry["surnames"]
+    if len(surnames) == 1:
+        return f"({surnames[0]}, {entry['year']})"
+    return f"({surnames[0]} & {surnames[1]}, {entry['year']})"
+
+
+def _citation_narrative(entry: dict[str, Any]) -> str:
+    """'Surname (Year)' or 'Surname1 and Surname2 (Year)' narrative in-text citation."""
+    surnames = entry["surnames"]
+    if len(surnames) == 1:
+        return f"{surnames[0]} ({entry['year']})"
+    return f"{surnames[0]} and {surnames[1]} ({entry['year']})"
+
+
+def _citation_apa_entry(entry: dict[str, Any]) -> str:
+    names = []
+    for surname, initials in zip(entry["surnames"], entry["initials"]):
+        names.append(f"{surname}, {'. '.join(initials)}.")
+    author_str = names[0] if len(names) == 1 else " & ".join(names)
+    return (
+        f"{author_str} ({entry['year']}). {entry['title']}. {entry['venue']}, "
+        f"{entry['volume']}({entry['issue']}), {entry['pages']}."
+    )
+
+
+def _format_synthetic_reference_list(pool: list[dict[str, Any]]) -> str:
+    """APA-style reference list built from the same pool used for in-text citations."""
+    entries = sorted({_citation_apa_entry(e) for e in pool})
+    return "\n\n".join(entries)
+
+
+def _pick_citations(pool: list[dict[str, Any]], seed_text: str, k: int = 1) -> list[dict[str, Any]]:
+    """Deterministically pick k distinct entries from pool based on seed_text, so the
+    same subsection always cites the same sources but different subsections draw from
+    different parts of the pool."""
+    if not pool:
+        return []
+    start = sum(ord(c) for c in seed_text) % len(pool)
+    return [pool[(start + i) % len(pool)] for i in range(min(k, len(pool)))]
+
+
 # Background of the Study — multiple structurally distinct openings (trend-led,
 # gap-led, historical-arc) so the fallback doesn't read as one fixed skeleton.
 _BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
@@ -4756,7 +4871,7 @@ _BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
         "of the inquiry.\n\n"
         "Globally, organisations operating in this domain have reported significant transformations in operational "
         "efficiency, risk management, and client engagement, driven by advances in data analytics, artificial intelligence, "
-        "and digital infrastructure. However, empirical understanding remains uneven — many jurisdictions lack "
+        "and digital infrastructure {cite1}. However, empirical understanding remains uneven — many jurisdictions lack "
         "context-specific evidence linking these developments to measurable performance outcomes. This gap is particularly "
         "pronounced in emerging market environments, where institutional capacity, regulatory maturity, and digital "
         "readiness vary substantially.\n\n"
@@ -4772,7 +4887,7 @@ _BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
         "conditions of the present context, rather than extrapolating from generalised models.\n\n"
         "Across the wider field, observers report meaningful shifts in how organisations manage performance, governance, "
         "and stakeholder relationships, driven in large part by developments in data analytics, digital infrastructure, "
-        "and shifting regulatory expectations. Yet these shifts have not been matched by a comparable volume of "
+        "and shifting regulatory expectations {cite1}. Yet these shifts have not been matched by a comparable volume of "
         "context-specific empirical work — a shortfall that is especially pronounced in emerging-market settings, where "
         "institutional capacity and digital readiness differ markedly from the contexts most studies are drawn from.\n\n"
         "It is this shortfall that the present study sets out to address, by generating primary evidence grounded in the "
@@ -4785,7 +4900,7 @@ _BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
         "evidence base meant to guide it. What began as a relatively narrow concern has, over a comparatively short "
         "period, become a central preoccupation for institutions seeking to remain competitive, compliant, and "
         "responsive to stakeholder expectations.\n\n"
-        "This evolution has not been uniform. Some organisations have moved decisively to embed new practices into their "
+        "This evolution has not been uniform {cite1}. Some organisations have moved decisively to embed new practices into their "
         "operating models, while others continue to grapple with constraints of capacity, governance, or readiness that "
         "slow adoption. The resulting variation is precisely the kind of pattern that warrants systematic empirical "
         "investigation rather than broad generalisation from a handful of visible cases.\n\n"
@@ -4803,7 +4918,7 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "the research problem within this broader technical trajectory, drawing on prior engineering work and "
         "established design principles to justify the relevance and timing of the present effort.\n\n"
         "Across the field, developers have reported steady gains in performance, reliability, and efficiency, "
-        "driven by improvements in component technology, control algorithms, and testing methodology. However, "
+        "driven by improvements in component technology, control algorithms, and testing methodology {cite1}. However, "
         "published evaluations vary widely in rigor and scope — many implementations are demonstrated under "
         "narrow conditions without systematic performance testing across realistic operating scenarios. This gap "
         "is particularly evident where cost, complexity, or environmental variability constrain what a thorough "
@@ -4820,8 +4935,8 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "that gap: rather than assuming a design will perform adequately because comparable designs have been reported "
         "elsewhere, it commits to building and testing one under clearly defined conditions.\n\n"
         "Across the wider field, practitioners report steady improvements in component capability, control sophistication, "
-        "and overall system reliability, driven by advances that have made previously impractical designs newly feasible. "
-        "Yet detailed, reproducible performance data describing exactly how these gains are achieved — and under what "
+        "and overall system reliability, driven by advances that have made previously impractical designs newly feasible "
+        "{cite1}. Yet detailed, reproducible performance data describing exactly how these gains are achieved — and under what "
         "conditions they hold — remains comparatively scarce, particularly for designs built under realistic resource "
         "constraints rather than in a fully equipped research laboratory.\n\n"
         "It is this shortfall that the present study sets out to address, by producing a working implementation together "
@@ -4833,7 +4948,7 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "and materials have lowered the practical barriers to building increasingly capable designs. What was once "
         "feasible only with specialised laboratory equipment is now within reach of a much wider range of developers and "
         "researchers.\n\n"
-        "This broadening of access has not been matched by an equivalent broadening of rigorous evaluation practice. Many "
+        "This broadening of access has not been matched by an equivalent broadening of rigorous evaluation practice {cite1}. Many "
         "reported implementations describe a single successful demonstration rather than systematic testing across the "
         "range of conditions a design is likely to encounter in practice, making it difficult to compare designs fairly "
         "or to anticipate where a given approach is likely to fail.\n\n"
@@ -4848,8 +4963,8 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
 _PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
     (
         "Despite growing interest in {topic}, a critical gap persists in the empirical literature: there is insufficient "
-        "context-specific evidence to explain how and under what conditions the key variables produce observed outcomes. "
-        "Existing studies tend to rely on generalised frameworks that do not adequately capture the institutional "
+        "context-specific evidence to explain how and under what conditions the key variables produce observed outcomes "
+        "{cite1}. Existing studies tend to rely on generalised frameworks that do not adequately capture the institutional "
         "and environmental specificity of the research context.\n\n"
         "This limitation has practical consequences — policymakers and practitioners operate with incomplete evidence, "
         "increasing the risk of misaligned interventions and suboptimal resource allocation. The problem, therefore, "
@@ -4859,7 +4974,7 @@ _PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
     ),
     (
         "A central difficulty facing researchers and practitioners working on {topic} is the scarcity of evidence that is "
-        "both rigorous and specific to the context in which decisions actually have to be made. Much of the available "
+        "both rigorous and specific to the context in which decisions actually have to be made {cite1}. Much of the available "
         "literature draws on settings, samples, or institutional arrangements that differ materially from the present "
         "context, leaving a gap between what is generally known and what is actually true here.\n\n"
         "That gap is not merely an academic inconvenience. Where decision-makers lack context-specific evidence, they are "
@@ -4870,7 +4985,7 @@ _PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
     ),
     (
         "{topic} continues to attract considerable attention, yet the evidence base available to those who must act on "
-        "it remains thinner than the level of interest would suggest. Existing studies frequently rely on frameworks "
+        "it remains thinner than the level of interest would suggest {cite1}. Existing studies frequently rely on frameworks "
         "developed elsewhere and applied to this setting without adequate adaptation, raising legitimate questions about "
         "how well their conclusions actually transfer.\n\n"
         "Left unaddressed, this evidentiary gap carries real costs: institutions and practitioners continue to make "
@@ -4885,7 +5000,7 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
     (
         "Despite growing interest in {topic}, a practical gap persists: many existing implementations are described "
         "without a clearly documented design rationale or a rigorous, repeatable evaluation against defined performance "
-        "criteria. Reported results are often anecdotal or limited to a single demonstration run rather than systematic "
+        "criteria {cite1}. Reported results are often anecdotal or limited to a single demonstration run rather than systematic "
         "testing across varied operating conditions.\n\n"
         "This limitation has real consequences — developers and adopters operate with incomplete evidence about how a "
         "given design performs outside the specific conditions under which it was first demonstrated, increasing the "
@@ -4897,7 +5012,7 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
     (
         "A recurring difficulty in published work related to {topic} is that designs are frequently described without a "
         "clearly documented rationale for the choices made, or without test results detailed enough to support a fair "
-        "comparison against alternative approaches. A single successful demonstration is often presented as sufficient "
+        "comparison against alternative approaches {cite1}. A single successful demonstration is often presented as sufficient "
         "evidence of a design's merit.\n\n"
         "That gap matters in practice. Developers and adopters working from such reports are left to estimate how a "
         "design will behave outside the narrow conditions under which it was first shown to work, increasing the risk "
@@ -4907,7 +5022,7 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
     (
         "Despite the volume of work published on systems related to {topic}, comparatively little of it offers a level "
-        "of testing detail sufficient to support confident replication or fair comparison. Reported figures are often "
+        "of testing detail sufficient to support confident replication or fair comparison {cite1}. Reported figures are often "
         "presented without the operating conditions, tolerances, or trial counts needed to interpret them rigorously.\n\n"
         "The practical cost of this gap falls on exactly the people best placed to build on existing work: developers and "
         "researchers attempting to extend or compare designs are forced to re-derive baseline performance from scratch, "
@@ -4920,7 +5035,7 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
 # evidentiary content (consistency with the literature, plausible source of deviation).
 _DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
     (
-        "The findings are broadly consistent with the theoretical propositions advanced in the literature review. "
+        "The findings are broadly consistent with the theoretical propositions advanced in the literature review {cite1}. "
         "The observed relationships between the study variables confirm that {topic} is a multidimensional phenomenon shaped by "
         "institutional capacity, governance quality, and contextual readiness.\n\n"
         "Where deviations from prior research are observed, these may be attributed to sector-specific characteristics or differences "
@@ -4929,7 +5044,7 @@ _DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
     ),
     (
         "On the whole, the pattern of results aligns with what the literature reviewed in Chapter 2 would lead one to "
-        "expect, lending support to the conceptual framework that guided the analysis. {topic} emerges from this evidence "
+        "expect {cite1}, lending support to the conceptual framework that guided the analysis. {topic} emerges from this evidence "
         "as a multidimensional phenomenon — one in which institutional capacity, governance quality, and contextual "
         "readiness interact rather than operate independently.\n\n"
         "Where the present results diverge from earlier work, the most plausible explanation lies in features specific "
@@ -4941,7 +5056,7 @@ _DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
 
 _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
     (
-        "The findings are broadly consistent with the design expectations established in the literature review. "
+        "The findings are broadly consistent with the design expectations established in the literature review {cite1}. "
         "The observed performance characteristics confirm that {topic} is a multidimensional engineering problem shaped by "
         "component selection, control strategy, and the range of operating conditions under which the system is tested.\n\n"
         "Where deviations from prior implementations are observed, these may be attributed to differences in hardware "
@@ -4951,7 +5066,7 @@ _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
     (
         "On the whole, the observed performance pattern aligns with what the design rationale set out in Chapter 3 would "
-        "lead one to expect. {topic} emerges from this evidence as a multidimensional engineering problem — one in which "
+        "lead one to expect {cite1}. {topic} emerges from this evidence as a multidimensional engineering problem — one in which "
         "component selection, control strategy, and operating-condition range interact rather than operate independently.\n\n"
         "Where the present results diverge from earlier implementations, the most plausible explanation lies in features "
         "specific to this study's test setup: refinements introduced during iterative testing, or a more tightly "
@@ -4966,7 +5081,7 @@ _CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
         "Based on the empirical evidence presented, the study concludes that {topic} represents a significant and measurable influence "
         "on the outcomes under investigation. The data confirm that well-governed, adequately resourced environments yield substantially "
         "stronger results than those characterised by implementation gaps or resource constraints.\n\n"
-        "The study's conclusions are grounded in primary evidence and corroborated by the existing literature, lending confidence to "
+        "The study's conclusions are grounded in primary evidence and corroborated by the existing literature {cite1}, lending confidence to "
         "the interpretation that targeted investment in institutional capacity and process design is essential for maximising value."
     ),
     (
@@ -4975,7 +5090,7 @@ _CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
         "and adequately resourced, the results obtained are markedly stronger than in settings marked by implementation "
         "gaps or constrained resources.\n\n"
         "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, the wider "
-        "body of literature reviewed earlier in the dissertation. Together, they support the view that deliberate "
+        "body of literature reviewed earlier in the dissertation {cite1}. Together, they support the view that deliberate "
         "investment in institutional capacity and process design is a precondition for realising the full value available "
         "in this domain."
     ),
@@ -4986,7 +5101,7 @@ _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "Based on the test evidence presented, the study concludes that {topic} can be addressed by a design that delivers measurable, "
         "repeatable performance under the evaluated conditions. The data confirm that careful component selection, calibration, and "
         "control-strategy tuning yield substantially stronger and more consistent results than a naive or untuned implementation.\n\n"
-        "The study's conclusions are grounded in primary test data and corroborated by comparable work in the literature, lending "
+        "The study's conclusions are grounded in primary test data and corroborated by comparable work in the literature {cite1}, lending "
         "confidence to the interpretation that targeted attention to design detail and systematic testing is essential for achieving "
         "reliable system performance."
     ),
@@ -4996,7 +5111,7 @@ _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "selection, calibration, and control-strategy tuning receive deliberate attention, the results obtained are "
         "markedly stronger and more consistent than those of a naive or untuned implementation.\n\n"
         "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, comparable "
-        "work reviewed earlier in the dissertation. Together, they support the view that careful attention to design "
+        "work reviewed earlier in the dissertation {cite1}. Together, they support the view that careful attention to design "
         "detail and systematic testing is a precondition for achieving reliable system performance."
     ),
 )
@@ -5171,6 +5286,11 @@ def _fallback_subsection_body(
     sub_lower = sub.lower()
     sec = section_title.strip().lower()
 
+    _field_terms = _topic_terms(topic, 4) or [topic]
+    _field_term = re.sub(r"^(a|an|the)\s+", "", max(_field_terms, key=len), flags=re.IGNORECASE)
+    field_label = _truncate_label(_field_term, 40)
+    citation_pool = _build_synthetic_citation_pool(topic, field_label)
+
     # ── Preliminary pages ───────────────────────────────────────────────────
     if "abstract" in sub_lower:
         if survey_based:
@@ -5311,11 +5431,13 @@ def _fallback_subsection_body(
     # ── Chapter 1 Introduction subsections ─────────────────────────────────
     if "background" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
         pool = _BACKGROUND_VARIANTS_SURVEY if survey_based else _BACKGROUND_VARIANTS_TECHNICAL
-        return _seeded_pick(topic, pool).format(topic=topic)
+        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|background", k=1)[0])
+        return _seeded_pick(topic, pool).format(topic=topic, cite1=cite1)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
         pool = _PROBLEM_VARIANTS_SURVEY if survey_based else _PROBLEM_VARIANTS_TECHNICAL
-        return _seeded_pick(f"{topic}|problem", pool).format(topic=topic)
+        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|problem", k=1)[0])
+        return _seeded_pick(f"{topic}|problem", pool).format(topic=topic, cite1=cite1)
 
     if "significance" in sub_lower:
         if survey_based:
@@ -5425,10 +5547,11 @@ def _fallback_subsection_body(
                 "current knowledge that justify the present inquiry."
             )
         if any(k in sub_lower for k in ["conceptual", "core concept", "dimension", "relationships between variables", "definition and conceptualisation"]):
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conceptual", k=1)[0])
             return (
                 f"The conceptual review clarifies the key terms and constructs underpinning {topic}, establishing a shared "
                 "vocabulary for the analysis that follows. Each construct is defined with reference to its dominant usage "
-                "in the academic literature, and its dimensions, indicators, and measurement approaches are outlined "
+                f"in the academic literature {c1}, and its dimensions, indicators, and measurement approaches are outlined "
                 "to support the operationalisation adopted in Chapter 3.\n\n"
                 "The review further maps the conceptual relationships among the study's key variables, illustrating how "
                 "they are theorised to interact. This conceptual groundwork provides the basis for the theoretical "
@@ -5436,37 +5559,42 @@ def _fallback_subsection_body(
             )
         if "theoretical" in sub_lower or "theory" in sub_lower or "theories" in sub_lower:
             if survey_based:
+                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
+                c1, c2 = _citation_paren(c1), _citation_paren(c2)
                 return (
                     f"This section presents the theoretical foundations relevant to {topic}. Several theories offer "
                     "complementary lenses for understanding the relationships under investigation, including classical "
                     "and contemporary perspectives drawn from the relevant disciplinary literature.\n\n"
-                    "Among the foundational theories considered, institutional theory explains how external normative and "
-                    "coercive pressures shape organisational and individual behaviour, while resource-based perspectives "
-                    "highlight the role of internal capabilities and resource endowments in determining outcomes. "
+                    f"Among the foundational theories considered, institutional theory explains how external normative and "
+                    f"coercive pressures shape organisational and individual behaviour {c1}, while resource-based perspectives "
+                    f"highlight the role of internal capabilities and resource endowments in determining outcomes {c2}. "
                     "Contemporary and emerging theoretical contributions extend these classical accounts to contexts "
                     "characterised by rapid technological, environmental, or socioeconomic change. The theory judged most "
                     "applicable to this study is justified on the grounds of its explanatory power for the specific "
                     "relationships and context examined here."
                 )
+            c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
+            c1, c2 = _citation_paren(c1), _citation_paren(c2)
             return (
                 f"This section presents the theoretical and engineering foundations relevant to {topic}. Several "
                 "established frameworks offer complementary lenses for understanding the system under investigation, "
                 "including control-theoretic, systems-engineering, and signal-processing perspectives drawn from the "
                 "relevant technical literature.\n\n"
-                "Among the foundational frameworks considered, feedback control theory explains how a system senses "
-                "its environment or internal state and adjusts its behaviour to track a desired target or avoid an "
-                "undesired condition, while systems-engineering perspectives highlight the role of subsystem "
-                "decomposition, interface design, and integration testing in determining overall performance. Where "
+                f"Among the foundational frameworks considered, feedback control theory explains how a system senses "
+                f"its environment or internal state and adjusts its behaviour to track a desired target or avoid an "
+                f"undesired condition {c1}, while systems-engineering perspectives highlight the role of subsystem "
+                f"decomposition, interface design, and integration testing in determining overall performance {c2}. Where "
                 "applicable, sensor and signal-processing models account for how raw measurements are filtered, fused, "
                 "or interpreted before informing system decisions. The framework judged most applicable to this study "
                 "is justified on the grounds of its explanatory power for the specific design and performance "
                 "characteristics examined here."
             )
         if "global evidence" in sub_lower or ("empirical" in sub_lower and "global" in sub_lower):
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|global", k=1)[0])
             return (
                 f"Global empirical evidence on {topic} reveals broadly consistent patterns across diverse settings, "
                 "albeit with notable variation in magnitude and mechanism. Cross-country and cross-sectoral studies "
-                "report measurable associations between the key variables identified in this study, with effect sizes "
+                f"report measurable associations between the key variables identified in this study {c1}, with effect sizes "
                 "shaped by contextual factors such as institutional maturity, resource availability, and policy "
                 "environment.\n\n"
                 "Taken together, the global evidence base establishes a strong prima facie case for the relationships "
@@ -5474,60 +5602,66 @@ def _fallback_subsection_body(
                 "this study seeks to generate."
             )
         if "developed econom" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developed", k=1)[0])
             return (
                 f"Evidence from developed economies demonstrates relatively mature engagement with {topic}, supported "
                 "by well-established institutional, regulatory, and infrastructural conditions. Studies conducted in "
-                "these contexts often report stronger and more consistent outcomes, reflecting greater resource "
+                f"these contexts often report stronger and more consistent outcomes {c1}, reflecting greater resource "
                 "availability and longer histories of implementation.\n\n"
                 "Nonetheless, even within developed-economy contexts, researchers note that outcomes vary by sector "
                 "and by the quality of implementation, underscoring that institutional maturity alone does not "
                 "guarantee favourable results."
             )
         if "emerging econom" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|emerging", k=1)[0])
             return (
                 f"Studies situated in emerging economies provide important comparative evidence on {topic}, often "
                 "revealing different constraints and enablers than those documented in developed-economy research. "
                 "Infrastructural gaps, regulatory transition, and resource limitations frequently moderate the "
-                "strength of observed relationships in these settings.\n\n"
+                f"strength of observed relationships in these settings {c1}.\n\n"
                 "Despite these constraints, emerging-economy studies report meaningful progress and, in some cases, "
                 "outcomes that rival those of more developed contexts, particularly where targeted policy support "
                 "and capacity-building interventions have been implemented."
             )
         if "developing econom" in sub_lower or "africa" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developing", k=1)[0])
             return (
                 f"Evidence from developing economies and the African context highlights both the opportunities and "
                 f"the structural challenges associated with {topic}. Studies in this context frequently emphasise "
                 "infrastructural deficits, financing constraints, and capacity limitations as factors that condition "
-                "the pace and depth of observed outcomes.\n\n"
+                f"the pace and depth of observed outcomes {c1}.\n\n"
                 "At the same time, this literature documents innovative, context-adapted approaches that have achieved "
                 "meaningful results despite resource constraints, offering valuable lessons for the present study's "
                 "context and underscoring the importance of locally grounded evidence."
             )
         if "sectoral" in sub_lower or "industry" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|sectoral", k=1)[0])
             return (
                 f"Sectoral and industry-specific studies on {topic} reveal that outcomes are not uniform across "
-                "industries, but instead reflect sector-specific operating conditions, regulatory regimes, and "
-                "stakeholder priorities. Comparative sectoral analysis helps to clarify which of these conditions "
+                f"industries, but instead reflect sector-specific operating conditions, regulatory regimes, and "
+                f"stakeholder priorities {c1}. Comparative sectoral analysis helps to clarify which of these conditions "
                 "are most consequential for the relationships examined in this study.\n\n"
                 "This sector-sensitive evidence base informs the contextual scope of the present study and supports "
                 "the selection of an appropriate analytical frame for interpreting the primary data collected."
             )
         if "synthesis" in sub_lower or "critical appraisal" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|synthesis", k=1)[0])
             return (
                 f"Synthesising the empirical literature reviewed above, the evidence on {topic} is consistent in "
                 "direction but heterogeneous in magnitude, with methodological differences accounting for a "
                 "substantial share of the variation reported across studies. Many existing studies rely on "
-                "secondary data, cross-sectional designs, or narrow sectoral samples, limiting the generalisability "
+                f"secondary data, cross-sectional designs, or narrow sectoral samples {c1}, limiting the generalisability "
                 "of their conclusions.\n\n"
                 "This critical appraisal identifies methodological rigor, contextual specificity, and triangulation "
                 "of data sources as priorities for closing the gaps identified, directly motivating the design "
                 "adopted in the present study."
             )
         if "research gap" in sub_lower or "gap" in sub_lower:
+            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|gap", k=1)[0])
             return (
                 f"Despite the volume of literature on {topic}, this review identifies a clear and persistent gap: "
                 "existing studies offer limited context-specific, primary evidence that directly links the key "
-                "variables examined in this study to measurable outcomes within the present research setting. "
+                f"variables examined in this study to measurable outcomes within the present research setting {c1}. "
                 "Much of the available evidence is either generalised across dissimilar contexts or focused on "
                 "secondary data unsuited to establishing the specific relationships of interest here.\n\n"
                 "The present study addresses this gap by generating original primary data within a clearly defined "
@@ -5963,7 +6097,8 @@ def _fallback_subsection_body(
             )
         if "discussion" in sub_lower:
             pool = _DISCUSSION_VARIANTS_SURVEY if survey_based else _DISCUSSION_VARIANTS_TECHNICAL
-            return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic)
+            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|discussion", k=1)[0])
+            return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic, cite1=cite1)
         if survey_based:
             return (
                 "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends and areas of divergence across indicators. "
@@ -6014,7 +6149,8 @@ def _fallback_subsection_body(
             )
         if "conclusion" in sub_lower:
             pool = _CONCLUSION_VARIANTS_SURVEY if survey_based else _CONCLUSION_VARIANTS_TECHNICAL
-            return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic)
+            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conclusion", k=1)[0])
+            return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic, cite1=cite1)
         if "recommendation" in sub_lower:
             pool = _RECOMMENDATION_VARIANTS_SURVEY if survey_based else _RECOMMENDATION_VARIANTS_TECHNICAL
             return _seeded_pick(f"{topic}|recommendation", pool).format(topic=topic)
@@ -6065,26 +6201,13 @@ def _fallback_subsection_body(
 
     # ── References / Appendices ─────────────────────────────────────────────
     if "reference" in sub_lower:
-        terms = _topic_terms(topic, 4) or [topic]
-        field_term = re.sub(r"^(a|an|the)\s+", "", max(terms, key=len), flags=re.IGNORECASE)
-        field_label = _truncate_label(field_term, 40)
-        t = [_truncate_label(terms[i % len(terms)], 40) for i in range(5)]
-        authors = ["A.", "B., & Author, C.", "D.", "E., & Author, F.", "G."]
         return (
-            "Automatic source retrieval failed for this document (e.g. no network access), so no verified "
-            "citations are available. The entries below are ILLUSTRATIVE PLACEHOLDERS ONLY, with fictitious "
-            "author names generated for formatting purposes — they are NOT real sources and MUST be replaced "
-            f"with verified literature on {topic} before submission.\n\n"
-            f"[Placeholder] Author, {authors[0]} (2021). A review of {t[0]} and its implications for {field_label}. "
-            f"Journal of {field_label} Research, 14(2), 45-67.\n"
-            f"[Placeholder] Author, {authors[1]} (2022). Methodological approaches to studying {t[1]}. "
-            f"International Journal of {field_label} Studies, 9(1), 12-30.\n"
-            f"[Placeholder] Author, {authors[2]} (2020). {t[2][:1].upper()}{t[2][1:]}: A systematic review of the empirical literature. "
-            f"Annual Review of {field_label}, 6, 101-128.\n"
-            f"[Placeholder] Author, {authors[3]} (2023). Contemporary perspectives on {t[3]}. "
-            f"{field_label} Quarterly, 18(3), 210-233.\n"
-            f"[Placeholder] Author, {authors[4]} (2019). Theoretical foundations of {t[4]}. "
-            f"Journal of Applied {field_label}, 11(1), 1-22."
+            "Automatic source retrieval failed for this document (e.g. no network access), so the entries below "
+            "are SIMULATED, illustrative references rather than verified literature — they are consistent with "
+            "the in-text citations used throughout this dissertation (same authors, years, and titles), but they "
+            f"do not correspond to real publications and MUST be replaced with verified literature on {topic} "
+            "before submission.\n\n"
+            f"{_format_synthetic_reference_list(citation_pool)}"
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
         if survey_based and is_qualitative:
@@ -9776,7 +9899,8 @@ def _write_dissertation(
         "arXiv, PubMed, and Semantic Scholar."
         if citation_pool else
         " No verified external sources could be retrieved (e.g. no network access) — "
-        "the References chapter contains clearly-labelled illustrative placeholders that must be replaced."
+        "in-text citations and the References chapter use a consistent set of simulated sources that "
+        "must be replaced with verified literature before submission."
     )
     review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
     reply = (
