@@ -4120,25 +4120,37 @@ def _expand_fallback_text(
     target_words: int,
     pool: tuple[str, ...] = _FALLBACK_ELABORATIONS,
 ) -> str:
-    """Pad deterministic fallback prose toward target_words using generic, on-topic elaboration.
+    """Lightly pad deterministic fallback prose toward target_words with generic elaboration.
 
-    The static branches in `_fallback_subsection_body` are deliberately short placeholders,
-    calibrated for a quick safety-net response — without this, every fallback subsection stays
-    fixed at ~150-300 words regardless of the chapter's word-count target, which was the main
-    reason whole-document length fell far short of the requested page count when the LLM was
-    unavailable or rejected. `pool` lets personal/reflective sections (dedication, acknowledgements)
-    pad with appropriately-toned text instead of academic-register elaboration.
+    Generic elaboration is a last resort, not a length-filling device. Chasing the full
+    target_words gap with templated paragraphs produces subsections that are mostly
+    boilerplate (e.g. a 250-word substantive body followed by 8-9 generic filler
+    paragraphs) — that reads as padded/hallucinated, not submission-ready. So padding is
+    capped at a small, fixed number of paragraphs and at no more words than the real body
+    already contributed: undershooting target_words is preferable to diluting the
+    subsection with repetitive boilerplate. `pool` lets personal/reflective sections
+    (dedication, acknowledgements) pad with appropriately-toned text instead of
+    academic-register elaboration.
     """
-    parts = [body]
+    base_words = _word_count(body)
+    word_ceiling = int(target_words * 0.85)
+    max_added_words = min(word_ceiling - base_words, base_words, 260)
+    if max_added_words <= 0:
+        return body
     # Rotate the pool's starting point per subsection so consecutive subsections (which all
     # draw from the same small pool) don't render the exact same paragraphs in the same
-    # order — a major contributor to the document reading as templated/repetitive.
+    # order — a contributor to the document reading as templated/repetitive.
     offset = sum(ord(c) for c in subsection) % len(pool)
     rotated = pool[offset:] + pool[:offset]
-    for template in rotated:
-        if _word_count("\n\n".join(parts)) >= target_words * 0.85:
+    max_paragraphs = 3
+    parts = [body]
+    added_words = 0
+    for template in rotated[:max_paragraphs]:
+        if added_words >= max_added_words:
             break
-        parts.append(template.format(topic=topic, section_title=section_title, subsection=subsection))
+        paragraph = template.format(topic=topic, section_title=section_title, subsection=subsection)
+        parts.append(paragraph)
+        added_words += _word_count(paragraph)
     return "\n\n".join(parts)
 
 
