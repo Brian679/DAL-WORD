@@ -1315,6 +1315,69 @@ def _objective_section_title(objective: str) -> str:
     return text
 
 
+_ORG_NAME_RE = re.compile(
+    r"\b[A-Z][\w&'.-]*(?:\s+[A-Z][\w&'.-]*){0,4}\s+"
+    r"(?:Ltd|Limited|PLC|Plc|Inc|Corp|Corporation|Company|Co\.|Bank|Hospital|University|College|"
+    r"Ministry|Authority|Agency|Group|Holdings)\b"
+)
+
+
+def _resolve_case_entity(
+    document: Document, topic: str, research_design: str, objectives: list[str],
+) -> dict[str, Any] | None:
+    """Decide, once per document, whether this study should be framed as a case study of a
+    single (fictional, since none was named) organization, and if so invent one consistent
+    name/context for it. Cached on document.content so every chapter — even ones written in a
+    separate request — converges on the SAME organization, rather than each chapter prompting
+    the LLM independently and risking a different invented name each time.
+
+    Skips invention entirely when the topic already names a specific organization (its own name
+    is already carried into every prompt via the Research Topic line, so there's nothing to add).
+    """
+    cached = (document.content or {}).get("case_entity")
+    if isinstance(cached, dict):
+        return cached if cached.get("enabled") else None
+
+    result: dict[str, Any] = {"enabled": False}
+    if research_design != "non_empirical" and not _ORG_NAME_RE.search(topic or ""):
+        obj_text = "\n".join(f"- {o}" for o in (objectives or [])[:5])
+        prompt = (
+            "Decide whether this dissertation should be framed as an in-depth case study of ONE "
+            "specific organization. Return JSON only.\n"
+            f"Topic: {topic}\n"
+            f"Research design: {research_design}\n"
+            f"Objectives:\n{obj_text or '(none stated)'}\n\n"
+            "A single-organization case-study framing fits topics like 'effect of X on performance "
+            "at a firm', a named-sector study (a bank, hospital, manufacturer, NGO, ministry, school), "
+            "or any topic about practices/outcomes WITHIN an organization. It does NOT fit broad "
+            "policy/macro topics, multi-organization/industry-wide surveys, literature syntheses, or "
+            "engineering/lab builds with no organizational subject.\n"
+            "If it fits, invent ONE plausible, clearly fictional organization (a name that does not "
+            "match any real company) consistent with the topic's sector and give a 1-2 sentence "
+            "context (industry, country/region, approximate size).\n"
+            "Return ONLY this JSON shape: "
+            '{"use_case_entity": true|false, "name": "...", "context": "..."}'
+        )
+        try:
+            data = _extract_json_obj(generate_text(prompt))
+            if data.get("use_case_entity") and str(data.get("name") or "").strip():
+                result = {
+                    "enabled": True,
+                    "name": str(data["name"]).strip(),
+                    "context": str(data.get("context") or "").strip(),
+                }
+        except Exception as exc:
+            logger.warning("_resolve_case_entity failed, proceeding without a case entity: %s", exc)
+
+    try:
+        document.content["case_entity"] = result
+        document.save(update_fields=["content"])
+    except Exception as exc:
+        logger.warning("_resolve_case_entity: failed to cache decision on document: %s", exc)
+
+    return result if result.get("enabled") else None
+
+
 def _extract_document_brief(
     document: Document, topic: str, research_design: str, specific_design: str | None = None,
 ) -> str:
@@ -1358,6 +1421,18 @@ def _extract_document_brief(
             f"content (research design, sampling, data collection, analysis) framed explicitly around " \
             f"a {specific_label} approach, not generic survey/interview boilerplate."
 
+    case_entity = _resolve_case_entity(document, topic, research_design, objectives)
+    case_entity_line = ""
+    if case_entity:
+        entity_context = case_entity["context"].rstrip(".")
+        case_entity_line = (
+            f"Case-Study Organization: {case_entity['name']} — {entity_context}. This is a fictional "
+            f"organization invented for this study. Refer to it by this SAME name consistently in every "
+            f"chapter — never invent a different organization name elsewhere in the document. Frame the "
+            f"population/respondents/interviewees, the background/problem context, and the findings as "
+            f"specific to {case_entity['name']}, not a generic or industry-wide claim.\n"
+        )
+
     return (
         "══ THIS STUDY'S BRIEF — ground ALL writing in these specifics ══\n"
         f"Document Title  : {doc_title}\n"
@@ -1365,6 +1440,7 @@ def _extract_document_brief(
         f"Research Design : {design_label}\n"
         f"Research Objectives:\n{obj_text}\n"
         f"Research Questions:\n{q_text}\n"
+        f"{case_entity_line}"
         "══ END OF STUDY BRIEF ══"
     )
 
@@ -3620,11 +3696,20 @@ def _execute_subsection_nodes(
                 )
                 table_child.setdefault("meta", {})["_precomputed_table_dataset"] = table_dataset
             grounding = _objective_findings_preview(table_dataset, research_design)
+            quote_guidance = (
+                "Where it fits, ground the discussion with 1-2 short direct quotes presented as indented "
+                "block quotes, each attributed to an anonymized informant role consistent with this study "
+                "(e.g. \"(Informant 3, Operations Manager)\" or \"(Participant 5, Frontline Staff)\") rather "
+                "than a generic 'respondents said' paraphrase — but only invent quotes that are plausible "
+                "given the actual data/themes above, never quotes that contradict them.\n"
+                if research_design in {"qualitative", "mixed"} else ""
+            )
             try:
                 body = generate_section_content(
                     title=title,
                     topic=topic,
                     context=(
+                        f"{document_brief}\n\n"
                         f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
                         f"Parent chapter: {section_title}\n"
@@ -3633,7 +3718,8 @@ def _execute_subsection_nodes(
                         "Write 2-3 paragraphs presenting findings specifically for this objective. "
                         "Discuss patterns, trends, and how findings directly address the objective. "
                         "Be specific and academically rigorous, and stay consistent with the actual data "
-                        "noted above where provided."
+                        "noted above where provided.\n"
+                        f"{quote_guidance}"
                     ),
                     word_count=default_word_count,
                 )
