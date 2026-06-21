@@ -739,6 +739,427 @@ def _detect_visual_injection_request(
     return kind, section_hint
 
 
+# Specific named methodologies, and the broader family (quantitative/qualitative/mixed) each
+# implies. Checked when the source text names one of these without ever saying the literal
+# word "qualitative"/"quantitative"/"mixed" — without this, an unrecognised design used to fall
+# through to the hardcoded "quantitative" default, producing survey/Likert-scale fallback text
+# for studies (e.g. grounded theory, ethnography, an experiment) that never used a survey at all.
+_SPECIFIC_METHODOLOGY_HINTS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    ("case_study", ("case study", "case-study", "multiple case study", "single case study"), "qualitative"),
+    ("action_research", ("action research",), "qualitative"),
+    ("grounded_theory", ("grounded theory",), "qualitative"),
+    ("ethnography", ("ethnograph",), "qualitative"),
+    ("phenomenology", ("phenomenolog",), "qualitative"),
+    ("narrative_inquiry", ("narrative inquiry", "narrative research"), "qualitative"),
+    ("content_analysis", ("content analysis",), "qualitative"),
+    ("design_science", ("design science", "design and development research", "design-based research"), "mixed"),
+    ("quasi_experimental", ("quasi-experimental", "quasi experimental"), "quantitative"),
+    ("experimental", ("true experimental", "experimental design", "randomized control", "randomised control", " rct ", "pretest-posttest", "pre-test post-test"), "quantitative"),
+    ("correlational", ("correlational",), "quantitative"),
+    ("cross_sectional", ("cross-sectional survey", "cross sectional survey"), "quantitative"),
+)
+
+# Human-readable label and one-line framing used to correctly name a specific design in
+# generated text (e.g. "A case study design was adopted..." instead of the generic
+# "A qualitative research design was adopted...").
+_SPECIFIC_METHODOLOGY_LABELS: dict[str, str] = {
+    "case_study": "case study",
+    "action_research": "action research",
+    "grounded_theory": "grounded theory",
+    "ethnography": "ethnographic",
+    "phenomenology": "phenomenological",
+    "narrative_inquiry": "narrative inquiry",
+    "content_analysis": "content analysis",
+    "design_science": "design science",
+    "quasi_experimental": "quasi-experimental",
+    "experimental": "experimental",
+    "correlational": "correlational",
+    "cross_sectional": "cross-sectional survey",
+}
+
+# Per-design overrides for the Chapter 3 "Research Design", "Sampling", "Data Collection", and
+# "Analysis" subsections, used in place of the generic qualitative/quantitative family text
+# whenever a specific named methodology (see _SPECIFIC_METHODOLOGY_HINTS) is detected. A design
+# is only given an override here where the generic family text would otherwise describe a
+# materially different procedure (e.g. grounded theory's open/axial/selective coding, or an
+# experiment's random assignment to control/treatment groups) — designs left out of a given
+# category (e.g. "correlational" has no sampling/collection override) simply fall through to
+# the existing, already-applicable quantitative/qualitative text for that category.
+_SPECIFIC_DESIGN_TEXT: dict[str, dict[str, str]] = {
+    "case_study": {
+        "design": (
+            "A case study research design was adopted, enabling an in-depth, holistic investigation of {topic} "
+            "within its real-life context. This design was selected because the phenomenon under investigation is "
+            "best understood through detailed examination of a bounded case (or a small number of cases) rather "
+            "than through statistical generalisation across a large sample.\n\n"
+            "Multiple sources of evidence were drawn upon and triangulated to strengthen the validity of the "
+            "findings, consistent with established case study methodology, with the boundaries of the case "
+            "defined clearly in relation to the research objectives set out in Chapter 1."
+        ),
+        "sampling": (
+            "The case (or cases) was selected purposively on the basis of its relevance to the research "
+            "objectives and the richness of information it could be expected to yield, rather than through "
+            "probability sampling. Within the selected case, key individuals were identified and invited to "
+            "participate based on their direct knowledge of, or involvement with, the phenomenon under study.\n\n"
+            "This purposive approach prioritises depth and contextual understanding of the bounded case over "
+            "statistical representativeness, consistent with the explanatory aims of case study research."
+        ),
+        "collection": (
+            "Data were collected from multiple sources of evidence, including semi-structured interviews, "
+            "relevant documents, and, where applicable, direct observation, in order to triangulate findings and "
+            "build a comprehensive picture of the case. Interviews were audio-recorded with consent and "
+            "transcribed verbatim.\n\n"
+            "Drawing on more than one source of evidence is a defining feature of rigorous case study research, "
+            "reducing reliance on any single account and strengthening confidence in the patterns identified."
+        ),
+        "analysis": (
+            "Data were analysed using within-case analysis to identify patterns specific to the case, followed by "
+            "pattern-matching against the theoretical propositions guiding the study. Where more than one case was "
+            "examined, cross-case analysis was used to identify similarities and differences between cases.\n\n"
+            "This analytic approach allows findings to remain grounded in the specific context of the case while "
+            "still supporting broader analytic generalisation in relation to the study's research objectives."
+        ),
+    },
+    "action_research": {
+        "design": (
+            "An action research design was adopted, structured around iterative cycles of planning, action, "
+            "observation, and reflection. This design was selected because the research objectives call for "
+            "practical change within a specific setting, generated collaboratively with those directly affected "
+            "by {topic}, rather than the detached observation typical of more conventional designs.\n\n"
+            "Each cycle's findings directly informed the design of the subsequent cycle, allowing the intervention "
+            "and the understanding of its effects to develop together over the course of the study."
+        ),
+        "sampling": (
+            "Participants were drawn from within the specific organisational or community setting where the "
+            "action research was conducted, selected because of their direct involvement in the practices being "
+            "examined and improved. All relevant stakeholders within the setting were invited to participate in "
+            "one or more cycles of the study.\n\n"
+            "This site-based approach reflects the collaborative, change-oriented nature of action research, "
+            "where participants are co-investigators rather than passive subjects of the research."
+        ),
+        "collection": (
+            "Data were collected throughout each action research cycle using a combination of methods, including "
+            "field notes, reflective journals, semi-structured interviews, and, where relevant, documentary "
+            "evidence of the changes implemented. Data collection was repeated across cycles to capture the "
+            "evolving effects of each intervention.\n\n"
+            "This continuous, cyclical approach to data collection allowed the research team to adjust the "
+            "intervention in near real time in response to emerging evidence."
+        ),
+        "analysis": (
+            "Data from each cycle were analysed reflectively, in collaboration with participating stakeholders, "
+            "to evaluate the effects of the action taken and to inform the plan for the subsequent cycle. Across "
+            "cycles, recurring patterns were identified using thematic analysis of the qualitative data generated.\n\n"
+            "This iterative analytic process is central to action research, ensuring that interpretation of the "
+            "data directly and continuously shapes practical action within the study setting."
+        ),
+    },
+    "grounded_theory": {
+        "design": (
+            "A grounded theory research design was adopted, with the aim of generating a theory grounded in, and "
+            "explanatory of, the data collected on {topic}, rather than testing a theory specified in advance. "
+            "This design was selected because existing theory does not yet adequately account for the processes "
+            "under investigation.\n\n"
+            "Data collection and analysis proceeded iteratively and concurrently, with each round of data "
+            "collection informed by categories emerging from the analysis of previous data, consistent with "
+            "established grounded theory procedure."
+        ),
+        "sampling": (
+            "Theoretical sampling was used, whereby initial participants were selected purposively for their "
+            "relevant experience, and subsequent participants were then selected specifically to refine, test, "
+            "and saturate the categories emerging from ongoing analysis. Sampling and data collection continued "
+            "until theoretical saturation was reached.\n\n"
+            "This approach differs from conventional purposive sampling in that the sample itself evolves "
+            "iteratively in direct response to the developing theoretical categories."
+        ),
+        "collection": (
+            "Data were collected primarily through semi-structured interviews, conducted iteratively alongside "
+            "ongoing analysis so that emerging categories could be probed and refined in subsequent interviews. "
+            "Interviews were audio-recorded with consent and transcribed verbatim, with memo-writing used "
+            "throughout to capture analytic insights as data collection proceeded.\n\n"
+            "This concurrent collection-and-analysis process is a defining feature of the grounded theory "
+            "approach, distinguishing it from designs in which all data are collected before analysis begins."
+        ),
+        "analysis": (
+            "Data were analysed using the constant comparative method, proceeding through open coding, axial "
+            "coding, and selective coding to identify a core category capable of explaining the patterns observed "
+            "across the data. Memos were used throughout to document the development of categories and their "
+            "interrelationships.\n\n"
+            "This iterative coding process continued until theoretical saturation was reached, culminating in a "
+            "substantive theory grounded in, and directly traceable to, the data collected for this study."
+        ),
+    },
+    "ethnography": {
+        "design": (
+            "An ethnographic research design was adopted, enabling sustained, in-depth engagement with the social "
+            "or cultural group under study in order to understand {topic} from within its natural setting. This "
+            "design was selected because the research objectives require an understanding of shared practices, "
+            "meanings, and norms that are best accessed through prolonged immersion rather than brief contact.\n\n"
+            "Fieldwork was conducted over a defined period within the study setting, with the researcher's role "
+            "and degree of participation clarified at the outset and maintained consistently throughout."
+        ),
+        "sampling": (
+            "Key informants were identified purposively from within the cultural or social group under study, "
+            "selected for their knowledge of, and standing within, the group's practices and norms. Additional "
+            "participants were recruited as fieldwork progressed, guided by relationships and opportunities that "
+            "developed during prolonged engagement with the setting.\n\n"
+            "This evolving, relationship-based approach to sampling is characteristic of ethnographic research and "
+            "supports access to perspectives that might not be available through formal recruitment alone."
+        ),
+        "collection": (
+            "Data were collected primarily through participant observation and detailed field notes, supplemented "
+            "by informal and semi-structured interviews with key informants. Observations were recorded as soon "
+            "as practicable after each period of fieldwork to preserve contextual detail.\n\n"
+            "This combination of observation and interview data allowed the study to capture both what "
+            "participants said about their practices and what was directly observed within the setting."
+        ),
+        "analysis": (
+            "Field notes and interview transcripts were analysed thematically, with attention to recurring "
+            "practices, meanings, and patterns of social interaction within the group studied. Analysis proceeded "
+            "alongside data collection, allowing emerging interpretations to be checked against further "
+            "observation.\n\n"
+            "Thick description was used in reporting the findings, situating the patterns identified firmly within "
+            "the cultural and contextual particulars of the setting studied."
+        ),
+    },
+    "phenomenology": {
+        "design": (
+            "A phenomenological research design was adopted, aimed at uncovering the essential structure of "
+            "participants' lived experience of {topic}. This design was selected because the research objectives "
+            "are concerned with the meaning of the experience itself, rather than with explaining its causes or "
+            "measuring its prevalence.\n\n"
+            "The researcher's own assumptions about the phenomenon were examined and set aside as far as "
+            "possible throughout data collection and analysis, consistent with the phenomenological emphasis on "
+            "approaching participants' accounts with openness."
+        ),
+        "sampling": (
+            "Participants were selected purposively on the basis of having directly lived the experience under "
+            "investigation, with sufficient richness and variation in their accounts to support an in-depth "
+            "exploration of the phenomenon. Recruitment continued until no substantially new aspects of the "
+            "experience emerged from additional interviews.\n\n"
+            "This criterion-based approach ensures that all participants are positioned to speak directly and "
+            "meaningfully to the lived experience that is the focus of the study."
+        ),
+        "collection": (
+            "Data were collected through in-depth, semi-structured interviews designed to elicit detailed, "
+            "first-person descriptions of participants' lived experience, with broad, open questions used to "
+            "minimise the imposition of the researcher's own assumptions. Interviews were audio-recorded with "
+            "consent and transcribed verbatim.\n\n"
+            "Sufficient time was allowed within each interview for participants to describe their experience in "
+            "their own words and at their own pace."
+        ),
+        "analysis": (
+            "Transcripts were analysed using a structured phenomenological approach, involving close reading of "
+            "each transcript, identification of significant statements, and clustering of these statements into "
+            "themes that capture the essential structure of the experience. Bracketing was used throughout to "
+            "limit the influence of the researcher's preconceptions on the resulting themes.\n\n"
+            "The resulting themes were synthesised into a composite description intended to convey the essence "
+            "of the experience shared across participants' individual accounts."
+        ),
+    },
+    "narrative_inquiry": {
+        "design": (
+            "A narrative inquiry research design was adopted, focused on understanding {topic} through the "
+            "stories participants tell about their own experience. This design was selected because the research "
+            "objectives are concerned with how participants make sense of and give meaning to their experience "
+            "over time, rather than with isolated facts or events.\n\n"
+            "The study followed a small number of participants in depth, prioritising the richness and coherence "
+            "of each individual narrative over breadth across a larger sample."
+        ),
+        "sampling": (
+            "A small number of participants were selected purposively on the basis of having a relevant and "
+            "tellable story to share in relation to the research objectives. Selection prioritised diversity of "
+            "experience and willingness to engage in extended narrative interviewing over statistical "
+            "representativeness.\n\n"
+            "This deliberately small, depth-oriented sample is consistent with narrative inquiry's focus on "
+            "detailed individual accounts rather than aggregated patterns."
+        ),
+        "collection": (
+            "Data were collected through extended, narrative-style interviews in which participants were invited "
+            "to recount their experience in story form, with minimal interruption from the researcher. Interviews "
+            "were audio-recorded with consent and transcribed verbatim, preserving the sequence and structure of "
+            "each participant's account.\n\n"
+            "Follow-up conversations were held where necessary to clarify or extend elements of a participant's "
+            "narrative."
+        ),
+        "analysis": (
+            "Transcripts were analysed using narrative analysis, attending to the structure, sequence, and "
+            "meaning of each participant's story before identifying themes that cut across individual narratives. "
+            "Restorying was used to present each account in a coherent chronological and thematic form.\n\n"
+            "This approach preserves the integrity of each individual's story while still allowing broader "
+            "patterns relevant to the research objectives to be identified across participants."
+        ),
+    },
+    "content_analysis": {
+        "design": (
+            "A content analysis research design was adopted, involving the systematic examination of existing "
+            "documents, texts, or media relevant to {topic}. This design was selected because the research "
+            "objectives can be addressed through analysis of existing textual or recorded material rather than "
+            "through the collection of new primary data from human participants.\n\n"
+            "A coding frame was developed prior to analysis, informed by the research objectives and refined "
+            "through initial review of a subset of the material."
+        ),
+        "sampling": (
+            "A purposive sample of documents, texts, or media items was selected based on clearly defined "
+            "inclusion criteria directly tied to the research objectives, with the sampling frame and selection "
+            "period stated explicitly to support transparency and replication.\n\n"
+            "Sample size was determined by the point at which additional material ceased to add substantively "
+            "new categories to the coding frame."
+        ),
+        "collection": (
+            "Relevant documents, texts, or media items were retrieved from clearly specified sources and "
+            "compiled into a structured corpus for analysis. Each item was logged with relevant metadata "
+            "(source, date, and type) to support systematic and auditable coding.\n\n"
+            "Where items were not available in a directly analysable format, they were transcribed or converted "
+            "prior to coding."
+        ),
+        "analysis": (
+            "Material was analysed using a structured coding frame, with each unit of analysis classified "
+            "according to predefined and emergent categories tied to the research objectives. Frequencies of "
+            "categories were tabulated, and, where relevant, the latent meaning underlying manifest content was "
+            "also considered.\n\n"
+            "A subset of the material was independently double-coded to check the consistency of the coding "
+            "frame's application."
+        ),
+    },
+    "design_science": {
+        "design": (
+            "A design science research approach was adopted, structured around the iterative design, "
+            "development, and evaluation of an artefact intended to address a defined problem within {topic}. "
+            "This approach was selected because the research objectives are concerned with creating and "
+            "evaluating a practical solution, rather than solely describing or explaining an existing "
+            "phenomenon.\n\n"
+            "The study proceeded through cycles of problem identification, artefact design, development, "
+            "demonstration, and evaluation, with each cycle informing refinements to the artefact."
+        ),
+        "sampling": (
+            "Participants in the evaluation phase were selected purposively from among intended users or domain "
+            "experts, on the basis of their ability to assess the artefact's relevance, usability, and "
+            "effectiveness against the problem it was designed to address.\n\n"
+            "This evaluation-focused sampling approach reflects design science's emphasis on practical utility "
+            "over statistical generalisation."
+        ),
+        "collection": (
+            "Data were collected at each stage of the design cycle, including requirements data informing the "
+            "artefact's design and evaluation data (gathered through testing, expert review, or user feedback) "
+            "assessing its performance against the defined objectives.\n\n"
+            "Evaluation data were collected using a combination of structured testing and qualitative feedback "
+            "from users or domain experts engaging directly with the artefact."
+        ),
+        "analysis": (
+            "Evaluation data were analysed against the design objectives defined at the outset of the study, "
+            "assessing the extent to which the artefact addressed the identified problem. Qualitative feedback "
+            "was analysed thematically, while any quantitative performance data were analysed descriptively.\n\n"
+            "Findings from each evaluation cycle directly informed refinements carried into the subsequent design "
+            "iteration, consistent with the iterative logic of design science research."
+        ),
+    },
+    "experimental": {
+        "design": (
+            "A true experimental research design was adopted, involving the random assignment of participants "
+            "to a treatment group and a control group, in order to test the causal effect of the intervention "
+            "related to {topic}. This design was selected because the research objectives require a credible "
+            "basis for causal inference, which random assignment is specifically intended to support.\n\n"
+            "Extraneous variables were controlled as far as practicable through the experimental protocol, "
+            "isolating the effect of the manipulated variable on the outcome of interest."
+        ),
+        "sampling": (
+            "Eligible participants were recruited and then randomly assigned to either the treatment group or "
+            "the control group, with random assignment used specifically to distribute potential confounding "
+            "characteristics evenly between groups. Sample size was determined using a power analysis to ensure "
+            "adequate sensitivity to detect the hypothesised effect.\n\n"
+            "Random assignment, rather than random sampling alone, is the defining feature of this design and "
+            "the basis for the causal claims the study is able to support."
+        ),
+        "collection": (
+            "Data were collected using a pre-test/post-test protocol administered identically to both the "
+            "treatment and control groups, with the treatment group additionally receiving the intervention "
+            "under investigation between the two measurement points.\n\n"
+            "Standardising the measurement protocol across both groups ensures that any difference observed "
+            "between groups can be attributed to the intervention rather than to differences in how data were "
+            "collected."
+        ),
+        "analysis": (
+            "Pre-test and post-test scores were compared between the treatment and control groups using "
+            "independent-samples t-tests or analysis of variance (ANOVA), with analysis of covariance (ANCOVA) "
+            "used where pre-test scores needed to be statistically controlled for.\n\n"
+            "Effect sizes were reported alongside significance tests to indicate the practical magnitude of any "
+            "treatment effect identified, in addition to its statistical significance."
+        ),
+    },
+    "quasi_experimental": {
+        "design": (
+            "A quasi-experimental research design was adopted, comparing an intervention group with a "
+            "comparison group in relation to {topic}, without random assignment of participants to groups. This "
+            "design was selected because random assignment was not practicable in the study setting, while the "
+            "research objectives still require comparison of outcomes under different conditions.\n\n"
+            "Pre-existing, naturally occurring groups were used, with statistical controls applied during "
+            "analysis to account for the absence of random assignment."
+        ),
+        "sampling": (
+            "Intact, naturally occurring groups were used for the intervention and comparison conditions, "
+            "selected because they were already exposed (or not exposed) to the relevant intervention. Where "
+            "possible, the comparison group was selected to closely match the intervention group on key "
+            "background characteristics.\n\n"
+            "Because assignment to groups was not random, relevant background characteristics were measured for "
+            "later statistical control."
+        ),
+        "collection": (
+            "Data were collected using a pre-test/post-test protocol administered to both the intervention and "
+            "comparison groups, alongside measures of relevant background characteristics used to support "
+            "statistical control for pre-existing group differences.\n\n"
+            "The same instrument and administration procedure were used for both groups to ensure that "
+            "observed differences reflect the intervention rather than measurement inconsistency."
+        ),
+        "analysis": (
+            "Outcomes were compared between the intervention and comparison groups using analysis of covariance "
+            "(ANCOVA) or multiple regression, with relevant background characteristics included as covariates "
+            "to account for the absence of random assignment.\n\n"
+            "Results are interpreted with appropriate caution regarding causal inference, consistent with the "
+            "quasi-experimental design's reliance on statistical rather than randomised control."
+        ),
+    },
+    # correlational and cross_sectional only need a "design" override — their sampling, data
+    # collection, and analysis already match the generic quantitative-family text verbatim.
+    "correlational": {
+        "design": (
+            "A correlational research design was adopted, examining the strength and direction of "
+            "relationships between variables related to {topic} as they naturally occur, without manipulating "
+            "any variable or assigning participants to conditions. This design was selected because the research "
+            "objectives concern the relationships between variables rather than a causal effect of one on "
+            "another.\n\n"
+            "Because no variable is manipulated, the findings of this study describe association rather than "
+            "causation, and are interpreted accordingly throughout this dissertation."
+        ),
+    },
+    "cross_sectional": {
+        "design": (
+            "A cross-sectional survey research design was adopted, collecting data from the sample on {topic} "
+            "at a single point in time. This design was selected because the research objectives require a "
+            "snapshot of the relationships between variables as they currently stand, rather than tracking "
+            "change over time.\n\n"
+            "While efficient to administer, this design limits the ability to draw conclusions about how the "
+            "variables of interest change over time, a limitation noted further in Chapter 5."
+        ),
+    },
+}
+
+
+def _specific_methodology_from_source(source: str) -> tuple[str | None, str | None]:
+    """Detect a specific named methodology in already-lowercased combined source text.
+    Returns (specific_label, implied_family) or (None, None) if nothing specific is named.
+    """
+    for label, hints, family in _SPECIFIC_METHODOLOGY_HINTS:
+        if any(h in source for h in hints):
+            return label, family
+    return None, None
+
+
+def _specific_methodology(message: str, topic: str, document: Document) -> str | None:
+    source = " ".join([message or "", topic or "", _flatten_doc(document)]).lower()
+    label, _ = _specific_methodology_from_source(source)
+    return label
+
+
 def _research_design(message: str, topic: str, document: Document) -> str:
     source = " ".join(
         [
@@ -753,6 +1174,9 @@ def _research_design(message: str, topic: str, document: Document) -> str:
         return "quantitative"
     if "qualitative" in source:
         return "qualitative"
+    _, implied_family = _specific_methodology_from_source(source)
+    if implied_family:
+        return implied_family
     if any(k in source for k in ["systematic review", "scoping review", "conceptual paper", "theoretical"]):
         return "non_empirical"
     return "quantitative"
@@ -847,7 +1271,9 @@ def _objective_section_title(objective: str) -> str:
     return text
 
 
-def _extract_document_brief(document: Document, topic: str, research_design: str) -> str:
+def _extract_document_brief(
+    document: Document, topic: str, research_design: str, specific_design: str | None = None,
+) -> str:
     """Build a structured brief of the document's research content for grounding subsection prompts."""
     doc_title = (document.title or "").strip()
     content = document.content or {}
@@ -882,6 +1308,11 @@ def _extract_document_brief(document: Document, topic: str, research_design: str
         "mixed": "Mixed-Methods (quantitative + qualitative)",
         "non_empirical": "Non-Empirical / Theoretical / Conceptual",
     }.get(research_design, "Quantitative (survey/statistical)")
+    specific_label = _SPECIFIC_METHODOLOGY_LABELS.get(specific_design or "")
+    if specific_label:
+        design_label = f"{design_label} — specifically a {specific_label} design. Write methodology " \
+            f"content (research design, sampling, data collection, analysis) framed explicitly around " \
+            f"a {specific_label} approach, not generic survey/interview boilerplate."
 
     return (
         "══ THIS STUDY'S BRIEF — ground ALL writing in these specifics ══\n"
@@ -2473,7 +2904,8 @@ def _execute_subsection_nodes(
     tables_by_type: dict[str, dict[str, Any]] = {}
 
     # Build study brief ONCE per call (shared by every node in this invocation)
-    document_brief = _extract_document_brief(document, topic, research_design)
+    specific_design = _specific_methodology(user_instruction, topic, document)
+    document_brief = _extract_document_brief(document, topic, research_design, specific_design)
     if citation_pool:
         from .research_layer import build_citation_context
 
@@ -2713,6 +3145,7 @@ def _execute_subsection_nodes(
                     objectives=(document.content or {}).get("research_objectives"),
                     target_words=default_word_count,
                     research_design=research_design,
+                    specific_design=specific_design,
                 )
                 if grounding:
                     body = f"{grounding} {body}"
@@ -2797,7 +3230,7 @@ def _execute_subsection_nodes(
                 generate_fn=generate_section_content,
                 fallback_fn=lambda t, s, sub, wc: _fallback_subsection_text(
                     t, s, sub, objectives=_doc_objectives, target_words=wc,
-                    research_design=research_design,
+                    research_design=research_design, specific_design=specific_design,
                 ),
                 user_instruction=user_instruction,
             )
@@ -3716,6 +4149,7 @@ def _fallback_subsection_text(
     objectives: list[str] | None = None,
     target_words: int | None = None,
     research_design: str = "",
+    specific_design: str | None = None,
 ) -> str:
     """Return substantive academic fallback text when model generation fails.
 
@@ -3751,7 +4185,7 @@ def _fallback_subsection_text(
     except Exception:
         pass
 
-    body = _fallback_subsection_body(topic, section_title, subsection, objectives, research_design)
+    body = _fallback_subsection_body(topic, section_title, subsection, objectives, research_design, specific_design)
     no_expand = any(k in sub_lower for k in _FALLBACK_NO_EXPAND_KEYWORDS)
     if no_expand or not target_words:
         return body
@@ -3770,11 +4204,13 @@ def _fallback_subsection_body(
     subsection: str,
     objectives: list[str] | None = None,
     research_design: str = "",
+    specific_design: str | None = None,
 ) -> str:
     """Deterministic, per-topic placeholder text for one dissertation subsection."""
     survey_based = _uses_human_respondents(topic, "", objectives)
     is_qualitative = research_design == "qualitative"
     is_mixed = research_design == "mixed"
+    specific_label = _SPECIFIC_METHODOLOGY_LABELS.get(specific_design or "", "")
     sub = subsection.strip()
     sub_lower = sub.lower()
     sec = section_title.strip().lower()
@@ -4226,6 +4662,9 @@ def _fallback_subsection_body(
                     "and the ethical safeguards applied throughout the research process."
                 )
             if "research design" in sub_lower or sub_lower.strip().endswith("design"):
+                design_text = _SPECIFIC_DESIGN_TEXT.get(specific_design or "", {}).get("design")
+                if design_text:
+                    return design_text.format(topic=topic)
                 if is_qualitative:
                     return (
                         "A qualitative research design was adopted, consistent with the interpretivist epistemological "
@@ -4267,6 +4706,9 @@ def _fallback_subsection_body(
                 )
             if "sampl" in sub_lower:
                 seed = sum(ord(c) for c in topic)
+                sampling_text = _SPECIFIC_DESIGN_TEXT.get(specific_design or "", {}).get("sampling")
+                if sampling_text:
+                    return sampling_text.format(topic=topic)
                 if is_qualitative:
                     sample_n = 20 + (seed % 16)
                     return (
@@ -4304,6 +4746,9 @@ def _fallback_subsection_body(
                     "availability, while still supporting the statistical procedures planned for Chapter 4."
                 )
             if "collection" in sub_lower:
+                collection_text = _SPECIFIC_DESIGN_TEXT.get(specific_design or "", {}).get("collection")
+                if collection_text:
+                    return collection_text.format(topic=topic)
                 if is_qualitative:
                     return (
                         "Data were collected through semi-structured interviews guided by an interview protocol "
@@ -4334,6 +4779,9 @@ def _fallback_subsection_body(
                     "window for completion and return."
                 )
             if "analysis" in sub_lower or "analytic" in sub_lower:
+                analysis_text = _SPECIFIC_DESIGN_TEXT.get(specific_design or "", {}).get("analysis")
+                if analysis_text:
+                    return analysis_text.format(topic=topic)
                 if is_qualitative:
                     return (
                         "Interview transcripts were analysed using thematic analysis, following an iterative process "
