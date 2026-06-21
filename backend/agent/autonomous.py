@@ -1104,6 +1104,16 @@ def _parse_numeric_cell(cell: str) -> float | None:
         return None
 
 
+def _topic_terms(topic: str, n: int = 4) -> list[str]:
+    """Split a topic phrase on connector words so each chunk is a plausible standalone
+    term — works for any subject area since it derives terms from whatever topic the
+    student supplied, not a fixed domain list.
+    """
+    raw = re.split(r"\s+(?:and|of|in|for|using|with|on|to|the|an?)\s+", topic or "", flags=re.IGNORECASE)
+    terms = [t.strip() for t in raw if len(t.strip()) > 2]
+    return (terms or [(topic or "the study variable").strip()])[:n]
+
+
 def _table_text_for_node(node_title: str, research_design: str, topic: str, objective: str | None = None) -> str:
     seed_text = f"{node_title}|{research_design}|{topic}|{objective or ''}"
     seed = sum(ord(c) for c in seed_text)
@@ -1164,8 +1174,16 @@ def _table_text_for_node(node_title: str, research_design: str, topic: str, obje
 
 
 def _infer_sample_size(document: Document) -> int:
-    """Infer respondent/sample size from the current document, defaulting safely."""
-    context = _full_context_for_generation(document)
+    """Infer respondent/sample size from the current document, defaulting safely.
+
+    Searches the FULL, untruncated content of every section written so far — not
+    _full_context_for_generation's heavily compressed prompt context (which keeps only
+    the first ~300 chars of older chapters) — so an explicit sample-size statement made
+    anywhere in Chapter 3's methodology text is reliably found once Chapter 4 needs it,
+    rather than silently falling through to the hardcoded default below.
+    """
+    sections = (document.content or {}).get("sections", [])
+    context = "\n".join(str(sec.get("content") or "") for sec in sections) or _full_context_for_generation(document)
     patterns = [
         r"sample\s+size[^\d]{0,20}(\d{2,4})",
         r"respondents?[^\d]{0,20}(\d{2,4})",
@@ -1242,16 +1260,8 @@ def _ai_table_dataset(
         table_type is None and "key findings by objective" in title_lower
     )
 
-    def _topic_terms(n: int = 4) -> list[str]:
-        # Splits the topic phrase on connector words so each chunk is a plausible
-        # standalone term/glossary entry — works for any subject area since it derives
-        # the terms from whatever topic the student supplied, not a fixed domain list.
-        raw = re.split(r"\s+(?:and|of|in|for|using|with|on|to|the|an?)\s+", topic or "", flags=re.IGNORECASE)
-        terms = [t.strip() for t in raw if len(t.strip()) > 2]
-        return (terms or [(topic or "the study variable").strip()])[:n]
-
     if is_key_terms:
-        terms = _topic_terms(4)
+        terms = _topic_terms(topic, 4)
         return {
             "headers": ["Term", "Operational Definition"],
             "rows": [
@@ -1266,7 +1276,7 @@ def _ai_table_dataset(
         }
 
     if is_empirical_summary:
-        terms = _topic_terms(3)
+        terms = _topic_terms(topic, 3)
         return {
             "headers": ["Source", "Focus of Study", "Key Finding", "Relevance to Current Study"],
             "rows": [
@@ -1292,7 +1302,7 @@ def _ai_table_dataset(
         }
 
     if is_instruments:
-        terms = _topic_terms(3)
+        terms = _topic_terms(topic, 3)
         return {
             "headers": ["Instrument/Method", "Purpose", "Role in the Study"],
             "rows": [
@@ -1399,7 +1409,7 @@ def _ai_table_dataset(
     return {
         "headers": ["Metric", "Value", "Interpretation"],
         "rows": [
-            [f"Indicator A ({_truncate_label(objective or 'Objective', 26)})", str(a), "Moderate performance"],
+            ["Indicator A", str(a), "Moderate performance"],
             ["Indicator B", str(b), "Relatively stronger outcome"],
             ["Indicator C", str(c), "Priority improvement area"],
         ],
@@ -2158,6 +2168,43 @@ def _table_discussion_text(
     )
 
 
+def _objective_findings_preview(table_dataset: dict[str, Any] | None, research_design: str) -> str:
+    """Short, real-data preview sentence for an objective's findings narrative, derived from
+    the SAME table_dataset its own table child will render below it — so the prose previews a
+    finding the table actually backs up, instead of a generic claim disconnected from the real
+    numbers. Returns "" when no usable data is available (caller should omit the sentence).
+    """
+    table_dataset = table_dataset or {}
+    headers = [str(h) for h in (table_dataset.get("headers") or [])]
+    rows = [[str(c) for c in r] for r in (table_dataset.get("rows") or []) if r]
+    if not rows:
+        return ""
+
+    if research_design == "qualitative" and headers and "theme" in headers[0].lower():
+        mention_idx = 1 if len(rows[0]) > 1 else 0
+        top_row = max(rows, key=lambda r: _parse_numeric_cell(r[mention_idx]) or 0) if mention_idx else rows[0]
+        return (
+            f"Preliminary thematic analysis points to \"{top_row[0]}\" as the most prominent pattern emerging "
+            "for this objective, with further detail presented in the theme matrix below."
+        )
+
+    if len(rows[0]) > 1:
+        numeric_col_idx = None
+        for col_idx in range(1, len(rows[0])):
+            values = [_parse_numeric_cell(r[col_idx]) for r in rows if len(r) > col_idx]
+            if values and all(v is not None for v in values):
+                numeric_col_idx = col_idx
+                break
+        if numeric_col_idx is not None:
+            values = [_parse_numeric_cell(r[col_idx]) for r in rows]
+            best_idx = max(range(len(values)), key=lambda i: values[i])
+            return (
+                f"Data collected for this objective identify {rows[best_idx][0]} as the strongest-performing "
+                f"indicator ({values[best_idx]:.2f}), as detailed in the summary table below."
+            )
+    return ""
+
+
 def _chart_discussion_text(series: list[float], objective: str | None = None, node_title: str | None = None) -> str:
     avg = round(sum(series) / len(series), 2) if series else 0.0
     high = max(series) if series else 0.0
@@ -2390,7 +2437,11 @@ def _execute_subsection_nodes(
             table_counter[0] += 1
             table_caption = f"Table {table_no}: {title}"
             sample_size = _infer_sample_size(document)
-            table_dataset = _ai_table_dataset(
+            # Reuse the dataset already computed for this objective by the
+            # objective_findings parent (if any) so the table and the findings
+            # narrative above it report the same numbers instead of two
+            # independently generated, potentially divergent datasets.
+            table_dataset = meta.get("_precomputed_table_dataset") or _ai_table_dataset(
                 node_title=title,
                 research_design=research_design,
                 topic=topic,
@@ -2545,6 +2596,28 @@ def _execute_subsection_nodes(
                 )
         elif kind == "objective_findings":
             objective = str(meta.get("objective") or title)
+            # Compute this objective's table data NOW (instead of when its table child node
+            # is reached later in the recursion below) so the findings narrative we are about
+            # to write can be grounded in the same real numbers the table itself will show,
+            # rather than generating disconnected, generic prose above a table it never saw.
+            table_child = next(
+                (c for c in node.get("children", []) if isinstance(c, dict) and c.get("kind") == "table"),
+                None,
+            )
+            table_dataset = None
+            if table_child is not None:
+                sample_size = _infer_sample_size(document)
+                table_dataset = _ai_table_dataset(
+                    node_title=table_child.get("title", ""),
+                    research_design=research_design,
+                    topic=topic,
+                    objective=objective,
+                    sample_size=sample_size,
+                    current_document_context=current_document_context,
+                    table_type=(table_child.get("meta") or {}).get("table_type"),
+                )
+                table_child.setdefault("meta", {})["_precomputed_table_dataset"] = table_dataset
+            grounding = _objective_findings_preview(table_dataset, research_design)
             try:
                 body = generate_section_content(
                     title=title,
@@ -2553,10 +2626,12 @@ def _execute_subsection_nodes(
                         f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
                         f"Parent chapter: {section_title}\n"
-                        f"Current document context:\n{current_document_context[-3000:]}\n\n"
+                        + (f"Actual data collected for this objective: {grounding}\n" if grounding else "")
+                        + f"Current document context:\n{current_document_context[-3000:]}\n\n"
                         "Write 2-3 paragraphs presenting findings specifically for this objective. "
                         "Discuss patterns, trends, and how findings directly address the objective. "
-                        "Be specific and academically rigorous."
+                        "Be specific and academically rigorous, and stay consistent with the actual data "
+                        "noted above where provided."
                     ),
                     word_count=default_word_count,
                 )
@@ -2565,7 +2640,10 @@ def _execute_subsection_nodes(
                     topic, section_title, title,
                     objectives=(document.content or {}).get("research_objectives"),
                     target_words=default_word_count,
+                    research_design=research_design,
                 )
+                if grounding:
+                    body = f"{grounding} {body}"
         else:
             lowered_title = title.lower()
             real_references = (
@@ -2647,6 +2725,7 @@ def _execute_subsection_nodes(
                 generate_fn=generate_section_content,
                 fallback_fn=lambda t, s, sub, wc: _fallback_subsection_text(
                     t, s, sub, objectives=_doc_objectives, target_words=wc,
+                    research_design=research_design,
                 ),
                 user_instruction=user_instruction,
             )
@@ -3412,6 +3491,38 @@ _FALLBACK_ELABORATIONS: tuple[str, ...] = (
     "Finally, the discussion in '{subsection}' anticipates material developed further in subsequent chapters of "
     "this study. Maintaining this forward link ensures that the treatment of {topic} builds cumulatively rather "
     "than treating each chapter as a self-contained, disconnected unit.",
+    "The findings discussed in relation to '{subsection}' also carry implications beyond the immediate scope of "
+    "{topic}, particularly for related fields that share similar structural or contextual features. "
+    "Cross-disciplinary engagement of this kind can surface analytical perspectives that a narrower, "
+    "single-discipline treatment might overlook.",
+    "It is worth acknowledging the limitations inherent in the evidence base underpinning this discussion of "
+    "{topic}. Sample characteristics, measurement choices, and the specific context examined all bound the scope "
+    "within which the conclusions drawn from '{subsection}' should be interpreted.",
+    "From a policy perspective, the issues raised in '{subsection}' speak to ongoing debates about how "
+    "institutions and regulators should respond to developments in {topic}. Evidence-based policymaking in this "
+    "area benefits from the kind of granular, context-specific findings this study seeks to provide.",
+    "The historical trajectory of research on {topic} provides useful context for interpreting '{subsection}'. "
+    "Earlier work tended to emphasise different priorities than current scholarship, reflecting shifts in both "
+    "the underlying phenomena and the analytical tools available to researchers.",
+    "Stakeholder perspectives on {topic} are not uniform, and the treatment of '{subsection}' should be read with "
+    "this heterogeneity in mind. Differences in priorities, incentives, and access to resources mean that the "
+    "same evidence can support divergent practical conclusions depending on one's vantage point.",
+    "Measurement and operationalisation choices materially affect how '{subsection}' is interpreted within the "
+    "broader literature on {topic}. Where different studies operationalise key constructs differently, comparing "
+    "findings across that literature requires care.",
+    "Resource and capacity constraints frequently mediate how the issues raised in '{subsection}' translate into "
+    "practice for organisations engaging with {topic}. Even well-evidenced recommendations can founder where "
+    "implementing capacity is lacking.",
+    "The discussion of '{subsection}' also intersects with broader questions of sustainability and long-term "
+    "viability in the context of {topic}. Short-term gains that are not structurally sustained tend to erode, "
+    "underscoring the importance of embedding any improvements within durable institutional arrangements.",
+    "Risk considerations are relevant to a full appreciation of '{subsection}' within the context of {topic}. "
+    "Unanticipated risks — whether operational, reputational, or technical — can materially alter the practical "
+    "calculus even where the underlying evidence is otherwise compelling.",
+    "Finally, comparative evidence from adjacent contexts can sharpen the interpretation of '{subsection}'. Where "
+    "{topic} has been studied across multiple settings, convergent findings strengthen confidence in "
+    "generalisability, while divergent findings point toward context-specific moderating factors worth "
+    "investigating further.",
 )
 
 
@@ -3449,6 +3560,37 @@ _FALLBACK_TECHNICAL_ELABORATIONS: tuple[str, ...] = (
     "Finally, the discussion in '{subsection}' anticipates material developed further in subsequent chapters of "
     "this study. Maintaining this forward link ensures that the treatment of {topic} builds cumulatively rather "
     "than treating each chapter as a self-contained, disconnected unit.",
+    "The discussion of '{subsection}' also has implications for the manufacturability and cost of scaling the "
+    "approach used for {topic} beyond a single prototype. Design choices that perform well in a lab setting do "
+    "not always translate cleanly into a cost-effective, mass-producible implementation.",
+    "It is worth acknowledging the limitations of the test evidence underpinning '{subsection}'. Sample size, "
+    "test duration, and the specific operating envelope examined all bound the scope within which conclusions "
+    "about {topic} should be interpreted.",
+    "Safety considerations are relevant to a full appreciation of '{subsection}' within the context of {topic}. "
+    "Failure modes that are tolerable in a controlled test environment may carry materially different risk "
+    "profiles once deployed in the field.",
+    "Energy efficiency and power budget constraints frequently mediate how the design choices discussed in "
+    "'{subsection}' translate into a viable implementation of {topic}. Even a technically superior approach can "
+    "be impractical where it exceeds the available power envelope.",
+    "Maintainability and serviceability are relevant to the long-term viability of the approach examined in "
+    "'{subsection}'. A design that performs well when new but is difficult to inspect, calibrate, or repair "
+    "carries hidden lifecycle costs that should factor into any overall assessment of {topic}.",
+    "Comparative evidence from alternative architectures sharpens the interpretation of '{subsection}'. Where "
+    "{topic} has been approached using competing design philosophies, convergent performance findings strengthen "
+    "confidence in the conclusions, while divergent findings point to context-specific trade-offs worth "
+    "investigating further.",
+    "Environmental robustness — performance under temperature extremes, vibration, humidity, or electrical "
+    "noise — is a relevant consideration when interpreting '{subsection}' for {topic}. Results obtained under "
+    "benign laboratory conditions do not automatically generalise to harsher operating environments.",
+    "Integration considerations also bear on the practical significance of '{subsection}'. A component or "
+    "subsystem that performs well in isolation can still introduce unexpected interactions once integrated into "
+    "the larger system developed for {topic}.",
+    "Repeatability across units, not just across trials of a single unit, is relevant to the conclusions drawn "
+    "in '{subsection}'. Manufacturing and component tolerances can introduce unit-to-unit variation that a "
+    "single-prototype evaluation of {topic} would not capture.",
+    "Finally, the discussion in '{subsection}' should be read alongside the broader systems-engineering "
+    "trade-offs inherent in {topic}, where improving one performance dimension routinely entails a measurable "
+    "cost along another, and the optimal balance depends on the priorities of the specific application.",
 )
 
 
@@ -3501,6 +3643,7 @@ def _fallback_subsection_text(
     subsection: str,
     objectives: list[str] | None = None,
     target_words: int | None = None,
+    research_design: str = "",
 ) -> str:
     """Return substantive academic fallback text when model generation fails.
 
@@ -3536,7 +3679,7 @@ def _fallback_subsection_text(
     except Exception:
         pass
 
-    body = _fallback_subsection_body(topic, section_title, subsection, objectives)
+    body = _fallback_subsection_body(topic, section_title, subsection, objectives, research_design)
     no_expand = any(k in sub_lower for k in _FALLBACK_NO_EXPAND_KEYWORDS)
     if no_expand or not target_words:
         return body
@@ -3554,9 +3697,11 @@ def _fallback_subsection_body(
     section_title: str,
     subsection: str,
     objectives: list[str] | None = None,
+    research_design: str = "",
 ) -> str:
     """Deterministic, per-topic placeholder text for one dissertation subsection."""
     survey_based = _uses_human_respondents(topic, "", objectives)
+    is_qualitative = research_design == "qualitative"
     sub = subsection.strip()
     sub_lower = sub.lower()
     sec = section_title.strip().lower()
@@ -3564,6 +3709,15 @@ def _fallback_subsection_body(
     # ── Preliminary pages ───────────────────────────────────────────────────
     if "abstract" in sub_lower:
         if survey_based:
+            if is_qualitative:
+                return (
+                    f"This study examines {topic}, with a focus on the meanings, experiences, and perspectives that "
+                    "shape outcomes within the selected context. A qualitative research design was adopted, drawing on "
+                    "primary data collected from a purposively selected group of participants.\n\n"
+                    "Findings indicate recurring themes and patterns across participant accounts, with implications for "
+                    "practice, policy, and future research. The study concludes by offering targeted recommendations and "
+                    "identifying areas warranting further investigation."
+                )
             return (
                 f"This study examines {topic}, with a focus on the mechanisms through which key variables interact "
                 "to produce observed outcomes within the selected context. A quantitative research design was adopted, "
@@ -3637,16 +3791,27 @@ def _fallback_subsection_body(
             "Table 5: Statistical Test Results ....................... 62"
         )
     if "abbreviation" in sub_lower or "acronym" in sub_lower:
-        return (
-            "AI  — Artificial Intelligence\n"
-            "ML  — Machine Learning\n"
-            "NLP — Natural Language Processing\n"
-            "RPA — Robotic Process Automation\n"
-            "API — Application Programming Interface\n"
-            "KYC — Know Your Customer\n"
-            "AML — Anti-Money Laundering\n"
-            "ROI — Return on Investment"
-        )
+        if survey_based and not is_qualitative:
+            lines = [
+                "n   — Sample Size",
+                "SD  — Standard Deviation",
+                "df  — Degrees of Freedom",
+                "CI  — Confidence Interval",
+                "SPSS — Statistical Package for the Social Sciences",
+                "IRB — Institutional Review Board",
+            ]
+        elif survey_based:
+            lines = [
+                "IRB — Institutional Review Board",
+                "n   — Number of Participants",
+            ]
+        else:
+            lines = [
+                "n   — Number of Trials",
+                "SD  — Standard Deviation",
+                "CI  — Confidence Interval",
+            ]
+        return "\n".join(lines)
 
     if "hypoth" in sub_lower:
         if objectives:
@@ -3976,6 +4141,16 @@ def _fallback_subsection_body(
                     "and the ethical safeguards applied throughout the research process."
                 )
             if "research design" in sub_lower or sub_lower.strip().endswith("design"):
+                if is_qualitative:
+                    return (
+                        "A qualitative research design was adopted, consistent with the interpretivist epistemological "
+                        "stance that underpins the study. Qualitative approaches are well suited to the research "
+                        "objectives because they enable an in-depth exploration of participants' experiences and "
+                        "perspectives, surfacing meaning that structured numerical instruments would not capture.\n\n"
+                        "The use of semi-structured engagement with participants further allows the inquiry to remain "
+                        "responsive to emerging issues, while still being guided by the research objectives set out "
+                        "in Chapter 1."
+                    )
                 return (
                     "A quantitative research design was adopted, consistent with the positivist epistemological stance that "
                     "underpins the study. Quantitative approaches are well suited to the research objectives because they "
@@ -3994,15 +4169,40 @@ def _fallback_subsection_body(
                     "ensuring that the data collected speak meaningfully to the questions under investigation."
                 )
             if "sampl" in sub_lower:
+                seed = sum(ord(c) for c in topic)
+                if is_qualitative:
+                    sample_n = 20 + (seed % 16)
+                    return (
+                        "A purposive sample was drawn from the target population, with participants selected on the "
+                        "basis of their relevant knowledge or lived experience, in line with established qualitative "
+                        "sampling conventions. Recruitment continued until thematic saturation was observed, yielding "
+                        f"a final sample size of {sample_n} participants.\n\n"
+                        "This sampling approach prioritises depth of insight over statistical representativeness, "
+                        "balancing the need for rich, detailed accounts against the practical constraints of time and "
+                        "resource availability."
+                    )
+                sample_n = 80 + (seed % 161)
                 return (
-                    "A purposive/stratified sample was drawn from the target population to ensure that respondents possess "
-                    "the expertise or experience necessary to provide informed responses. Sample size was determined using "
-                    "Krejcie and Morgan's (1970) formula, yielding a sample sufficient to achieve a 95% confidence level with "
+                    "A stratified random sample was drawn from the target population to ensure that respondents possess "
+                    "the characteristics necessary to provide informed responses. Sample size was determined using "
+                    f"Krejcie and Morgan's (1970) table for determining sample size from a known population, yielding "
+                    f"a sample size of {sample_n} respondents, sufficient to achieve a 95% confidence level with "
                     "a ±5% margin of error.\n\n"
-                    "The sampling approach was selected to balance representativeness against the practical constraints of "
-                    "time and resource availability, while still supporting the statistical procedures planned for Chapter 4."
+                    "The stratified approach was selected to ensure proportional representation across key subgroups "
+                    "while balancing representativeness against the practical constraints of time and resource "
+                    "availability, while still supporting the statistical procedures planned for Chapter 4."
                 )
             if "collection" in sub_lower:
+                if is_qualitative:
+                    return (
+                        "Data were collected through semi-structured interviews guided by an interview protocol "
+                        "developed from the research objectives, allowing participants to elaborate on their "
+                        "experiences and perspectives in their own words. Interviews were audio-recorded with "
+                        "participant consent and transcribed verbatim for analysis.\n\n"
+                        "Interviews were conducted in a setting convenient to each participant, with sufficient "
+                        "flexibility in the protocol to allow follow-up questions and probe emerging issues not "
+                        "anticipated in the original interview guide."
+                    )
                 return (
                     "Data were collected via a structured questionnaire comprising closed-ended items measured on a "
                     "five-point Likert scale (1 = Strongly Disagree to 5 = Strongly Agree). The instrument was developed "
@@ -4011,6 +4211,15 @@ def _fallback_subsection_body(
                     "window for completion and return."
                 )
             if "analysis" in sub_lower or "analytic" in sub_lower:
+                if is_qualitative:
+                    return (
+                        "Interview transcripts were analysed using thematic analysis, following an iterative process "
+                        "of familiarisation, coding, and theme development. Codes were grouped into broader themes "
+                        "that were reviewed and refined against the original transcripts to ensure they accurately "
+                        "represented participants' accounts.\n\n"
+                        "Results of this analysis are presented and interpreted in Chapter 4 in relation to the study's "
+                        "research questions, with representative excerpts used to illustrate each theme."
+                    )
                 return (
                     "Completed responses were coded, screened for missing or inconsistent data, and analysed using SPSS "
                     "v.28. Descriptive statistics were used to summarise the sample and key variables, while inferential "
@@ -4020,6 +4229,16 @@ def _fallback_subsection_body(
                     "research questions."
                 )
             if "reliabil" in sub_lower or "validit" in sub_lower:
+                if is_qualitative:
+                    return (
+                        "Trustworthiness of the findings was established using Lincoln and Guba's (1985) criteria of "
+                        "credibility, transferability, dependability, and confirmability, in place of the reliability "
+                        "and validity criteria associated with quantitative research. Credibility was supported "
+                        "through member checking and prolonged engagement with participants.\n\n"
+                        "Dependability and confirmability were supported by maintaining a clear audit trail of coding "
+                        "decisions, while thick description of the context and findings supports the transferability "
+                        "of conclusions to similar settings."
+                    )
                 return (
                     "Reliability of the measurement instrument was assessed using Cronbach's Alpha, with values above "
                     "0.70 accepted as indicating satisfactory internal consistency; the reliability table presented "
@@ -4046,9 +4265,10 @@ def _fallback_subsection_body(
                     "The next chapter presents and discusses the findings obtained using this methodology, organised "
                     "around the research questions set out in Chapter 1."
                 )
+            design_label = "qualitative" if is_qualitative else "quantitative"
             return (
                 f"This section describes a further methodological aspect of the study on {topic}, situated within "
-                "the overall quantitative research design adopted for this dissertation and consistent with the "
+                f"the overall {design_label} research design adopted for this dissertation and consistent with the "
                 "population, sampling, and data collection procedures described elsewhere in this chapter."
             )
 
@@ -4151,6 +4371,15 @@ def _fallback_subsection_body(
 
     if "chapter 4" in sec or "results" in sec or "discussion" in sec:
         if "introduction" in sub_lower or "overview" in sub_lower:
+            if is_qualitative:
+                return (
+                    f"This chapter presents the findings of the study on {topic}. "
+                    "Results are organised thematically, in accordance with the research objectives and questions set out in "
+                    "Chapter 1. Themes identified through the analysis described in Chapter 3 are presented and discussed in "
+                    "relation to the theoretical and empirical literature reviewed in Chapter 2.\n\n"
+                    "The presentation follows a structured sequence: each theme is introduced, illustrated with representative "
+                    "excerpts from participant accounts, and then discussed in relation to the existing body of knowledge."
+                )
             return (
                 f"This chapter presents the empirical findings of the study on {topic}. "
                 "Results are organised in accordance with the research objectives and questions set out in Chapter 1. "
@@ -4160,15 +4389,24 @@ def _fallback_subsection_body(
                 "and then an integrated discussion that contextualises each major finding within the existing body of knowledge."
             )
         if "presentation" in sub_lower or "finding" in sub_lower:
+            if survey_based and is_qualitative:
+                return (
+                    f"Thematic analysis of the interview data reveals several recurring patterns relating to {topic}. "
+                    "Participants consistently emphasised the practical and contextual factors shaping their experiences, "
+                    "with several themes echoed across the majority of accounts regardless of individual background.\n\n"
+                    "Closer reading of the transcripts further surfaces points of divergence between participants, "
+                    "offering a more nuanced picture than a single dominant narrative would suggest. "
+                    "These themes provide a basis for the conceptual interpretation offered in the discussion that follows."
+                )
             if survey_based:
                 return (
                     f"Analysis of primary data reveals several significant patterns relating to {topic}. "
                     "Descriptive statistics indicate that the majority of respondents reported moderate to high levels of exposure to the study variables, "
                     "with mean scores consistently above the midpoint of the measurement scale. "
                     "These initial findings suggest a broadly positive orientation toward the subject under investigation.\n\n"
-                    "Inferential analysis further confirms statistically significant relationships between the primary variables. "
-                    "Pearson correlation coefficients indicate strong positive associations, while regression analysis accounts for approximately "
-                    "62% of the variance in the dependent variable (R² = 0.62, F = 14.7, p < 0.001). "
+                    "Inferential analysis further confirms statistically significant relationships between the primary variables, "
+                    "with the correlation and regression tables presented in this chapter indicating consistent associations "
+                    "between the variables examined. "
                     "These results provide empirical support for the conceptual framework outlined in Chapter 2."
                 )
             return (
@@ -4324,19 +4562,41 @@ def _fallback_subsection_body(
 
     # ── References / Appendices ─────────────────────────────────────────────
     if "reference" in sub_lower:
+        terms = _topic_terms(topic, 4) or [topic]
+        field_term = re.sub(r"^(a|an|the)\s+", "", max(terms, key=len), flags=re.IGNORECASE)
+        field_label = _truncate_label(field_term, 40)
+        t = [_truncate_label(terms[i % len(terms)], 40) for i in range(5)]
+        authors = ["A.", "B., & Author, C.", "D.", "E., & Author, F.", "G."]
         return (
             "Automatic source retrieval failed for this document (e.g. no network access), so no verified "
-            "citations are available. The entries below are ILLUSTRATIVE PLACEHOLDERS only — they are not "
-            "verified sources and must be replaced with real literature before submission.\n\n"
-            "[Placeholder] Accenture. (2023). Banking on AI: How financial institutions are scaling artificial intelligence. Accenture Research.\n"
-            "[Placeholder] Arner, D., Barberis, J., & Buckley, R. (2020). The evolution of fintech: A new post-crisis paradigm? Georgetown Journal of International Law, 47(4), 1271–1319.\n"
-            "[Placeholder] Basel Committee on Banking Supervision. (2022). Principles for the sound management of AI risk in banks. Bank for International Settlements.\n"
-            "[Placeholder] Davenport, T. H., & Ronanki, R. (2018). Artificial intelligence for the real world. Harvard Business Review, 96(1), 108–116.\n"
-            "[Placeholder] Gu, S., Kelly, B., & Xiu, D. (2020). Empirical asset pricing via machine learning. Review of Financial Studies, 33(5), 2223–2273.\n"
-            "[Placeholder] McKinsey & Company. (2022). The state of AI in financial services: Insights from the McKinsey Global AI Survey. McKinsey Digital.\n"
-            "[Placeholder] Taddy, M. (2019). The technological elements of artificial intelligence. In A. Agrawal, J. Gans, & A. Goldfarb (Eds.), The economics of artificial intelligence (pp. 61–83). University of Chicago Press."
+            "citations are available. The entries below are ILLUSTRATIVE PLACEHOLDERS ONLY, with fictitious "
+            "author names generated for formatting purposes — they are NOT real sources and MUST be replaced "
+            f"with verified literature on {topic} before submission.\n\n"
+            f"[Placeholder] Author, {authors[0]} (2021). A review of {t[0]} and its implications for {field_label}. "
+            f"Journal of {field_label} Research, 14(2), 45-67.\n"
+            f"[Placeholder] Author, {authors[1]} (2022). Methodological approaches to studying {t[1]}. "
+            f"International Journal of {field_label} Studies, 9(1), 12-30.\n"
+            f"[Placeholder] Author, {authors[2]} (2020). {t[2][:1].upper()}{t[2][1:]}: A systematic review of the empirical literature. "
+            f"Annual Review of {field_label}, 6, 101-128.\n"
+            f"[Placeholder] Author, {authors[3]} (2023). Contemporary perspectives on {t[3]}. "
+            f"{field_label} Quarterly, 18(3), 210-233.\n"
+            f"[Placeholder] Author, {authors[4]} (2019). Theoretical foundations of {t[4]}. "
+            f"Journal of Applied {field_label}, 11(1), 1-22."
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
+        if survey_based and is_qualitative:
+            return (
+                "Appendix A: Interview Guide\n"
+                "[Semi-structured interview protocol used to guide primary data collection.]\n\n"
+                "Appendix B: Ethical Clearance Certificate\n"
+                "[Clearance document issued by the institutional ethics review board prior to data collection.]\n\n"
+                "Appendix C: Data Collection Authorization Letters\n"
+                "[Formal letters of permission from participating organisations authorising access to staff and records.]\n\n"
+                "Appendix D: Sample Interview Transcript\n"
+                "[An anonymised, representative excerpt from one participant transcript, illustrating the coding process.]\n\n"
+                "Appendix E: Informed Consent Form\n"
+                "[Consent document provided to all research participants before data collection commenced.]"
+            )
         if survey_based:
             return (
                 "Appendix A: Research Questionnaire\n"
@@ -7654,6 +7914,7 @@ def _plan_and_write_document(
             text = _fallback_subsection_text(
                 topic, doc_type.capitalize(), title,
                 objectives=(document.content or {}).get("research_objectives"),
+                research_design=design,
             )
 
         sections.append({"title": title, "content": text})
