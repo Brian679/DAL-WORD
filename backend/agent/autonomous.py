@@ -253,10 +253,15 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
         return (
             "Write the Recommendations section as a clearly structured list. "
             "Open with 1 paragraph explaining the basis for these recommendations (what findings led here). "
-            "Then present 5–8 specific, actionable recommendations using numbered sub-headings. "
+            "Then present 5–8 specific, actionable recommendations, each named and numbered. "
             "Each recommendation must: name the action, specify WHO should take it, "
             "explain WHY (link back to a finding), and describe the expected outcome. "
-            "Be direct, concrete, and feasible — avoid vague generalities like 'organisations should improve'."
+            "Be direct, concrete, and feasible — avoid vague generalities like 'organisations should improve'. "
+            "If — and only if — this study's topic is applied/organizational/policy-oriented enough that a "
+            "rollout timeline genuinely makes sense, group the recommendations under three labelled "
+            "sub-headings by implementation horizon: 'Short-term (0–6 months)', 'Medium-term (6–18 months)', "
+            "and 'Long-term (18 months and beyond)'. For a purely theoretical, lab-based, or exploratory "
+            "topic where no real-world rollout is implied, skip that grouping and just number the list."
         )
 
     if "swot" in lowered:
@@ -348,6 +353,16 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
             "(4) Acknowledges limitations briefly and honestly. "
             "(5) Ends with a forward-looking closing statement about implications or future work. "
             "Write in past tense for what was found; present tense for implications."
+        )
+
+    if "contribution" in lowered:
+        return (
+            "Write the Contributions of the Study using three clearly labelled sub-headings: "
+            "'Theoretical Contributions' (how this study extends, refines, or challenges existing theory "
+            "or frameworks), 'Practical Contributions' (concrete value for practitioners, organizations, "
+            "or policy), and 'Methodological Contributions' (anything notable about the approach, "
+            "instruments, or analysis technique used). Each sub-section: 2–4 sentences, specific to this "
+            "study's actual findings and design — not generic claims any study could make."
         )
 
     if "references" in lowered or "bibliography" in lowered:
@@ -654,20 +669,40 @@ def _has_chart_type(nodes: list[dict[str, Any]], chart_type: str) -> bool:
 
 
 def _ensure_chart_visual(
-    nodes: list[dict[str, Any]], chart_type: str, title: str, keywords: tuple[str, ...]
+    nodes: list[dict[str, Any]],
+    chart_type: str,
+    title: str,
+    keywords: tuple[str, ...],
+    required: bool = True,
+    exclude_keywords: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Guarantee a Chapter 2 diagram of the given chart_type exists even if the LLM-tailored
     section titles don't literally contain one of the _SECTION_VISUAL_SPECS keywords (the plan
     prompt deliberately encourages topic-specific, non-generic headings).
+
+    When required is False, this only attaches the diagram to a section whose title already
+    suggests it belongs there — it never invents a home for it on an unrelated node. Used for
+    diagrams (e.g. a named-theory model) that don't fit every study, so the planner's own
+    decision to omit the matching heading is respected rather than overridden.
+
+    exclude_keywords skips candidate nodes that belong to a different, more specific diagram
+    (e.g. a "Theoretical Framework" heading also contains the substring "framework", which would
+    otherwise wrongly steal the Conceptual Framework diagram meant for its own heading).
     """
     if not nodes or _has_chart_type(nodes, chart_type):
         return nodes
 
     target_idx = next(
-        (i for i, n in enumerate(nodes) if any(kw in (n.get("title") or "").lower() for kw in keywords)),
+        (
+            i for i, n in enumerate(nodes)
+            if any(kw in (n.get("title") or "").lower() for kw in keywords)
+            and not any(kw in (n.get("title") or "").lower() for kw in exclude_keywords)
+        ),
         None,
     )
     if target_idx is None:
+        if not required:
+            return nodes
         # No obvious match — place it on the second node (after the chapter intro),
         # or the first if the chapter has only one section.
         target_idx = 1 if len(nodes) > 1 else 0
@@ -685,12 +720,20 @@ def _ensure_chart_visual(
 
 
 def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Guarantee Chapter 2 gets both a conceptual-framework diagram and a theoretical-framework
-    (named theory) diagram. Theory is ensured first so it claims a "theoretical"-titled node
-    before the conceptual fallback would otherwise grab it.
+    """Guarantee Chapter 2 gets a conceptual-framework diagram (near-universal across designs),
+    and a theoretical-framework (named theory) diagram only when a section already suggests one
+    is intended. Theory is checked first so it claims a "theoretical"-titled node before the
+    conceptual fallback's broader keyword match would otherwise grab it; the conceptual pass also
+    explicitly excludes "theoretical"-titled nodes so it can't steal that heading even when no
+    theory diagram ends up attached to it (e.g. when required=False skipped it).
     """
-    nodes = _ensure_chart_visual(nodes, "theory_model", "Theoretical Framework Diagram", ("theoretical", "theory"))
-    nodes = _ensure_chart_visual(nodes, "framework", "Conceptual Framework Diagram", ("conceptual", "framework", "model"))
+    nodes = _ensure_chart_visual(
+        nodes, "theory_model", "Theoretical Framework Diagram", ("theoretical", "theory"), required=False,
+    )
+    nodes = _ensure_chart_visual(
+        nodes, "framework", "Conceptual Framework Diagram", ("conceptual", "framework", "model"),
+        required=True, exclude_keywords=("theoretical", "theory"),
+    )
     return nodes
 
 
@@ -2447,12 +2490,14 @@ def generate_dissertation_plan_llm(
         "- Chapter 2 must include exactly one section whose title literally contains the words "
         "'Conceptual Framework' (e.g. 'X.X Conceptual Framework of <topic-specific qualifier>') — this is "
         "where the conceptual framework diagram will be placed, so do not omit or rename it away from "
-        "that exact phrase even while keeping other Chapter 2 headings topic-specific.\n"
-        "- Chapter 2 must also include exactly one separate section whose title literally contains the "
-        "words 'Theoretical Framework' (e.g. 'X.X Theoretical Framework: <Named Theory>'), distinct from "
-        "the Conceptual Framework section — this is where a diagram of the underlying theory's own "
-        "constructs will be placed, so name an actual theory relevant to the topic rather than a "
-        "generic placeholder.\n"
+        "that exact phrase even while keeping other Chapter 2 headings topic-specific. Skip this only in "
+        "the rare case the study has no variables/constructs whose relationships could be diagrammed (e.g. "
+        "a pure historical or doctrinal literature synthesis).\n"
+        "- Chapter 2 should ALSO include a separate section whose title literally contains the words "
+        "'Theoretical Framework' (e.g. 'X.X Theoretical Framework: <Named Theory>'), distinct from the "
+        "Conceptual Framework section, but ONLY when the study is genuinely anchored in one or more "
+        "specific, named theories — name the actual theory, never a generic placeholder. If no single "
+        "theory meaningfully grounds this particular study, omit this section rather than forcing one in.\n"
         "- Chapter 2 must end with a 'Chapter Summary' section.\n"
         "- Chapter 3 sections must reflect the stated research design "
         f"({research_design}): include appropriate data collection and analysis subsections. "
@@ -2460,7 +2505,12 @@ def generate_dissertation_plan_llm(
         "- Chapter 4 must have results subsections that directly correspond to the research objectives "
         "or questions. Chapter 4 must end with a 'Chapter Summary' section.\n"
         "- Chapter 5 must include: Summary of Findings, Conclusions, Recommendations, Limitations, "
-        "Areas for Further Research, Chapter Summary.\n"
+        "Areas for Further Research, Chapter Summary. For an applied/organizational/policy topic where an "
+        "implementation timeline genuinely makes sense, organize the Recommendations section's content "
+        "around Short-term, Medium-term, and Long-term actions — skip this structuring for purely "
+        "theoretical, lab-based, or exploratory topics where a rollout timeline wouldn't make sense. "
+        "Where it fits the study, you may also add a 'Contributions of the Study' section covering its "
+        "Theoretical, Practical, and Methodological contributions.\n"
         "- Each main chapter should have 6–12 sections (including the Chapter Summary). Sections may have nested sub-sections.\n"
         "- All titles must use standard academic numbering (1.1, 1.2, 2.1, 2.2.1, etc.).\n"
         "- The Chapter Summary in each chapter must be the LAST section.\n"
