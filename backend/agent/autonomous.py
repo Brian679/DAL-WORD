@@ -1278,6 +1278,33 @@ def _uses_human_respondents(topic: str, message: str, objectives: list[str] | No
     return True
 
 
+# Topics in law, policy, philosophy, history, theology, literature, and similar fields are
+# typically analysed through documents, texts, or cases rather than respondents or test
+# trials. Checked only when no respondent hint is present, since a human-facing study about
+# (e.g.) "perceptions of judges on..." is still a survey-based study despite the legal subject.
+_DOCTRINAL_HINTS = (
+    "doctrinal", "jurisprudence", "case law", "case-law", "statute", "statutory", "legislation",
+    "constitutional", "human rights law", "treaty", "treaties", "comparative law", "legal framework",
+    "regulatory framework", "rule of law", "legal doctrine", "legal analysis", "philosophy of",
+    "philosophical analysis", "ethics of", "ethical analysis", "theology", "religious studies",
+    "literary analysis", "literary criticism", "textual analysis", "discourse analysis",
+  "hermeneutic", "historiography", "historical analysis", "archival research", "policy analysis",
+    "policy framework", "conceptual paper", "systematic review", "scoping review", "doctrinal review",
+)
+
+
+def _is_doctrinal_topic(topic: str, message: str, objectives: list[str] | None = None) -> bool:
+    """Decide whether the study is a document/text-based doctrinal or theoretical inquiry
+    (law, policy, philosophy, history, theology, literature, pure conceptual review) rather
+    than a respondent-survey or build-and-test study. Respondent hints always take priority,
+    since a human-facing study about a legal/policy topic is still survey-based.
+    """
+    text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
+    if any(hint in text for hint in _RESPONDENT_HINTS):
+        return False
+    return any(hint in text for hint in _DOCTRINAL_HINTS)
+
+
 def _extract_objectives(document: Document, topic: str) -> list[str]:
     """Dynamically analyze the whole document and extract objectives using the LLM."""
     from agent.gemini import extract_formal_objectives
@@ -4959,6 +4986,49 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_BACKGROUND_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "{topic} has long occupied an unsettled place within the relevant doctrinal and scholarly tradition, with "
+        "positions shifting as new texts, decisions, or interpretive arguments enter the conversation. The "
+        "background of this study situates the inquiry within this evolving body of thought, drawing on the "
+        "authoritative sources and leading commentary that frame the present debate.\n\n"
+        "Across the field, commentators have advanced competing readings of the relevant doctrine, framework, or "
+        "text, often reaching markedly different conclusions from substantially the same source material {cite1}. This "
+        "divergence has not been resolved by a single authoritative synthesis, leaving practitioners, adjudicators, "
+        "and scholars to navigate a body of thought that remains, in important respects, contested.\n\n"
+        "Against this backdrop, the present study addresses a clear scholarly need: to undertake a systematic, "
+        "close reading of the primary and secondary sources bearing on {topic}, in order to clarify the principal "
+        "lines of argument and assess their relative strength. In doing so, the study contributes a structured "
+        "analysis that is transferable to practice, adjudication, and ongoing scholarly debate."
+    ),
+    (
+        "Although {topic} has attracted sustained scholarly attention, much of the resulting commentary engages "
+        "selectively with the underlying primary sources, often privileging convenient illustrative texts over a "
+        "systematic account of the full body of relevant material. This study begins from that gap: it returns to "
+        "the primary sources directly, rather than relying solely on secondary characterisations of them.\n\n"
+        "Within the wider field, observers report a persistent tension between formalist readings that anchor "
+        "closely to the text and purposive readings that emphasise the underlying values the text is meant to "
+        "serve {cite1}. This tension has shaped practice and adjudication in ways that remain only partially "
+        "documented in the existing scholarship.\n\n"
+        "It is this gap that the present study sets out to address, by undertaking a close, source-grounded "
+        "analysis of {topic} rather than extending existing secondary characterisations. In doing so, it aims to "
+        "produce an account that speaks directly to practice, scholarly debate, and, where relevant, reform."
+    ),
+    (
+        "The treatment of {topic} within the relevant tradition has evolved considerably over time, as successive "
+        "authorities, texts, and commentators have revisited, refined, or contested earlier positions. What began as "
+        "a comparatively settled view has, in important respects, become a live and unresolved question.\n\n"
+        "This evolution has not been uniform across sources or sub-traditions {cite1}. Some authorities have moved "
+        "decisively toward a particular reading, while others continue to apply earlier positions largely "
+        "unmodified, producing a body of thought marked by genuine disagreement rather than superficial variation "
+        "in phrasing.\n\n"
+        "The present study responds to this need directly. By undertaking a systematic analysis of the primary and "
+        "secondary sources bearing on {topic}, it aims to clarify the principal lines of argument, the points of "
+        "genuine disagreement, and the considerations that bear on resolving them — producing an account that is "
+        "transferable to practice, adjudication, and ongoing scholarly debate."
+    ),
+)
+
 # Statement of the Problem — varied framing (gap-led, cost-of-inaction-led, evidence-thinness-led).
 _PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
     (
@@ -5031,6 +5101,41 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_PROBLEM_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "Despite sustained scholarly engagement with {topic}, a critical gap persists in the literature: there is "
+        "no systematic, source-grounded account that resolves the principal points of disagreement among "
+        "competing positions {cite1}. Existing commentary tends to rely on selective citation of authority rather than "
+        "a comprehensive analysis of the primary sources bearing on the question.\n\n"
+        "This limitation has practical consequences — practitioners, adjudicators, and policymakers operate with "
+        "an incomplete or contested account of the governing doctrine, increasing the risk of inconsistent "
+        "interpretation and application. The problem, therefore, is not merely academic; it carries direct "
+        "implications for how the relevant doctrine, framework, or text is understood and applied in practice. "
+        "This study is designed to address that gap directly by undertaking a systematic, source-grounded "
+        "analysis of the question."
+    ),
+    (
+        "A central difficulty facing scholars and practitioners working on {topic} is the absence of a sustained, "
+        "primary-source analysis that engages directly with the points of disagreement rather than restating "
+        "established secondary characterisations {cite1}. Much of the available commentary draws on a narrow set of "
+        "frequently cited sources, leaving important primary material comparatively unexamined.\n\n"
+        "That gap is not merely an academic inconvenience. Where practitioners and adjudicators lack a clear, "
+        "well-reasoned account of the governing position, they are left to rely on incomplete or selectively cited "
+        "authority, which can produce inconsistent outcomes in materially similar cases. This study is designed to "
+        "close that gap by generating a systematic, primary-source analysis of the question."
+    ),
+    (
+        "{topic} continues to attract considerable scholarly attention, yet the body of analysis available to those "
+        "who must apply or interpret it remains less settled than the volume of commentary would suggest {cite1}. "
+        "Existing accounts frequently talk past one another, addressing adjacent rather than identical questions, "
+        "raising legitimate doubts about how well the existing literature actually resolves the matter.\n\n"
+        "Left unaddressed, this gap carries real costs: institutions and practitioners continue to apply or argue "
+        "the relevant doctrine without a clear, well-reasoned synthesis of the competing positions, increasing the "
+        "likelihood of inconsistent or poorly justified outcomes. This study addresses that gap directly, "
+        "generating a systematic, source-grounded analysis rather than relying on selective or partial accounts."
+    ),
+)
+
 # Discussion of Findings (Chapter 4) — varied closing framing while keeping the same
 # evidentiary content (consistency with the literature, plausible source of deviation).
 _DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
@@ -5075,6 +5180,28 @@ _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_DISCUSSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "The themes identified are broadly consistent with the theoretical positions advanced in the literature "
+        "review {cite1}. The recurring lines of argument confirm that {topic} is a multidimensional question shaped by "
+        "competing principles, institutional context, and the period or jurisdiction in which a given source was produced.\n\n"
+        "Where this study's reading of the corpus diverges from prior commentary, this may be attributed to the "
+        "particular combination of sources selected for close analysis, or to a different weighting of the competing "
+        "principles at stake. These divergences sharpen rather than undermine the overall picture, clarifying exactly "
+        "where reasonable disagreement persists."
+    ),
+    (
+        "On the whole, the pattern of arguments traced through the corpus aligns with what the literature reviewed in "
+        "Chapter 2 would lead one to expect {cite1}, lending support to the theoretical framework that guided the "
+        "analysis. {topic} emerges from this analysis as a multidimensional question — one in which competing "
+        "principles, institutional context, and source provenance interact rather than operate independently.\n\n"
+        "Where the present analysis diverges from earlier commentary, the most plausible explanation lies in features "
+        "specific to this study's corpus: the particular combination of sources selected, or a different weighting "
+        "given to the competing considerations at stake. These are differences of emphasis rather than of kind, and "
+        "they do not undermine the overall pattern so much as refine it."
+    ),
+)
+
 # Conclusion (Chapter 5) — varied opening framing while preserving the evidentiary claim.
 _CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
     (
@@ -5113,6 +5240,27 @@ _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, comparable "
         "work reviewed earlier in the dissertation {cite1}. Together, they support the view that careful attention to design "
         "detail and systematic testing is a precondition for achieving reliable system performance."
+    ),
+)
+
+_CONCLUSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "Based on the analysis presented, the study concludes that {topic} raises a set of recurring tensions that "
+        "the existing sources address with varying degrees of consistency. The corpus confirms that well-reasoned, "
+        "clearly grounded positions command substantially broader scholarly support than those resting on weaker or "
+        "more contested foundations.\n\n"
+        "The study's conclusions are grounded in close reading of the primary corpus and corroborated by the wider "
+        "secondary literature {cite1}, lending confidence to the view that further doctrinal clarity on these "
+        "questions would meaningfully advance both scholarship and practice."
+    ),
+    (
+        "Taken as a whole, the analysis conducted in this study supports the conclusion that {topic} exerts a "
+        "consistent and identifiable influence on how the relevant principles are interpreted and applied. Where "
+        "sources are clearly reasoned and well grounded in established authority, the resulting positions command "
+        "markedly broader support than those resting on weaker foundations.\n\n"
+        "This conclusion does not rest on the present analysis alone — it is consistent with, and reinforced by, "
+        "the wider body of literature reviewed earlier in the dissertation {cite1}. Together, they support the view "
+        "that continued doctrinal attention to these questions is warranted."
     ),
 )
 
@@ -5163,6 +5311,29 @@ _RECOMMENDATION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "reproduction and fair comparison with future designs.\n"
         "4. Future work should extend testing to a wider range of operating conditions and longer continuous-operation "
         "periods to establish long-term reliability."
+    ),
+)
+
+_RECOMMENDATION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "Based on the analysis, the following recommendations are offered to scholars, practitioners, and policymakers:\n\n"
+        "1. Scholars should pursue further doctrinal clarification of the points of disagreement identified in this study's corpus.\n"
+        "2. Institutions and practitioners should review existing guidance or instruments to ensure consistency with the more "
+        "persuasive line of argument identified here.\n"
+        "3. Policymakers should consider codifying or clarifying the relevant provisions where the present analysis "
+        "reveals unresolved ambiguity.\n"
+        "4. Future research should extend the corpus considered here to additional jurisdictions, periods, or schools "
+        "of thought to test whether the patterns identified hold more broadly."
+    ),
+    (
+        "The analysis conducted in this study points toward several concrete actions for scholars, practitioners, and "
+        "policymakers:\n\n"
+        "1. Further doctrinal work should directly engage the points of disagreement surfaced by this study's corpus.\n"
+        "2. Existing guidance or instruments should be reassessed against the more persuasive line of argument "
+        "identified in this analysis.\n"
+        "3. Policymakers should consider clarifying provisions where this study reveals persistent ambiguity.\n"
+        "4. Subsequent research should extend the corpus to additional jurisdictions, periods, or schools of thought "
+        "to test how far the patterns identified here generalise."
     ),
 )
 
@@ -5279,6 +5450,7 @@ def _fallback_subsection_body(
 ) -> str:
     """Deterministic, per-topic placeholder text for one dissertation subsection."""
     survey_based = _uses_human_respondents(topic, "", objectives)
+    is_doctrinal = _is_doctrinal_topic(topic, "", objectives)
     is_qualitative = research_design == "qualitative"
     is_mixed = research_design == "mixed"
     specific_label = _SPECIFIC_METHODOLOGY_LABELS.get(specific_design or "", "")
@@ -5293,6 +5465,17 @@ def _fallback_subsection_body(
 
     # ── Preliminary pages ───────────────────────────────────────────────────
     if "abstract" in sub_lower:
+        if is_doctrinal:
+            return (
+                f"This study undertakes a doctrinal and theoretical examination of {topic}, analysing primary and "
+                "secondary textual sources to clarify the principles, arguments, and gaps that characterise current "
+                "thinking on the subject. A qualitative, document-based research design was adopted, drawing on "
+                "purposively selected texts, instruments, or cases rather than primary data collected from human "
+                "respondents.\n\n"
+                "The analysis identifies recurring lines of reasoning and unresolved tensions within the literature, "
+                "with implications for scholarship, practice, and policy. The study concludes by offering targeted "
+                "recommendations and identifying questions warranting further inquiry."
+            )
         if survey_based:
             if is_qualitative:
                 return (
@@ -5356,6 +5539,14 @@ def _fallback_subsection_body(
             "Appendices ............................................... 85"
         )
     if "list of figures" in sub_lower:
+        if is_doctrinal:
+            return (
+                f"Figure 1: Conceptual/Doctrinal Framework for {topic} ... 12\n"
+                "Figure 2: Research Design Overview ..................... 34\n"
+                "Figure 3: Thematic Distribution of Source Materials .... 52\n"
+                "Figure 4: Key Findings Summary .......................... 55\n"
+                "Figure 5: Comparative Doctrinal Analysis Chart .......... 60"
+            )
         if survey_based:
             return (
                 f"Figure 1: Conceptual Framework for {topic} ............. 12\n"
@@ -5372,6 +5563,14 @@ def _fallback_subsection_body(
             "Figure 5: Comparative Analysis Chart .................... 60"
         )
     if "list of tables" in sub_lower:
+        if is_doctrinal:
+            return (
+                "Table 1: Summary of Reviewed Sources and Literature .... 22\n"
+                "Table 2: Classification of Primary and Secondary Sources 51\n"
+                "Table 3: Thematic Summary of Key Arguments .............. 54\n"
+                "Table 4: Comparative Doctrinal Analysis Matrix .......... 57\n"
+                "Table 5: Summary of Recommendations ...................... 62"
+            )
         if survey_based:
             return (
                 "Table 1: Summary of Reviewed Studies ................... 22\n"
@@ -5388,6 +5587,13 @@ def _fallback_subsection_body(
             "Table 5: Statistical Test Results ....................... 62"
         )
     if "abbreviation" in sub_lower or "acronym" in sub_lower:
+        if is_doctrinal:
+            return (
+                "This study does not rely on statistical or technical abbreviations, given its doctrinal and "
+                "textual approach. Specialised terms, citations, and source abbreviations (e.g. case names, "
+                "statutory short titles, or canonical references) are defined or expanded at first use in the "
+                "relevant chapter."
+            )
         if survey_based and not is_qualitative:
             lines = [
                 "n   — Sample Size",
@@ -5411,6 +5617,20 @@ def _fallback_subsection_body(
         return "\n".join(lines)
 
     if "hypoth" in sub_lower:
+        if is_doctrinal:
+            stems = [
+                re.sub(r"^to\s+\w+\s+", "", obj.strip().rstrip("."), count=1, flags=re.IGNORECASE) or obj.strip().rstrip(".")
+                for obj in (objectives or [])[:3]
+            ] or [topic]
+            lines = [
+                f"{i}. P{i}: {stem[:1].upper()}{stem[1:]} reflects an unresolved tension or gap in the existing "
+                "doctrinal and theoretical literature that this study's textual analysis is positioned to clarify."
+                for i, stem in enumerate(stems, start=1)
+            ]
+            return (
+                "As a doctrinal/theoretical inquiry, this study is guided by propositions for analysis rather than "
+                "statistically testable hypotheses:\n\n" + "\n".join(lines)
+            )
         if objectives:
             lines = []
             for i, obj in enumerate(objectives[:3], start=1):
@@ -5430,16 +5650,32 @@ def _fallback_subsection_body(
 
     # ── Chapter 1 Introduction subsections ─────────────────────────────────
     if "background" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
-        pool = _BACKGROUND_VARIANTS_SURVEY if survey_based else _BACKGROUND_VARIANTS_TECHNICAL
+        pool = _BACKGROUND_VARIANTS_DOCTRINAL if is_doctrinal else (
+            _BACKGROUND_VARIANTS_SURVEY if survey_based else _BACKGROUND_VARIANTS_TECHNICAL
+        )
         cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|background", k=1)[0])
         return _seeded_pick(topic, pool).format(topic=topic, cite1=cite1)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
-        pool = _PROBLEM_VARIANTS_SURVEY if survey_based else _PROBLEM_VARIANTS_TECHNICAL
+        pool = _PROBLEM_VARIANTS_DOCTRINAL if is_doctrinal else (
+            _PROBLEM_VARIANTS_SURVEY if survey_based else _PROBLEM_VARIANTS_TECHNICAL
+        )
         cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|problem", k=1)[0])
         return _seeded_pick(f"{topic}|problem", pool).format(topic=topic, cite1=cite1)
 
     if "significance" in sub_lower:
+        if is_doctrinal:
+            return (
+                f"The significance of this study lies in its potential to clarify and systematise the doctrinal or "
+                f"theoretical understanding of {topic}, contributing a structured analysis to a body of scholarship "
+                "where positions are often scattered across disparate sources, commentaries, and decisions.\n\n"
+                "At the academic level, the study offers a reasoned synthesis that future scholars and students can "
+                "build upon or contest. At the practical level, the findings may guide practitioners, drafters, "
+                "adjudicators, or policymakers who must apply or interpret the relevant doctrine, framework, or text "
+                "in concrete settings. At the broader societal level, a clearer articulation of the governing "
+                "principles strengthens consistency, predictability, and fairness in how the subject matter is "
+                "understood and applied."
+            )
         if survey_based:
             return (
                 f"The significance of this study lies in its potential to generate evidence that bridges the gap between "
@@ -5462,6 +5698,21 @@ def _fallback_subsection_body(
         )
 
     if "scope" in sub_lower or "delimitation" in sub_lower:
+        if is_doctrinal:
+            return (
+                "The scope of this study is defined by three primary parameters: thematic focus, source boundary, "
+                f"and temporal horizon. Thematically, the study concentrates on the doctrines, texts, or arguments "
+                f"central to {topic}, and excludes adjacent debates that, while related, fall outside its analytical "
+                "frame. The source boundary is defined by the body of primary and secondary materials — statutes, "
+                "case law, canonical texts, treatises, or scholarly commentary, as relevant to the discipline — that "
+                "the study draws upon and treats as authoritative for its analysis. Temporally, the study reflects "
+                "the state of the doctrine, debate, or text as it stands within the period under review, rather than "
+                "tracing every subsequent development.\n\n"
+                "These delimitations are deliberate scholarly choices designed to maintain analytic depth, ensure "
+                "feasibility within the available sources and time, and enhance the coherence of the resulting "
+                "argument. They do not represent shortcomings but rather principled boundaries that sharpen the "
+                "study's focus."
+            )
         if survey_based:
             return (
                 "The scope of this study is defined by three primary parameters: thematic focus, geographic boundary, "
@@ -5489,6 +5740,19 @@ def _fallback_subsection_body(
         )
 
     if "definition" in sub_lower or "key term" in sub_lower:
+        if is_doctrinal:
+            return (
+                "For the purpose of this study, key terms are operationally defined as follows:\n\n"
+                "Doctrine: A settled principle, rule, or interpretive position, derived from authoritative sources, "
+                "that governs reasoning within the subject matter under review.\n\n"
+                "Primary Source: An original authoritative text — such as a statute, judicial decision, canonical "
+                "text, treaty, or official record — treated as direct evidence of the doctrine, position, or "
+                "argument being examined.\n\n"
+                "Secondary Source: Scholarly commentary, critique, or interpretation that analyses, contextualises, "
+                "or evaluates the primary sources relevant to the study.\n\n"
+                "These definitions align with established usage in the relevant scholarly literature and provide a "
+                "consistent conceptual basis for analysis and argumentation throughout the dissertation."
+            )
         if survey_based:
             return (
                 "For the purpose of this study, key terms are operationally defined as follows:\n\n"
@@ -5558,6 +5822,22 @@ def _fallback_subsection_body(
                 "framework and the empirical hypotheses examined later in the study."
             )
         if "theoretical" in sub_lower or "theory" in sub_lower or "theories" in sub_lower:
+            if is_doctrinal:
+                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
+                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                return (
+                    f"This section presents the theoretical and doctrinal foundations relevant to {topic}. Several "
+                    "schools of thought offer complementary lenses for interpreting the sources and arguments under "
+                    "review, including classical and contemporary perspectives drawn from the relevant scholarly "
+                    "tradition.\n\n"
+                    f"Among the foundational perspectives considered, formalist or textualist approaches emphasise close "
+                    f"adherence to the plain meaning and internal logic of the authoritative sources {c1}, while "
+                    f"purposive or contextualist approaches emphasise the underlying intent, values, or social purpose "
+                    f"that the sources are meant to serve {c2}. Contemporary scholarship often draws on both traditions "
+                    "selectively, depending on the interpretive question at hand. The framework judged most applicable "
+                    "to this study is justified on the grounds of its explanatory and interpretive power for the "
+                    "specific doctrine, text, or argument examined here."
+                )
             if survey_based:
                 c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
                 c1, c2 = _citation_paren(c1), _citation_paren(c2)
@@ -5591,6 +5871,17 @@ def _fallback_subsection_body(
             )
         if "global evidence" in sub_lower or ("empirical" in sub_lower and "global" in sub_lower):
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|global", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Scholarship and authoritative sources on {topic} reveal broadly consistent lines of reasoning "
+                    "across different jurisdictions, traditions, or schools of thought, albeit with notable "
+                    "variation in emphasis and resolution. Cross-jurisdictional and cross-traditional comparison "
+                    f"reveals recurring positions on the central questions this study examines {c1}, shaped by "
+                    "contextual factors such as institutional history, prevailing doctrine, and underlying values.\n\n"
+                    "Taken together, this comparative picture establishes a strong basis for the present inquiry, "
+                    "while also highlighting the need for the focused, context-specific analysis that this study "
+                    "seeks to provide."
+                )
             return (
                 f"Global empirical evidence on {topic} reveals broadly consistent patterns across diverse settings, "
                 "albeit with notable variation in magnitude and mechanism. Cross-country and cross-sectoral studies "
@@ -5603,6 +5894,16 @@ def _fallback_subsection_body(
             )
         if "developed econom" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developed", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Scholarship from well-established legal, philosophical, or institutional systems demonstrates "
+                    f"relatively mature and settled treatment of {topic}, supported by a long history of doctrine, "
+                    f"precedent, or commentary. Sources from these traditions often report more developed and "
+                    f"internally consistent positions {c1}, reflecting decades or centuries of refinement.\n\n"
+                    "Nonetheless, even within these mature traditions, commentators note unresolved tensions and "
+                    "areas of ongoing reform, underscoring that doctrinal maturity alone does not guarantee settled "
+                    "consensus."
+                )
             return (
                 f"Evidence from developed economies demonstrates relatively mature engagement with {topic}, supported "
                 "by well-established institutional, regulatory, and infrastructural conditions. Studies conducted in "
@@ -5614,6 +5915,16 @@ def _fallback_subsection_body(
             )
         if "emerging econom" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|emerging", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Sources from transitional or reforming systems provide important comparative material on "
+                    f"{topic}, often revealing different pressures and constraints than those documented in more "
+                    f"settled traditions. Institutional transition, evolving doctrine, and capacity limitations "
+                    f"frequently shape the strength and clarity of the positions taken in these settings {c1}.\n\n"
+                    "Despite these constraints, sources from transitional systems report meaningful doctrinal "
+                    "development and, in some cases, innovative resolutions that rival those of more settled "
+                    "traditions, particularly where reform has been deliberate and sustained."
+                )
             return (
                 f"Studies situated in emerging economies provide important comparative evidence on {topic}, often "
                 "revealing different constraints and enablers than those documented in developed-economy research. "
@@ -5625,6 +5936,18 @@ def _fallback_subsection_body(
             )
         if "developing econom" in sub_lower or "africa" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developing", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Sources situated in developing or African legal, institutional, and intellectual contexts "
+                    f"highlight both the opportunities and the structural challenges associated with {topic}. "
+                    "Commentary in this context frequently emphasises gaps between formal doctrine and lived "
+                    "practice, resource and capacity constraints in institutions tasked with applying or "
+                    f"interpreting the relevant framework, and the influence of customary or indigenous norms {c1}.\n\n"
+                    "At the same time, this body of scholarship documents innovative, context-adapted positions and "
+                    "reforms that have achieved meaningful results despite these constraints, offering valuable "
+                    "lessons for the present study's context and underscoring the importance of locally grounded "
+                    "analysis."
+                )
             return (
                 f"Evidence from developing economies and the African context highlights both the opportunities and "
                 f"the structural challenges associated with {topic}. Studies in this context frequently emphasise "
@@ -5636,6 +5959,16 @@ def _fallback_subsection_body(
             )
         if "sectoral" in sub_lower or "industry" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|sectoral", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Treatment of {topic} is not uniform across sub-fields, branches, or schools of thought, but "
+                    f"instead reflects field-specific conventions, institutional histories, and interpretive "
+                    f"priorities {c1}. Comparative analysis across these sub-fields helps to clarify which of these "
+                    "conditions are most consequential for the questions examined in this study.\n\n"
+                    "This field-sensitive evidence base informs the contextual scope of the present study and "
+                    "supports the selection of an appropriate analytical frame for interpreting the sources "
+                    "examined."
+                )
             return (
                 f"Sectoral and industry-specific studies on {topic} reveal that outcomes are not uniform across "
                 f"industries, but instead reflect sector-specific operating conditions, regulatory regimes, and "
@@ -5646,6 +5979,18 @@ def _fallback_subsection_body(
             )
         if "synthesis" in sub_lower or "critical appraisal" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|synthesis", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Synthesising the sources reviewed above, the scholarship on {topic} is consistent in its "
+                    "broad orientation but heterogeneous in emphasis and resolution, with differences in "
+                    "interpretive method and source authority accounting for a substantial share of the variation "
+                    f"reported across commentary. Many existing sources rely on secondary commentary rather than "
+                    f"close engagement with primary texts, or focus on a narrow jurisdiction or tradition {c1}, "
+                    "limiting the generalisability of their conclusions.\n\n"
+                    "This critical appraisal identifies interpretive rigor, source authority, and triangulation "
+                    "across primary and secondary materials as priorities for closing the gaps identified, directly "
+                    "motivating the design adopted in the present study."
+                )
             return (
                 f"Synthesising the empirical literature reviewed above, the evidence on {topic} is consistent in "
                 "direction but heterogeneous in magnitude, with methodological differences accounting for a "
@@ -5658,6 +6003,17 @@ def _fallback_subsection_body(
             )
         if "research gap" in sub_lower or "gap" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|gap", k=1)[0])
+            if is_doctrinal:
+                return (
+                    f"Despite the volume of scholarship on {topic}, this review identifies a clear and persistent "
+                    "gap: existing sources offer limited sustained, primary-source analysis that directly addresses "
+                    f"the specific doctrinal or interpretive questions this study examines {c1}. Much of the "
+                    "available commentary is either generalised across dissimilar jurisdictions or traditions, or "
+                    "focused on secondary discussion unsuited to resolving the specific tensions of interest here.\n\n"
+                    "The present study addresses this gap by undertaking close, primary-source analysis within a "
+                    "clearly defined doctrinal scope, thereby contributing a context-grounded argument that extends "
+                    "and refines the existing body of scholarship."
+                )
             return (
                 f"Despite the volume of literature on {topic}, this review identifies a clear and persistent gap: "
                 "existing studies offer limited context-specific, primary evidence that directly links the key "
@@ -5687,6 +6043,99 @@ def _fallback_subsection_body(
         )
 
     if "chapter 3" in sec or "methodology" in sec:
+        if is_doctrinal:
+            if "introduction" in sub_lower:
+                return (
+                    f"This chapter describes the doctrinal and theoretical methodology used to investigate {topic}. "
+                    "It outlines the research design, the sources and materials selected for analysis, the procedure "
+                    "used to locate and acquire them, and the analytical technique applied to interpret them.\n\n"
+                    "The chapter also describes the steps taken to establish the credibility and trustworthiness of "
+                    "the analysis, and the scholarly conventions observed throughout, including attribution and "
+                    "permissions for the use of archival or copyrighted material."
+                )
+            if "research design" in sub_lower or sub_lower.strip().endswith("design"):
+                return (
+                    "A qualitative, doctrinal research design was adopted, consistent with the interpretivist "
+                    "epistemological stance suited to a text- and document-based inquiry. This approach is well "
+                    "suited to the research objectives because it enables close, systematic reading of primary and "
+                    "secondary sources, surfacing arguments, principles, and tensions that a numerical instrument "
+                    "would not capture.\n\n"
+                    "The design proceeds through doctrinal/comparative analysis — and, where relevant, historical "
+                    "or critical analysis — of the selected sources, remaining responsive to themes that emerge "
+                    "during close reading while staying anchored to the research objectives set out in Chapter 1."
+                )
+            if "population" in sub_lower:
+                return (
+                    f"The relevant population of sources for this study comprises the full body of primary and "
+                    f"secondary materials bearing directly on {topic} — including, as applicable, statutes, case "
+                    "law, policy instruments, treaties, canonical texts, or scholarly commentary. Defining this "
+                    "population clearly is a necessary precondition for selecting a corpus that adequately "
+                    "represents current thinking on the subject.\n\n"
+                    "Eligibility for inclusion was based on criteria directly tied to the research objectives, "
+                    "ensuring that the sources analysed speak meaningfully to the questions under investigation."
+                )
+            if "sampl" in sub_lower:
+                return (
+                    "A purposive sample of sources was selected from the relevant population, prioritising "
+                    "authoritative, frequently cited, and directly relevant texts over exhaustive coverage. "
+                    "Selection continued until the corpus was judged sufficient to represent the principal lines "
+                    "of argument and the points of disagreement within the field.\n\n"
+                    "This approach prioritises depth and representativeness of argument over volume, balancing the "
+                    "need for a comprehensive account against the practical constraints of time and access to "
+                    "source material."
+                )
+            if "collection" in sub_lower:
+                return (
+                    "Sources were located and acquired through systematic searches of primary legal, policy, or "
+                    "scholarly databases, library catalogues, and, where relevant, archival repositories, using "
+                    "search terms derived from the research objectives. Each source was screened for relevance, "
+                    "authority, and currency before inclusion in the corpus.\n\n"
+                    "Full texts of all included sources were obtained and organised by theme and chronology to "
+                    "support the systematic analysis described below."
+                )
+            if "analysis" in sub_lower or "analytic" in sub_lower:
+                return (
+                    "The corpus was analysed using doctrinal analysis, supported by close textual and, where "
+                    "relevant, comparative or historical reading. This involved an iterative process of "
+                    "identifying the principal arguments and provisions in each source, coding them thematically, "
+                    "and tracing how positions develop, converge, or conflict across the corpus.\n\n"
+                    "Results of this analysis are presented and interpreted in Chapter 4 in relation to the study's "
+                    "research questions, with representative passages used to illustrate each theme or line of "
+                    "argument."
+                )
+            if "reliabil" in sub_lower or "validit" in sub_lower:
+                return (
+                    "Credibility and trustworthiness of the analysis were established through triangulation across "
+                    "multiple independent sources, careful attention to the authority and currency of each text, "
+                    "and transparent documentation of the selection and coding process so that the reasoning behind "
+                    "each interpretation can be traced.\n\n"
+                    "Where sources offered conflicting positions, both were presented and weighed explicitly rather "
+                    "than silently resolved, supporting the dependability and confirmability of the conclusions "
+                    "drawn."
+                )
+            if "ethic" in sub_lower:
+                return (
+                    "Although this study does not involve human participants, scholarly ethics remain central to "
+                    "its conduct. This includes accurate attribution of all sources consulted, careful adherence "
+                    "to copyright and licensing terms when reproducing archival or proprietary material, and "
+                    "transparent acknowledgement of the limits and potential biases of the selected corpus.\n\n"
+                    "Where a source's interpretation is contested, this is disclosed rather than presented as "
+                    "settled, consistent with the honest reporting expected of doctrinal scholarship."
+                )
+            if "summary" in sub_lower:
+                return (
+                    "This chapter has described the doctrinal research design, the population and sample of "
+                    "sources analysed, the procedure used to locate and collect them, and the analytical technique "
+                    "applied, along with the measures taken to establish credibility and scholarly integrity.\n\n"
+                    "The next chapter presents and discusses the analysis obtained using this methodology, "
+                    "organised around the research questions set out in Chapter 1."
+                )
+            return (
+                f"This section describes a further methodological aspect of the doctrinal study on {topic}, "
+                "situated within the overall qualitative, document-based research design adopted for this "
+                "dissertation and consistent with the source selection and analytical procedures described "
+                "elsewhere in this chapter."
+            )
         if survey_based:
             if "introduction" in sub_lower:
                 return (
@@ -6001,6 +6450,17 @@ def _fallback_subsection_body(
 
     if "chapter 4" in sec or "results" in sec or "discussion" in sec:
         if "introduction" in sub_lower or "overview" in sub_lower:
+            if is_doctrinal:
+                return (
+                    f"This chapter presents the analysis of the source corpus assembled for the study of {topic}. "
+                    "Findings are organised thematically, in accordance with the research objectives set out in "
+                    "Chapter 1. The principal arguments, provisions, and points of disagreement identified through "
+                    "the doctrinal analysis described in Chapter 3 are presented and discussed in relation to the "
+                    "theoretical literature reviewed in Chapter 2.\n\n"
+                    "The presentation follows a structured sequence: each theme is introduced, illustrated with "
+                    "representative passages from the primary and secondary sources, and then discussed in "
+                    "relation to the existing body of scholarship."
+                )
             if is_qualitative:
                 return (
                     f"This chapter presents the findings of the study on {topic}. "
@@ -6030,6 +6490,17 @@ def _fallback_subsection_body(
                 "and then an integrated discussion that contextualises each major finding within the existing body of knowledge."
             )
         if ("presentation" in sub_lower or "finding" in sub_lower) and "discussion" not in sub_lower:
+            if is_doctrinal:
+                c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|findings", k=1)[0])
+                return (
+                    f"Close analysis of the source corpus reveals several recurring lines of argument relating to "
+                    f"{topic}. Authoritative sources consistently converge on the core principles at stake, with "
+                    f"several themes echoed across the majority of the texts reviewed regardless of their "
+                    f"jurisdiction, period, or disciplinary orientation {c1}.\n\n"
+                    "Closer reading further surfaces points of genuine disagreement between sources, offering a "
+                    "more nuanced picture than a single settled position would suggest. These themes and tensions "
+                    "provide a basis for the critical discussion that follows."
+                )
             if survey_based and is_qualitative:
                 return (
                     f"Thematic analysis of the interview data reveals several recurring patterns relating to {topic}. "
@@ -6096,9 +6567,22 @@ def _fallback_subsection_body(
                 "These results provide empirical support for the design choices outlined in Chapter 3."
             )
         if "discussion" in sub_lower:
-            pool = _DISCUSSION_VARIANTS_SURVEY if survey_based else _DISCUSSION_VARIANTS_TECHNICAL
+            pool = _DISCUSSION_VARIANTS_DOCTRINAL if is_doctrinal else (
+                _DISCUSSION_VARIANTS_SURVEY if survey_based else _DISCUSSION_VARIANTS_TECHNICAL
+            )
             cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|discussion", k=1)[0])
             return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic, cite1=cite1)
+        if is_doctrinal:
+            return (
+                "The analysis provides source-level evidence on the recurring lines of argument, highlighting both "
+                "dominant positions and areas of genuine disagreement across the corpus. Close reading shows that "
+                "some sources advance a settled view, while others reveal unresolved tensions that warrant further "
+                "scholarly attention.\n\n"
+                "The discussion links these recurring arguments to the study context and prior commentary, "
+                "explaining how jurisdiction, period, and disciplinary orientation shape the strength and direction "
+                "of each position. This interpretation provides a basis for the recommendations that follow and for "
+                "refinement of future inquiry."
+            )
         if survey_based:
             return (
                 "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends and areas of divergence across indicators. "
@@ -6120,6 +6604,18 @@ def _fallback_subsection_body(
     # ── Chapter 5 / Conclusion subsections ────────────────────────────────
     if "chapter 5" in sec or "conclusion" in sec or "recommendation" in sec:
         if "summary of finding" in sub_lower:
+            if is_doctrinal:
+                return (
+                    f"The study set out to examine {topic}, guided by three primary research objectives. Analysis "
+                    "of the source corpus generated the following key findings: first, a clearly dominant line of "
+                    "argument emerges across the most authoritative sources; second, contextual factors — "
+                    "particularly jurisdiction, period, and disciplinary orientation — shape where commentators "
+                    "depart from that dominant position; and third, the points of genuine disagreement identified "
+                    "are concentrated in a small number of specific, identifiable questions rather than spread "
+                    "diffusely across the field.\n\n"
+                    "These findings collectively support the study's central argument and align with the "
+                    "theoretical positions advanced in the literature review."
+                )
             if survey_based:
                 if not is_qualitative and len(objectives or []) >= 2:
                     stats = _regression_model_stats(topic, objectives, research_design, sample_size or 120)
@@ -6148,13 +6644,28 @@ def _fallback_subsection_body(
                 "advanced in the design framework presented in Chapter 3."
             )
         if "conclusion" in sub_lower:
-            pool = _CONCLUSION_VARIANTS_SURVEY if survey_based else _CONCLUSION_VARIANTS_TECHNICAL
+            pool = _CONCLUSION_VARIANTS_DOCTRINAL if is_doctrinal else (
+                _CONCLUSION_VARIANTS_SURVEY if survey_based else _CONCLUSION_VARIANTS_TECHNICAL
+            )
             cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conclusion", k=1)[0])
             return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic, cite1=cite1)
         if "recommendation" in sub_lower:
-            pool = _RECOMMENDATION_VARIANTS_SURVEY if survey_based else _RECOMMENDATION_VARIANTS_TECHNICAL
+            pool = _RECOMMENDATION_VARIANTS_DOCTRINAL if is_doctrinal else (
+                _RECOMMENDATION_VARIANTS_SURVEY if survey_based else _RECOMMENDATION_VARIANTS_TECHNICAL
+            )
             return _seeded_pick(f"{topic}|recommendation", pool).format(topic=topic)
         if "limitation" in sub_lower:
+            if is_doctrinal:
+                return (
+                    "This study is subject to several limitations that should be considered when interpreting its "
+                    "conclusions. First, the corpus, although purposively selected for relevance and authority, "
+                    "cannot claim to be exhaustive; sources outside the selected jurisdictions, periods, or "
+                    "languages may complicate the picture presented here.\n\n"
+                    "Second, doctrinal interpretation inevitably involves a degree of judgement on the part of the "
+                    "researcher, despite efforts to triangulate across multiple independent sources. Future studies "
+                    "should address these limitations through an expanded corpus and, where feasible, independent "
+                    "coding or peer review of the interpretive analysis."
+                )
             if survey_based:
                 return (
                     "This study is subject to several limitations that should be considered when interpreting its findings. "
@@ -6173,6 +6684,18 @@ def _fallback_subsection_body(
                 "and longer-duration trials."
             )
         if "further research" in sub_lower or "future research" in sub_lower:
+            if is_doctrinal:
+                return (
+                    "Several avenues merit further investigation beyond the scope of this study:\n\n"
+                    f"1. Extending the corpus considered here on {topic} to additional jurisdictions, periods, or "
+                    "languages would test whether the patterns identified hold more broadly.\n"
+                    "2. Comparative analysis against analogous frameworks in other fields would clarify which "
+                    "features of the present positions are field-specific versus more generally transferable.\n"
+                    "3. Empirical research into how the principles examined here are actually applied in practice "
+                    "would complement this study's textual analysis.\n"
+                    "4. Independent coding or peer review of the interpretive analysis would strengthen confidence "
+                    "in the conclusions reached."
+                )
             if survey_based:
                 return (
                     "Several avenues merit further investigation beyond the scope of this study:\n\n"
@@ -6210,6 +6733,23 @@ def _fallback_subsection_body(
             f"{_format_synthetic_reference_list(citation_pool)}"
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
+        if is_doctrinal:
+            return (
+                "Appendix A: List of Primary Sources Consulted\n"
+                "[Full citations for statutes, case law, treaties, canonical texts, or other primary materials "
+                "analysed in this study.]\n\n"
+                "Appendix B: List of Secondary Sources Consulted\n"
+                "[Full citations for scholarly commentary, treatises, and critical works consulted but not "
+                "individually quoted in the main text.]\n\n"
+                "Appendix C: Source Selection and Coding Protocol\n"
+                "[Documentation of the criteria and process used to select and thematically code the corpus "
+                "analysed in Chapter 4.]\n\n"
+                "Appendix D: Representative Excerpts\n"
+                "[Illustrative excerpts from key primary sources, supporting the analysis presented in Chapter 4.]\n\n"
+                "Appendix E: Permissions and Attribution Records\n"
+                "[Records of permissions sought for the reproduction of archival or copyrighted material, where "
+                "applicable.]"
+            )
         if survey_based and is_qualitative:
             return (
                 "Appendix A: Interview Guide\n"
