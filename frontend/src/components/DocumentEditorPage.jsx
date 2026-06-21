@@ -866,7 +866,7 @@ function PlanNode({ node, depth }) {
 }
 
 export default function DocumentEditorPage({
-  document,
+  document: currentDocument,
   initialChatHint,
   onBackHome,
   onGenerateOutline,
@@ -1340,7 +1340,7 @@ export default function DocumentEditorPage({
   }, [highlightedSections, draftSections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const sections = Array.isArray(document?.content?.sections) ? document.content.sections : [];
+    const sections = Array.isArray(currentDocument?.content?.sections) ? currentDocument.content.sections : [];
     setDraftSections(
       sections.map((section) => ({
         title: section?.title || '',
@@ -1351,13 +1351,13 @@ export default function DocumentEditorPage({
     setIsDirty(false);
     setAutoSaved(false);
     setManualError('');
-  }, [document?.id, document?.updated_at]);
+  }, [currentDocument?.id, currentDocument?.updated_at]);
 
   // Reset chat only when switching to a different document, not on every save/update.
   // This preserves frontend-only state (changeSet.pending for Keep/Undo) across agent saves.
   useEffect(() => {
-    if (document?.chat_messages?.length) {
-      const persistedMessages = document.chat_messages.map((msg) => ({
+    if (currentDocument?.chat_messages?.length) {
+      const persistedMessages = currentDocument.chat_messages.map((msg) => ({
         id: msg.id,
         role: msg.role,
         text: msg.content,
@@ -1368,7 +1368,7 @@ export default function DocumentEditorPage({
       setChats([{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: [] }]);
       setActiveChatId(INITIAL_CHAT_ID);
     }
-  }, [document?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentDocument?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function updateDraftSection(index, field, value) {
     setDraftSections((prev) => prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)));
@@ -1458,7 +1458,7 @@ export default function DocumentEditorPage({
   // were never generated through the dissertation pipeline (no Preliminary
   // Pages section for the backend to refresh).
   async function updateTableOfContents() {
-    const docId = document?.id;
+    const docId = currentDocument?.id;
     if (!docId || isUpdatingToc) return;
     const hasPreliminaryPages = draftSections.some(
       (s) => (s?.title || '').trim().toLowerCase() === 'preliminary pages'
@@ -1620,7 +1620,6 @@ export default function DocumentEditorPage({
     if (!editor) return;
 
     // Remove any existing AI highlight spans (unwrap them back to plain text)
-    // Note: `document` prop shadows the global; use window.document for DOM APIs.
     const doc = window.document;
     editor.querySelectorAll('[data-ai-sent]').forEach((el) => {
       const txt = doc.createTextNode(el.textContent);
@@ -1752,7 +1751,7 @@ export default function DocumentEditorPage({
   }, [plagiarismResult, plagiarismChecking, draftSections]);
 
   async function runPlagiarismCheck() {
-    const docId = document?.id;
+    const docId = currentDocument?.id;
     if (!docId) return;
     setPlagiarismChecking(true);
     setShowPlagiarismPanel(true);
@@ -1786,7 +1785,7 @@ export default function DocumentEditorPage({
   }
 
   async function runAiDetect() {
-    const docId = document?.id;
+    const docId = currentDocument?.id;
     if (!docId) return;
     setAiDetecting(true);
     setShowAiDetectPanel(true);
@@ -1820,7 +1819,7 @@ export default function DocumentEditorPage({
   }
 
   async function runQualityCheck() {
-    const docId = document?.id;
+    const docId = currentDocument?.id;
     if (!docId) return;
     setQualityChecking(true);
     setShowQualityPanel(true);
@@ -2083,7 +2082,7 @@ export default function DocumentEditorPage({
       setLiveProgressMsgId(progressMessageId);
 
       // Call the LLM plan endpoint — this is where the AI generates the tailored todo structure.
-      const planResult = await getDissertationPlan(document?.id, effectiveText);
+      const planResult = await getDissertationPlan(currentDocument?.id, effectiveText);
       previewPlan = planResult?.plan?.length ? planResult.plan : createFallbackPreviewPlan();
 
       const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
@@ -2109,14 +2108,14 @@ export default function DocumentEditorPage({
         },
       }));
 
-      startDissertationProgressPolling(document?.id, currentChatId, progressMessageId, previewPlan);
+      startDissertationProgressPolling(currentDocument?.id, currentChatId, progressMessageId, previewPlan);
     }
 
     try {
       // ── Step 1: Preview (non-dissertation only) ──────────────────────────
       // Send directly without preview_only so the backend executes immediately
       const result = await chatWithDocument(
-        document?.id, effectiveText, selectedModel,
+        currentDocument?.id, effectiveText, selectedModel,
         dissertationRequest ? attachedFile : null,
         /* previewOnly = */ false,
         { groundedResearch, verifyCitations: groundedResearch },
@@ -3049,16 +3048,16 @@ export default function DocumentEditorPage({
                         const blob = new Blob([text], { type: 'text/plain' });
                         const a = window.document.createElement('a');
                         a.href = URL.createObjectURL(blob);
-                        a.download = (document?.title || 'document') + '.txt';
+                        a.download = (currentDocument?.title || 'document') + '.txt';
                         a.click();
                         URL.revokeObjectURL(a.href);
                       }}><Download size={13}/><span>Export TXT</span></button>
                       <button className="doc-tool-btn doc-tool-btn--labeled" title="Download document as HTML" onClick={() => {
-                        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${document?.title || 'Document'}</title></head><body style="max-width:800px;margin:0 auto;font-family:Times New Roman,serif;font-size:12pt;line-height:1.6">${richEditorRef.current?.innerHTML || ''}</body></html>`;
+                        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${currentDocument?.title || 'Document'}</title></head><body style="max-width:800px;margin:0 auto;font-family:Times New Roman,serif;font-size:12pt;line-height:1.6">${richEditorRef.current?.innerHTML || ''}</body></html>`;
                         const blob = new Blob([html], { type: 'text/html' });
                         const a = window.document.createElement('a');
                         a.href = URL.createObjectURL(blob);
-                        a.download = (document?.title || 'document') + '.html';
+                        a.download = (currentDocument?.title || 'document') + '.html';
                         a.click();
                         URL.revokeObjectURL(a.href);
                       }}><Download size={13}/><span>Export HTML</span></button>
