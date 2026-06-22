@@ -4455,6 +4455,7 @@ def _is_document_grounded_chat_request(message: str) -> bool:
         "chapter",
         "thesis",
         "paper",
+        "my",
     ]
     analysis_refs = [
         "take",
@@ -4474,8 +4475,19 @@ def _is_document_grounded_chat_request(message: str) -> bool:
         "what stands out",
     ]
 
-    has_doc_ref = any(k in text for k in document_refs)
-    has_analysis_ref = any(k in text for k in analysis_refs)
+    # Left-word-boundary matching (not bare substring) — "it" must not match inside
+    # "literature", "this" inside "wishlist", etc. Still matches plurals/extensions
+    # ("gap" in "gaps") since only the leading edge of the keyword is anchored.
+    def _word_hit(haystack: str, keywords: list[str]) -> bool:
+        return any(re.search(r"\b" + re.escape(k), haystack) for k in keywords)
+
+    # "literature review" names a section, not a request to review/critique something —
+    # strip it before the analysis-ref check so "generate an image for the literature
+    # review section" doesn't read as "review my work" just because "review" is in there.
+    analysis_text = text.replace("literature review", "")
+
+    has_doc_ref = _word_hit(text, document_refs)
+    has_analysis_ref = _word_hit(analysis_text, analysis_refs)
     conversational_shape = text.endswith("?") or text.startswith(
         ("what", "how", "why", "can you", "could you", "do you", "tell me")
     )
@@ -8505,6 +8517,15 @@ def run_agent(
         if intent in {"write_section", "enhance_section"}:
             target_section = explicit_target  # always override with the precise target
 
+    # "generate an image for the methodology section" never matches _extract_target's
+    # chapter-number-only pattern, so target_section is still None here. Fall back to the
+    # named-section phrase so add_image/add_chart resolve the same section a write/enhance
+    # request would, instead of silently defaulting to the document's last section.
+    if intent in {"add_image", "add_chart"} and not target_section:
+        visual_target = explicit_target or derived_target
+        if visual_target and not _is_generic_section_query(visual_target):
+            target_section = visual_target
+
     # 2. Build plan
     if intent == "summarize_document":
         steps = ["Reading current document", "Preparing summary response"]
@@ -10551,6 +10572,41 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
     return f"Added a chart to '{section.get('title', 'the section')}'.", True
 
 
+def _describe_generated_image(
+    section_title: str,
+    section_content: str,
+    prompt: str,
+    framework_spec: dict[str, Any] | None,
+) -> str:
+    """One short sentence for the chat reply explaining what the inserted image shows."""
+    if framework_spec:
+        items = [
+            *(framework_spec.get("left_items") or []),
+            *(framework_spec.get("middle_items") or []),
+            *(framework_spec.get("right_items") or []),
+        ]
+        title = framework_spec.get("title") or "the framework"
+        if items:
+            return f"It maps {', '.join(str(i) for i in items[:4])} into {title}."
+        return f"It visualizes {title}."
+
+    llm_prompt = (
+        "In one sentence (under 28 words), describe what a diagram for this request would "
+        "depict, grounded in the section content below. State what it shows directly — do not "
+        "say 'this image' or 'this diagram' or restate the request.\n\n"
+        f"Section: {section_title or 'N/A'}\n"
+        f"Section content: {(section_content or '')[:800]}\n"
+        f"Request: {prompt}"
+    )
+    try:
+        text = generate_text(llm_prompt).strip().strip('"')
+        if text:
+            return text
+    except Exception as exc:
+        logger.warning("_describe_generated_image fallback: %s", exc)
+    return f"It illustrates key elements of {section_title or 'this section'}."
+
+
 def _add_image(
     document: Document, target: str | None, prompt: str, plan: list
 ) -> tuple[str, bool]:
@@ -10569,8 +10625,23 @@ def _add_image(
 
     framework_spec = _build_framework_spec(document, target, prompt) if framework_request else None
 
+    section_title = ""
+    section_content = ""
+    if sections and 0 <= idx < len(sections):
+        section_title = str(sections[idx].get("title") or "")
+        section_content = str(sections[idx].get("content") or "")
+
+    # Ground the image in the section's actual content instead of the bare chat
+    # message, so the keyword/step extraction in generate_image() has real subject
+    # matter to draw on rather than generic words like "generate"/"section".
+    generation_prompt = prompt
+    if not framework_request and section_content:
+        generation_prompt = (
+            f"{prompt}\n\nSection: {section_title}\nSection content: {section_content[:1200]}"
+        )
+
     try:
-        image_path = generate_image(prompt, framework_spec=framework_spec)
+        image_path = generate_image(generation_prompt, framework_spec=framework_spec)
     except Exception as exc:
         _all_done(plan)
         return f"Image generation failed: {exc}", False
@@ -10592,6 +10663,7 @@ def _add_image(
         section["content"] = _insert_block_marker(section.get("content", ""), block_id, prompt)
         _save(document, f"image:{target or 'section'}")
 
+    description = _describe_generated_image(section_title, section_content, prompt, framework_spec)
     _all_done(plan)
     section_name = sections[idx].get("title", "the section") if sections else "the section"
-    return f"Added an image to '{section_name}' using full-document context.", True
+    return f"Added an image to '{section_name}'. {description}", True

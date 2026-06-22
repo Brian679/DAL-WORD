@@ -292,6 +292,10 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
         "timeline", "gantt", "schedule", "phases", "research phase", "time frame",
         "milestones", "roadmap", "sequence",
     ])
+    # Callers may append grounding context after a blank line (e.g. "Section: ...\n
+    # Section content: ..."); the figure title should stay the short user-facing
+    # request, while the full text (with context) still feeds the LLM/keyword steps below.
+    _title_text = (prompt or "").split("\n\n")[0].strip()
 
     def _ai_generate_process_steps(n: int = 5) -> list[str]:
         """Ask the LLM to suggest steps/phases for the given prompt."""
@@ -321,17 +325,31 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
         fig, ax = plt.subplots(figsize=(9, 7), dpi=160)
         fig.patch.set_facecolor("#f8f9fa")
         ax.set_facecolor("#f8f9fa")
-        _draw_timeline(ax, phases, title=shorten(prompt.strip(), width=72, placeholder="..."))
+        _draw_timeline(ax, phases, title=shorten(_title_text, width=72, placeholder="..."))
     elif _is_process:
         steps = _ai_generate_process_steps(5)
         fig, ax = plt.subplots(figsize=(13, 5), dpi=160)
         fig.patch.set_facecolor("#f7f9fc")
         ax.set_facecolor("#f7f9fc")
-        _draw_process_flow(ax, steps, title=shorten(prompt.strip(), width=72, placeholder="..."))
+        _draw_process_flow(ax, steps, title=shorten(_title_text, width=72, placeholder="..."))
     else:
+        # Callers that ground the request in real section content append it after a
+        # "Section content:" marker (see agent.autonomous._add_image) — keyword-extract
+        # from that, not the command phrasing, so node labels reflect actual subject
+        # matter ("Bandura", "self-efficacy") rather than the request's own words
+        # ("literature", "review") or instruction verbs ("generate", "add").
+        _keyword_source = prompt or ""
+        _marker_pos = _keyword_source.lower().find("section content:")
+        if _marker_pos != -1:
+            _keyword_source = _keyword_source[_marker_pos + len("section content:"):]
+        _generic_stop = {
+            "with", "from", "that", "this", "into", "diagram", "image", "chart", "figure",
+            "generate", "create", "add", "insert", "include", "place", "attach", "make",
+            "build", "design", "draw", "section", "chapter", "please", "about", "show",
+        }
         tokens = [
-            t.capitalize() for t in re.split(r"[^a-z0-9]+", (prompt or "").lower())
-            if len(t) > 3 and t not in {"with", "from", "that", "this", "into", "diagram", "image", "chart"}
+            t.capitalize() for t in re.split(r"[^a-z0-9]+", _keyword_source.lower())
+            if len(t) > 3 and t not in _generic_stop
         ]
         kws: list[str] = []
         for t in tokens:
@@ -344,7 +362,7 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
         fig, ax = plt.subplots(figsize=(10, 6), dpi=160)
         fig.patch.set_facecolor("#f6efe5")
         ax.set_facecolor("#fffaf5")
-        _draw_concept_diagram(ax, prompt, kws)
+        _draw_concept_diagram(ax, _title_text, kws)
 
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
