@@ -759,6 +759,13 @@ def _ensure_framework_visual(nodes: list[dict[str, Any]]) -> list[dict[str, Any]
     return nodes
 
 
+def _whole_word_in(text: str, words: list[str]) -> bool:
+    """Whole-word match, not bare substring — "graph" must not match inside
+    "paragraph", "demographic", or "photograph"; "figure" must not match inside
+    "configure" or "figurative"; "image" must not match inside "imagery"."""
+    return any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in words)
+
+
 def _detect_visual_injection_request(
     instruction: str,
 ) -> tuple[str, str] | None:
@@ -775,11 +782,13 @@ def _detect_visual_injection_request(
 
     # Determine visual kind first
     kind: str | None = None
-    if "table" in text:
+    if _whole_word_in(text, ["table", "tables"]):
         kind = "table"
-    elif any(k in text for k in ["chart", "graph", "bar chart", "pie chart", "line graph"]):
+    elif _whole_word_in(text, ["chart", "charts", "graph", "graphs"]) or any(
+        p in text for p in ["bar chart", "pie chart", "line graph"]
+    ):
         kind = "chart"
-    elif any(k in text for k in ["image", "figure", "diagram", "picture", "illustration"]):
+    elif _whole_word_in(text, ["image", "images", "figure", "figures", "diagram", "diagrams", "picture", "pictures", "illustration", "illustrations"]):
         kind = "chart"  # routed via generate_image in tools.py
 
     if kind is None:
@@ -4143,17 +4152,20 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     # ── Visual + section-keyword detection (must come before plain add_chart/add_image) ──
     # "generate the conceptual framework image" / "add a chart to the empirical review"
     # → route to write_section so _write_section injects the visual node.
-    _visual_kinds = {"table", "chart", "graph", "image", "figure", "diagram"}
-    if any(v in text for v in _visual_verbs) and any(k in text for k in _visual_kinds):
+    _visual_kinds = [
+        "table", "tables", "chart", "charts", "graph", "graphs",
+        "image", "images", "figure", "figures", "diagram", "diagrams",
+    ]
+    if any(v in text for v in _visual_verbs) and _whole_word_in(text, _visual_kinds):
         for _kws, _sec_name in _SECTION_KEYWORD_MAP:
             if any(kw in text for kw in _kws):
                 return {"intent": "write_section", "target_section": _sec_name, "topic": None}
         # No named section found — fall through to plain add_chart / add_image
 
-    if "chart" in text or "graph" in text:
+    if _whole_word_in(text, ["chart", "charts", "graph", "graphs"]):
         return {"intent": "add_chart", "target_section": target, "topic": None}
 
-    if "image" in text or "figure" in text or "diagram" in text:
+    if _whole_word_in(text, ["image", "images", "figure", "figures", "diagram", "diagrams"]):
         return {"intent": "add_image", "target_section": target, "topic": None}
 
     # ── Generic document-writing catch-all ──────────────────────────────────
@@ -4171,6 +4183,8 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         topic = _extract_topic_phrase(text, ("on", "about", "for", "regarding"))
         return {"intent": "write_document", "target_section": None, "topic": topic}
 
+    # "edit"/"edits"/"editing" need word-boundary matching — bare substring would
+    # false-positive on "credit", "expedite", "edition", "editorial", etc.
     if any(k in text for k in [
         "correct", "improve", "enhance", "fix", "expand", "add to",
         "refine", "modify", "change", "update",
@@ -4178,7 +4192,7 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         "put back", "put the", "include the",
         "write it again", "write it back", "write again",
         "generate the", "regenerate the",
-    ]):
+    ]) or _whole_word_in(text, ["edit", "edits", "editing"]):
         if any(k in text for k in ["whole document", "entire document", "full document", "all sections", "whole dissertation", "entire dissertation"]):
             return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
@@ -4362,9 +4376,17 @@ def _is_improvement_review_request(message: str) -> bool:
     if any(s in text for s in review_signals):
         return True
 
+    # Strip section-name phrases that end in "review" as a noun (e.g. "literature
+    # review", "conceptual review") so the fallback trigger word below only fires on
+    # "review" used as the user's own verb, not as part of a named section the user
+    # wants edited — e.g. "improve the literature review" must not be caught here.
+    _check_text = text
+    for _phrase in ("literature review", "conceptual review", "empirical review", "theoretical review"):
+        _check_text = _check_text.replace(_phrase, "")
+
     # Catch short variants like "look for improvements" / "areas to improve"
     return (
-        ("look for" in text or "identify" in text or "find" in text or "review" in text)
+        ("look for" in _check_text or "identify" in _check_text or "find" in _check_text or "review" in _check_text)
         and ("improv" in text or "weakness" in text or "gap" in text or "issue" in text)
     )
 
@@ -7289,7 +7311,7 @@ def _chapter_title_from_number(chapter_number: int) -> str:
 
 def _is_generic_section_query(query: str | None) -> bool:
     value = (query or "").strip().lower()
-    return value in {
+    if value in {
         "",
         "it",
         "it again",
@@ -7297,7 +7319,15 @@ def _is_generic_section_query(query: str | None) -> bool:
         "this section",
         "that section",
         "section",
-    }
+    }:
+        return True
+    # "whole document" / "entire dissertation" etc. refer to the WHOLE document, not
+    # a specific section — must not be treated as a concrete section-name target.
+    if re.search(r"\b(?:whole|entire|full|all)\b", value) and re.search(
+        r"\b(?:document|dissertation|thesis|project)\b", value
+    ):
+        return True
+    return False
 
 
 def _leaf_node_count(nodes: list[dict[str, Any]]) -> int:
@@ -8464,7 +8494,7 @@ def run_agent(
             "redo", "rewrite", "define", "fix", "correct", "improve", "enhance",
             "update", "replace", "regenerate", "generate", "write",
         ]
-    )
+    ) or _whole_word_in(lowered_message, ["edit", "edits", "editing"])
     is_section_command = has_section_action and (
         bool(explicit_target)
         or (derived_target and not _is_generic_section_query(derived_target))
@@ -8510,12 +8540,17 @@ def run_agent(
             "full project", "entire project", "complete project", "whole project",
         ]
     )
-    if explicit_target and has_section_action and not full_doc_request:
-        # Force section-scoped execution — override even if upstream classifier set a bad intent
+    if is_section_command and not full_doc_request:
+        # Force section-scoped execution — override even if upstream classifier set a bad intent.
+        # Prefer explicit_target (precise canonical subsection name); fall back to derived_target
+        # so bare top-level chapter names ("introduction", "literature review", "methodology", ...)
+        # — which only derived_target's keyword map covers — still resolve to a concrete section
+        # instead of leaving target_section unset and falling through to the LLM/None path.
+        section_override = explicit_target or derived_target
         if intent == "write_dissertation":
             intent = "write_section"
         if intent in {"write_section", "enhance_section"}:
-            target_section = explicit_target  # always override with the precise target
+            target_section = section_override  # always override with the precise target
 
     # "generate an image for the methodology section" never matches _extract_target's
     # chapter-number-only pattern, so target_section is still None here. Fall back to the
@@ -9108,16 +9143,20 @@ def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, 
     _done(plan, 0)
     _done(plan, 1)
     count = 0
+    had_content = False
+    generation_error: str | None = None
     for i, section in enumerate(sections):
         original = section.get("content", "").strip()
         if not original:
             continue
+        had_content = True
         section_title = section.get("title", "")
         try:
             sections[i]["content"] = enhance_text(original, topic, section_title=section_title)
             count += 1
         except Exception as exc:
             logger.warning("Enhance section %d failed: %s", i, exc)
+            generation_error = str(exc)
         _done(plan, 2)
 
     _all_done(plan)
@@ -9128,6 +9167,13 @@ def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, 
             f"Enhanced {count} section(s) across the document — improved vocabulary, "
             "argument structure, evidence cues, and academic tone.",
             True,
+        )
+    if had_content and generation_error:
+        return (
+            f"I found content to enhance but could not generate the edits — the AI service is "
+            f"currently unavailable ({generation_error}). Please set GROK_API_KEY or "
+            "GEMINI_API_KEY to enable AI editing.",
+            False,
         )
     return "No existing content found to enhance. Add text to sections first.", False
 
@@ -9187,6 +9233,7 @@ def _run_copilot_loop(
         plan[1]["status"] = "done"
 
     relevant_indices: list[int] = []
+    _found_subsec = False
 
     # ── Subsection-number shortcut (e.g. "2.7", "3.4.1") ────────────────────
     # When the user says "improve 2.7", target is literally "2.7".
@@ -9259,7 +9306,6 @@ def _run_copilot_loop(
     if not relevant_indices and target and not _subsec_match:
         _target_lower = target.strip().lower()
         _all_secs = (document.content or {}).get("sections", [])
-        _found_subsec = False
         for _si, _sec in enumerate(_all_secs):
             _ch_content = _sec.get("content", "")
             if not _ch_content:
@@ -9400,6 +9446,7 @@ def _run_copilot_loop(
 
     # Steps 2+: read → edit for each relevant section
     edit_summaries: list[str] = []
+    generation_error: str | None = None
     plan_cursor = 2
 
     for idx in relevant_indices:
@@ -9441,8 +9488,9 @@ def _run_copilot_loop(
             if new_content and len(new_content) > 50:
                 doc_edit_section(document, sec_title, new_content)
                 edit_summaries.append(sec_title)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Copilot edit failed for section '%s': %s", sec_title, exc)
+            generation_error = str(exc)
 
     updated = bool(edit_summaries)
     if updated:
@@ -9452,6 +9500,12 @@ def _run_copilot_loop(
 
     if edit_summaries:
         reply = f"Updated {len(edit_summaries)} section(s): {', '.join(edit_summaries)}."
+    elif generation_error:
+        reply = (
+            f"I found the section but could not generate the edit — the AI service is "
+            f"currently unavailable ({generation_error}). Please set GROK_API_KEY or "
+            "GEMINI_API_KEY to enable AI editing."
+        )
     else:
         reply = "No changes were applied. The sections may already be well-written or no matching section was found."
     return reply, updated
@@ -9563,6 +9617,10 @@ def _write_section(
     plan: list,
 ) -> tuple[str, bool]:
     query = (target or _extract_subsection_phrase(instruction) or "").strip()
+    # "whole document" / "entire dissertation" is not a real section name — route to the
+    # document-wide enhancer instead of literally creating a bogus section called that.
+    if re.search(r"\b(?:whole|entire|full|all)\s+(?:document|dissertation|thesis|project)\b", query.lower()):
+        return _enhance_document(document, topic, plan)
     query_l = query.lower()
     _personalize_plan_steps(plan, query or instruction or "section")
     chapter_numbers = _extract_chapter_numbers(f"{target or ''} {instruction}")
