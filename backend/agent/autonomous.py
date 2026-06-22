@@ -2721,11 +2721,31 @@ def generate_dissertation_plan_llm(
 
     # Fallback: minimal generic plan
     logger.info("generate_dissertation_plan_llm using fallback plan for topic=%s", topic[:80] if topic else "")
-    return _fallback_dissertation_chapters(topic or "the study")
+    return _fallback_dissertation_chapters(topic or "the study", message, objectives)
 
 
-def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
-    """Minimal generic fallback when LLM plan generation fails."""
+def _fallback_dissertation_chapters(
+    topic: str, message: str = "", objectives: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Minimal generic fallback when LLM plan generation fails.
+
+    Chapter 2's Theoretical Framework section is only included when the topic actually maps
+    to a recognizable named theory (see _select_named_theory) — a topic with no natural
+    theoretical anchor gets no such section, and therefore no theory diagram either, instead
+    of the same generic framework being forced onto every dissertation regardless of subject.
+    """
+    theory = _select_named_theory(topic, message, objectives)
+    chapter2_sections = [{"title": "2.1 Introduction", "sections": []}]
+    next_num = 2
+    if theory:
+        chapter2_sections.append(
+            {"title": f"2.{next_num} Theoretical Framework: {theory['name']}", "sections": []}
+        )
+        next_num += 1
+    for label in ("Conceptual Framework", "Empirical Review", "Research Gap", "Chapter Summary"):
+        chapter2_sections.append({"title": f"2.{next_num} {label}", "sections": []})
+        next_num += 1
+
     return [
         {"title": "Preliminary Pages", "sections": [
             {"title": "i. Abstract", "sections": []},
@@ -2746,14 +2766,7 @@ def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
             {"title": "1.7 Definition of Key Terms", "sections": []},
             {"title": "1.8 Chapter Summary", "sections": []},
         ]},
-        {"title": "Chapter 2: Literature Review", "sections": [
-            {"title": "2.1 Introduction", "sections": []},
-            {"title": "2.2 Theoretical Framework", "sections": []},
-            {"title": "2.3 Conceptual Framework", "sections": []},
-            {"title": "2.4 Empirical Review", "sections": []},
-            {"title": "2.5 Research Gap", "sections": []},
-            {"title": "2.6 Chapter Summary", "sections": []},
-        ]},
+        {"title": "Chapter 2: Literature Review", "sections": chapter2_sections},
         {"title": "Chapter 3: Research Methodology", "sections": [
             {"title": "3.1 Introduction", "sections": []},
             {"title": "3.2 Research Design", "sections": []},
@@ -2861,9 +2874,192 @@ def _sections_to_steps(
         _sections_to_steps(steps, sec.get("sections", []), depth + 1)
 
 
+# Curated named theories conventionally used to ground a dissertation's Theoretical
+# Framework section, keyed by the domain they apply to. A topic is matched against these
+# keyword sets the same way _SPECIFIC_METHODOLOGY_HINTS matches a methodology — first hit
+# wins. A topic that matches none of them gets no Theoretical Framework section and no
+# theory diagram at all: forcing a named theory onto a study with no natural theoretical
+# anchor would itself be exactly the kind of fixed template this table exists to avoid.
+_NAMED_THEORY_DOMAINS: tuple[dict[str, Any], ...] = (
+    {
+        "keywords": ("technology adoption", "user acceptance", "system usage", "e-commerce", "online platform",
+                     "mobile app", "mobile banking", "digital platform", "information system", "web application",
+                     "web-based system", "web platform", "software adoption", "e-learning", "fintech adoption",
+                     "gis", "geographic information system", "geospatial"),
+        "name": "Technology Acceptance Model (TAM)",
+        "left_label": "External Variables",
+        "left_items": ["System design quality", "Perceived ease-of-use antecedents", "Organizational/technical support"],
+        "middle_label": "Core Constructs",
+        "middle_items": ["Perceived usefulness", "Perceived ease of use", "Attitude toward use"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Behavioral intention to use", "Actual system usage"],
+    },
+    {
+        "keywords": ("diffusion of innovation", "innovation adoption", "spread of innovation", "rate of adoption", "early adopters"),
+        "name": "Diffusion of Innovation Theory (Rogers)",
+        "left_label": "Innovation Attributes",
+        "left_items": ["Relative advantage", "Compatibility", "Complexity"],
+        "middle_label": "Adopter Categories",
+        "middle_items": ["Innovators and early adopters", "Early and late majority"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Adoption decision"],
+    },
+    {
+        "keywords": ("planned behavior", "planned behaviour", "behavioural intention", "behavioral intention",
+                     "attitude towards", "attitude of", "perception of", "awareness of", "willingness to"),
+        "name": "Theory of Planned Behavior (TPB)",
+        "left_label": "Belief Antecedents",
+        "left_items": ["Attitude toward the behavior", "Subjective norm", "Perceived behavioral control"],
+        "middle_label": "Core Construct",
+        "middle_items": ["Behavioral intention"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Actual behavior"],
+    },
+    {
+        "keywords": ("microfinance", "financial inclusion", "access to credit", "banking sector", "financial intermediation"),
+        "name": "Financial Intermediation Theory",
+        "left_label": "Intermediation Inputs",
+        "left_items": ["Savings mobilization", "Credit access", "Risk pooling"],
+        "middle_label": "Intermediation Mechanism",
+        "middle_items": ["Reduced transaction costs", "Information asymmetry reduction"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Small business / financial outcomes"],
+    },
+    {
+        "keywords": ("corporate governance", "agency theory", "shareholder", "board of directors", "executive compensation"),
+        "name": "Agency Theory",
+        "left_label": "Agency Relationship",
+        "left_items": ["Principal (shareholder) interests", "Agent (management) interests", "Information asymmetry"],
+        "middle_label": "Governance Mechanisms",
+        "middle_items": ["Monitoring and incentive alignment"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Firm value / governance outcomes"],
+    },
+    {
+        "keywords": ("organizational performance", "firm performance", "competitive advantage", "strategic management", "business performance"),
+        "name": "Resource-Based View (RBV) Theory",
+        "left_label": "Firm Resources",
+        "left_items": ["Tangible resources", "Intangible resources", "Organizational capabilities"],
+        "middle_label": "Strategic Mechanism",
+        "middle_items": ["Resource value, rarity, and inimitability"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Sustained competitive advantage / firm performance"],
+    },
+    {
+        "keywords": ("employee motivation", "job satisfaction", "employee engagement", "workplace motivation"),
+        "name": "Herzberg's Two-Factor Theory",
+        "left_label": "Hygiene Factors",
+        "left_items": ["Salary and benefits", "Working conditions", "Job security"],
+        "middle_label": "Motivator Factors",
+        "middle_items": ["Recognition", "Responsibility", "Growth opportunities"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Job satisfaction / motivation"],
+    },
+    {
+        "keywords": ("customer satisfaction", "service quality", "client satisfaction", "service delivery"),
+        "name": "SERVQUAL Model of Service Quality",
+        "left_label": "Service Quality Dimensions",
+        "left_items": ["Reliability", "Responsiveness", "Assurance", "Tangibles", "Empathy"],
+        "middle_label": "Perceived Gap",
+        "middle_items": ["Expectation-perception gap"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Customer satisfaction"],
+    },
+    {
+        "keywords": ("public policy", "public administration", "governance reform", "institutional framework", "regulatory compliance"),
+        "name": "Institutional Theory",
+        "left_label": "Institutional Pressures",
+        "left_items": ["Coercive pressures", "Normative pressures", "Mimetic pressures"],
+        "middle_label": "Institutional Response",
+        "middle_items": ["Policy/practice conformity"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Institutional legitimacy / policy outcomes"],
+    },
+    {
+        "keywords": ("learning outcomes", "teaching method", "instructional", "pedagog", "student performance", "academic achievement"),
+        "name": "Constructivist Learning Theory",
+        "left_label": "Learning Inputs",
+        "left_items": ["Prior knowledge", "Learning environment", "Instructional design"],
+        "middle_label": "Learning Process",
+        "middle_items": ["Active knowledge construction", "Social interaction"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Learning outcomes / academic achievement"],
+    },
+    {
+        "keywords": ("health behavior", "health belief", "patient", "disease prevention", "healthcare utilization", "vaccination"),
+        "name": "Health Belief Model",
+        "left_label": "Perceived Threat",
+        "left_items": ["Perceived susceptibility", "Perceived severity"],
+        "middle_label": "Perceived Benefits/Barriers",
+        "middle_items": ["Perceived benefits of action", "Perceived barriers"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Health behavior / service uptake"],
+    },
+    {
+        "keywords": ("environmental sustainability", "climate change", "sustainable development", "green practices", "carbon emission"),
+        "name": "Triple Bottom Line Theory",
+        "left_label": "Sustainability Pillars",
+        "left_items": ["Economic performance", "Social performance", "Environmental performance"],
+        "middle_label": "Integration Mechanism",
+        "middle_items": ["Balanced sustainability practices"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Sustainable development outcomes"],
+    },
+    {
+        "keywords": ("supply chain", "logistics management", "operations management", "value chain"),
+        "name": "Systems Theory",
+        "left_label": "System Inputs",
+        "left_items": ["Raw materials / resources", "Information flow", "Coordination mechanisms"],
+        "middle_label": "Process Subsystems",
+        "middle_items": ["Interdependent operational processes"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Supply chain / operational performance"],
+    },
+    {
+        "keywords": ("entrepreneurship", "entrepreneurial", "startup", "small and medium enterprise", "sme growth", "business venture"),
+        "name": "Schumpeter's Theory of Innovation",
+        "left_label": "Entrepreneurial Inputs",
+        "left_items": ["Innovative combination of resources", "Risk-taking capacity"],
+        "middle_label": "Creative Destruction Process",
+        "middle_items": ["Displacement of existing practices"],
+        "right_label": "Outcome Construct",
+        "right_items": ["Entrepreneurial / venture growth"],
+    },
+)
+
+
+def _select_named_theory(
+    topic: str, message: str = "", objectives: list[str] | None = None
+) -> dict[str, Any] | None:
+    """Pick the named theory whose domain keywords match this topic/message/objectives, or
+    None when nothing matches. Used to decide whether a dissertation gets a Theoretical
+    Framework section at all, and which specific theory it names — so the section varies
+    by topic instead of being the same generic boilerplate for every document.
+    """
+    text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
+    for domain in _NAMED_THEORY_DOMAINS:
+        if any(kw in text for kw in domain["keywords"]):
+            return domain
+    return None
+
+
 def _default_framework_spec(topic: str, prompt: str, kind: str = "conceptual") -> dict[str, Any]:
     short_topic = (topic or "the study").strip()
     if kind == "theory":
+        theory = _select_named_theory(topic, prompt)
+        if theory:
+            return {
+                "title": f"Theoretical Framework: {theory['name']}",
+                "left_label": theory["left_label"],
+                "left_items": list(theory["left_items"]),
+                "middle_label": theory["middle_label"],
+                "middle_items": list(theory["middle_items"]),
+                "right_label": theory["right_label"],
+                "right_items": list(theory["right_items"]),
+                "control_label": "Boundary Conditions",
+                "control_items": ["Scope of theory", "Underlying assumptions"],
+                "notes": (prompt or "").strip()[:180],
+            }
         return {
             "title": f"Theoretical Framework: {short_topic}",
             "left_label": "Antecedent Constructs",
@@ -2876,10 +3072,16 @@ def _default_framework_spec(topic: str, prompt: str, kind: str = "conceptual") -
             "control_items": ["Scope of theory", "Underlying assumptions"],
             "notes": (prompt or "").strip()[:180],
         }
+    distinct_terms = [
+        re.sub(r"^(a|an|the)\s+", "", t.strip(), flags=re.IGNORECASE)
+        for t in _topic_terms(topic, 4)
+        if t.strip().lower() != short_topic.lower()
+    ]
+    left_items = (distinct_terms[:2] or ["Policy factors", "Resource capacity"]) + ["Stakeholder readiness"]
     return {
         "title": f"Conceptual Framework: {short_topic}",
         "left_label": "Independent Variables",
-        "left_items": ["Policy factors", "Resource capacity", "Stakeholder readiness"],
+        "left_items": left_items[:3],
         "middle_label": "Mediating Factors",
         "middle_items": ["Implementation quality", "Operational efficiency"],
         "right_label": "Dependent Variable",
@@ -2904,11 +3106,11 @@ def _framework_target_index(document: Document, target: str | None, prompt: str)
     looks_framework = any(k in text for k in ["conceptual", "theoretical", "framework", "model"])
     if looks_framework:
         # Ordered most-specific-first, based on whichever framework type the prompt actually
-        # names. Numbered prefixes are deliberately omitted: different templates number
-        # Chapter 2 differently (DISSERTATION_TEMPLATE uses "2.2 Conceptual Review" / "2.3
-        # Theoretical Framework", _fallback_dissertation_chapters uses "2.2 Theoretical
-        # Framework" / "2.3 Conceptual Framework"), and find_section's numeric-token tier
-        # would otherwise match on the number alone and pick the wrong section.
+        # names. Numbered prefixes are deliberately omitted: different plans number Chapter 2
+        # differently, and _fallback_dissertation_chapters only includes a Theoretical
+        # Framework section at all when a named theory matched the topic — so the numbering
+        # of Conceptual vs Theoretical Framework varies per document, and find_section's
+        # numeric-token tier would otherwise match on the number alone and pick the wrong section.
         wants_theoretical = "theoretical" in text and "conceptual" not in text
         if wants_theoretical:
             preferred_titles = [
