@@ -15,7 +15,27 @@ DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest")
-ALLOWED_HOSTS = ["*"]
+
+# Comma-separated, e.g. "yourusername.pythonanywhere.com". Defaults to "*" for local dev.
+_allowed_hosts = os.getenv("DJANGO_ALLOWED_HOSTS", "*")
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(",") if h.strip()]
+
+# Comma-separated, e.g. "https://yourusername.pythonanywhere.com". Required by Django's
+# CSRF check for any POST/PUT/DELETE made over HTTPS once DEBUG=False.
+_csrf_trusted = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "")
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_trusted.split(",") if o.strip()]
+
+# PythonAnywhere (and most PaaS hosts) terminate TLS in front of the app and forward
+# requests over plain HTTP with this header set, so Django needs telling how to detect
+# an originally-HTTPS request (request.is_secure(), CSRF origin checks, etc.).
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Cookies/redirects only need to be HTTPS-only once actually deployed (DEBUG=False) —
+# forcing this locally would break plain http://127.0.0.1 development.
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -74,6 +94,7 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
