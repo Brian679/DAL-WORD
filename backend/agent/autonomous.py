@@ -601,12 +601,17 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
             "5.6 Areas for Further Research",
         ],
     },
+    # References and Appendices are unnumbered back matter — they stand on their
+    # own after the last numbered chapter, the same way "Preliminary Pages" stands
+    # as unnumbered front matter. They must never be bundled into a numbered
+    # "Chapter 6".
     {
-        "title": "Chapter 6: References and Appendices",
-        "subsections": [
-            "6.1 References",
-            "6.2 Appendices",
-        ],
+        "title": "References",
+        "subsections": [],
+    },
+    {
+        "title": "Appendices",
+        "subsections": [],
     },
 ]
 
@@ -2615,7 +2620,9 @@ def generate_dissertation_plan_llm(
     if guide.get("focus_notes"):
         guideline_lines.append(f"- Student-specified requirements:\n  {guide['focus_notes'][:400]}")
     guidelines_block = (
-        "Student guidelines to honour in the chapter structure:\n"
+        "Student guidelines — these are MANDATORY and OVERRIDE any default rule below "
+        "that conflicts with them (e.g. a different chapter count, chapter order, naming, or "
+        "required sections). Follow them exactly:\n"
         + "\n".join(guideline_lines) + "\n\n"
     ) if guideline_lines else ""
 
@@ -2639,15 +2646,24 @@ def generate_dissertation_plan_llm(
         "  }\n"
         "]\n\n"
         "Rules:\n"
+        "- If the student guidelines above specify their own chapter structure, numbering, naming, "
+        "or required sections, follow those exactly instead of the default structure described below — "
+        "the rules below are only the default to use when the student has not specified otherwise.\n"
         "- The FIRST entry in the array must be the front matter with the title 'Preliminary Pages' and "
         "these exact sections (in order, numbered as shown): "
         "'i. Abstract', 'ii. Dedication', 'iii. Acknowledgements', "
         "'iv. Table of Contents', 'v. List of Figures', 'vi. List of Tables', "
         "'vii. List of Abbreviations and Acronyms'.\n"
-        "- After the front matter, generate exactly 6 main chapters: Introduction, Literature Review, "
-        "Methodology, Results/Analysis, Conclusion, and a final 'References and Appendices' chapter "
-        "with a 'References' section and an 'Appendices' section — this final chapter is mandatory, "
-        "never omit it.\n"
+        "- After the front matter, generate exactly 5 main numbered chapters: Introduction, Literature "
+        "Review, Methodology, Results/Analysis, Conclusion.\n"
+        "- After the last numbered chapter, add exactly two more top-level entries for the back matter, "
+        "in this order: one titled exactly 'References' and one titled exactly 'Appendices'. These are "
+        "mandatory — never omit them — but they are NOT chapters: do not number them, do not prefix them "
+        "with the word 'Chapter', and never merge them into a single chapter or into the last numbered "
+        "chapter. They stand alone, the same way 'Preliminary Pages' stands alone as unnumbered front "
+        "matter. Their own sections must also be unnumbered. 'References' must contain exactly one "
+        "section titled exactly 'References' with an empty sections list. 'Appendices' must contain one "
+        "or more sections, each titled like 'Appendix A: <descriptive name>', 'Appendix B: ...', etc.\n"
         "- Chapter 1 must contain: Background, Statement of the Problem, Research Objectives, "
         "Research Questions, Significance, Scope & Delimitations, Definition of Key Terms, Chapter Summary.\n"
         "- Chapter 2 title and section headings must be SPECIFIC to the research topic — do NOT use "
@@ -2679,8 +2695,10 @@ def generate_dissertation_plan_llm(
         "Where it fits the study, you may also add a 'Contributions of the Study' section covering its "
         "Theoretical, Practical, and Methodological contributions.\n"
         "- Each main chapter should have 6–12 sections (including the Chapter Summary). Sections may have nested sub-sections.\n"
-        "- All titles must use standard academic numbering (1.1, 1.2, 2.1, 2.2.1, etc.).\n"
-        "- The Chapter Summary in each chapter must be the LAST section.\n"
+        "- All titles within the 5 numbered chapters must use standard academic numbering "
+        "(1.1, 1.2, 2.1, 2.2.1, etc.). The 'References' and 'Appendices' entries and any of their own "
+        "sections must NOT be numbered.\n"
+        "- The Chapter Summary in each of the 5 numbered chapters must be the LAST section.\n"
         "- Return ONLY the JSON array. Nothing else."
     )
 
@@ -2761,9 +2779,13 @@ def _fallback_dissertation_chapters(topic: str) -> list[dict[str, Any]]:
             {"title": "5.5 Areas for Further Research", "sections": []},
             {"title": "5.6 Chapter Summary", "sections": []},
         ]},
-        {"title": "Chapter 6: References and Appendices", "sections": [
-            {"title": "6.1 References", "sections": []},
-            {"title": "6.2 Appendices", "sections": []},
+        # Unnumbered back matter — stands on its own after the last numbered
+        # chapter, never bundled into a numbered "Chapter 6".
+        {"title": "References", "sections": [
+            {"title": "References", "sections": []},
+        ]},
+        {"title": "Appendices", "sections": [
+            {"title": "Appendices", "sections": []},
         ]},
     ]
 
@@ -2798,6 +2820,11 @@ def llm_chapters_to_blueprints(
             nodes = _ensure_framework_visual(nodes)
         elif chapter_number:
             nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
+        elif not nodes:
+            # Unnumbered back matter (References, Appendices) with no sections of its
+            # own would otherwise generate zero content — give it one node so there's
+            # something for _execute_subsection_nodes to actually write.
+            nodes = [{"title": title, "children": [], "kind": "text"}]
 
         blueprints.append({"title": title, "nodes": nodes})
     return blueprints
@@ -3430,6 +3457,17 @@ def _strip_leading_heading(body: str, title: str) -> str:
     return body
 
 
+def _node_chunk(title: str, section_title: str, body: str) -> str:
+    """Prefix body with the node's own heading line, unless the node IS the
+    section itself (e.g. a standalone, undivided back-matter entry like
+    References or Appendices) — there the section heading already names it,
+    so repeating the same text verbatim as the first line of the body would
+    render as a duplicated heading."""
+    if title.strip().lower() == section_title.strip().lower():
+        return body
+    return f"{title}\n{body}"
+
+
 def _sanitize_body(text: str) -> str:
     """Strip HTML tags and normalise whitespace in LLM-generated body text."""
     # Replace <br> variants with a newline so paragraph structure is preserved.
@@ -3870,8 +3908,8 @@ def _execute_subsection_nodes(
                 )
                 body = _strip_leading_heading(body, title)
                 body = _sanitize_body(body)
-                chunks.append(f"{title}\n{body}")
-                local_context = f"{local_context}\n\n{title}\n{body}".strip()
+                chunks.append(_node_chunk(title, section_title, body))
+                local_context = f"{local_context}\n\n{_node_chunk(title, section_title, body)}".strip()
                 _done(plan, step_idx)
                 if callable(on_node_completed):
                     try:
@@ -3943,8 +3981,8 @@ def _execute_subsection_nodes(
 
         body = _strip_leading_heading(body, title)
         body = _sanitize_body(body)
-        chunks.append(f"{title}\n{body}")
-        local_context = f"{local_context}\n\n{title}\n{body}".strip()
+        chunks.append(_node_chunk(title, section_title, body))
+        local_context = f"{local_context}\n\n{_node_chunk(title, section_title, body)}".strip()
 
         child_nodes = [_normalize_subsection_node(n) for n in node.get("children", [])]
         if child_nodes:
@@ -4845,7 +4883,7 @@ def _seeded_pick(seed_text: str, options: tuple[str, ...]) -> str:
 # throughout the Literature Review and discuss findings against the literature in
 # Chapters 1, 4 and 5 — so the deterministic path needs its own citation pool, used
 # consistently for both the in-text "(Author, Year)" citations woven into the prose
-# and the final References chapter, so the two always match each other.
+# and the final References back-matter section, so the two always match each other.
 _CITATION_SURNAMES: tuple[str, ...] = (
     "Adeyemi", "Brown", "Chen", "Diallo", "Edwards", "Fernandez", "Garcia", "Hassan",
     "Ibrahim", "Johansson", "Kumar", "Lindqvist", "Mensah", "Nguyen", "Okafor", "Patel",
@@ -7248,7 +7286,6 @@ def _extract_subsection_phrase(instruction: str) -> str:
         (("methodology",), "Methodology"),
         (("results and discussion",), "Results and Discussion"),
         (("conclusion and recommendations",), "Conclusion and Recommendations"),
-        (("references and appendices",), "References and Appendices"),
         (("introduction",), "Introduction"),
         (("conclusion",), "Conclusion"),
         (("abstract",), "Abstract"),
@@ -7356,8 +7393,9 @@ def _chapter_default_word_count(chapter_number: int | None) -> int:
         3: 750,   # Methodology — design rationale, sampling/build, instruments, analysis
         4: 800,   # Results & Discussion — findings tables, interpretation per objective
         5: 600,   # Conclusions — summary, recommendations, limitations, future research
-        6: 350,   # References & Appendices — lists + structured entries
     }
+    # Unmapped chapter numbers, and unnumbered back matter (References, Appendices),
+    # use this generic floor.
     return chapter_wc.get(chapter_number, 450)
 
 
@@ -7431,13 +7469,28 @@ def _parse_user_guidelines(instruction: str) -> dict[str, Any]:
     # Word count target
     target_words = _requested_word_target(instruction)
 
-    # Capture any explicit "guidelines:" or "requirements:" block
+    # Capture any explicit "guidelines:" / "requirements:" block, or other common
+    # natural-language ways a student introduces their own structural requirements.
     focus_notes = ""
-    for marker in ("guidelines:", "requirements:", "instructions:", "notes:", "format:", "please note:"):
+    for marker in (
+        "guidelines:", "requirements:", "instructions:", "notes:", "format:", "please note:",
+        "follow this structure", "follow the following structure", "follow this format",
+        "follow the structure", "structure it as", "structured as follows", "as follows:",
+        "must include", "should include", "must follow", "should follow",
+        "according to the following", "use the following structure", "use this structure",
+    ):
         idx = text.find(marker)
         if idx != -1:
             focus_notes = instruction[idx:idx + 800].strip()
             break
+
+    # No marker matched, but the instruction is long enough that it likely contains
+    # the student's own structural/formatting requirements stated in plain prose
+    # (not flagged by any marker above). Pass it through in full rather than risk
+    # silently dropping a guideline the student never tagged with a keyword —
+    # the dissertation-plan prompt treats focus_notes as mandatory and overriding.
+    if not focus_notes and len(instruction.strip()) > 220:
+        focus_notes = instruction.strip()[:1200]
 
     return {
         "citation_style": citation_style,
@@ -9748,8 +9801,13 @@ def _write_section(
 
         # Only fetch real sources when this section actually needs citations
         # (Literature Review / References) — avoids needless network latency
-        # for purely structural sections like Objectives or Scope.
-        citation_pool = _retrieve_citation_pool(topic, document.id) if chapter_hint in (2, 6) else []
+        # for purely structural sections like Objectives or Scope. References is
+        # unnumbered back matter now, so it's detected by title text, not chapter number.
+        citation_pool = (
+            _retrieve_citation_pool(topic, document.id)
+            if chapter_hint == 2 or "reference" in query_l
+            else []
+        )
 
         # Snapshot the chapter content BEFORE generation starts and locate the
         # target subsection's (start, end) range exactly once. Every progress
@@ -9909,11 +9967,13 @@ def _rewrite_chapter_batch(
     figure_counter = [_next_caption_number(document, "figure")]
     table_counter = [_next_caption_number(document, "table")]
 
-    # Only fetch real sources when a Literature Review or References chapter
-    # is being rewritten — avoids needless network latency otherwise.
+    # Only fetch real sources when the Literature Review chapter is being
+    # rewritten — avoids needless network latency otherwise. References is
+    # unnumbered back matter now and isn't reachable through this numbered
+    # chapter-batch path.
     citation_pool = (
         _retrieve_citation_pool(topic, document.id)
-        if any(n in (2, 6) for n in chapter_numbers) else []
+        if 2 in chapter_numbers else []
     )
 
     sections = document.content.setdefault("sections", [])
@@ -10429,7 +10489,7 @@ def _write_dissertation(
     enriched_instruction = f"{_style_note}\n\n{instruction}"
 
     # ── Retrieve real literature ONCE for the whole dissertation ──────────
-    # Grounds in-text citations and the References chapter in verifiable papers
+    # Grounds in-text citations and the References section in verifiable papers
     # from Crossref/arXiv/PubMed/SSRN/Semantic Scholar instead of LLM invention.
     citation_pool = _retrieve_citation_pool(topic, document.id)
     logger.info("_write_dissertation: retrieved %d candidate sources for citation grounding", len(citation_pool))
@@ -10549,7 +10609,7 @@ def _write_dissertation(
         "arXiv, PubMed, and Semantic Scholar."
         if citation_pool else
         " No verified external sources could be retrieved (e.g. no network access) — "
-        "in-text citations and the References chapter use a consistent set of simulated sources that "
+        "in-text citations and the References section use a consistent set of simulated sources that "
         "must be replaced with verified literature before submission."
     )
     review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""

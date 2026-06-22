@@ -134,7 +134,8 @@ function createFallbackPreviewPlan() {
     { step: 'Writing Chapter 3: Methodology', status: 'pending' },
     { step: 'Writing Chapter 4: Results and Discussion', status: 'pending' },
     { step: 'Writing Chapter 5: Conclusion and Recommendations', status: 'pending' },
-    { step: 'Writing Chapter 6: References and Appendices', status: 'pending' },
+    { step: 'Writing References', status: 'pending' },
+    { step: 'Writing Appendices', status: 'pending' },
   ];
 }
 
