@@ -1,5 +1,7 @@
 import io
 import logging
+import zipfile
+from xml.etree import ElementTree as ET
 
 from rest_framework import status
 from rest_framework.response import Response
@@ -52,6 +54,52 @@ class AgentActionView(APIView):
         return Response(DocumentSerializer(updated).data)
 
 
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _docx_comments_by_id(zf: zipfile.ZipFile) -> dict:
+    """Parse word/comments.xml into {comment_id: 'Author: comment text'}."""
+    try:
+        raw = zf.read("word/comments.xml")
+    except KeyError:
+        return {}
+    root = ET.fromstring(raw)
+    comments = {}
+    for c in root.findall(f"{_W_NS}comment"):
+        cid = c.get(f"{_W_NS}id")
+        author = (c.get(f"{_W_NS}author") or "").strip()
+        text = " ".join(t.text for t in c.iter(f"{_W_NS}t") if t.text).strip()
+        if cid is not None and text:
+            comments[cid] = f"{author}: {text}" if author else text
+    return comments
+
+
+def _extract_docx_with_comments(raw: bytes) -> str:
+    """Extract paragraph text from a .docx, inlining native Word reviewer
+    comments as [Comment: ...] markers at the point each one is anchored —
+    the same marker format the in-app 'New Comment' tool produces, so
+    comments left in Word by a supervisor flow into the existing
+    comments panel / Address Comments action with no extra handling."""
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        comments = _docx_comments_by_id(zf)
+        doc_xml = zf.read("word/document.xml")
+    body = ET.fromstring(doc_xml).find(f"{_W_NS}body")
+    if body is None:
+        return ""
+    lines = []
+    for p in body.findall(f"{_W_NS}p"):
+        parts = []
+        for el in p.iter():
+            if el.tag == f"{_W_NS}t":
+                parts.append(el.text or "")
+            elif el.tag == f"{_W_NS}commentReference" and comments:
+                comment_text = comments.get(el.get(f"{_W_NS}id"))
+                if comment_text:
+                    parts.append(f" [Comment: {comment_text}]")
+        lines.append("".join(parts))
+    return "\n".join(lines)
+
+
 def _extract_file_text(uploaded_file) -> str:
     """Extract plain text from an uploaded PDF or DOCX file."""
     name = (uploaded_file.name or "").lower()
@@ -71,6 +119,12 @@ def _extract_file_text(uploaded_file) -> str:
             except ImportError:
                 pass
         elif name.endswith(".docx"):
+            try:
+                text = _extract_docx_with_comments(raw)
+                if text.strip():
+                    return text
+            except Exception as exc:
+                logger.warning("DOCX comment-aware extraction failed, falling back to plain text: %s", exc)
             try:
                 import docx
                 doc = docx.Document(io.BytesIO(raw))
