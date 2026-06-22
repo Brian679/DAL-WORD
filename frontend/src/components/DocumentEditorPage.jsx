@@ -1785,6 +1785,46 @@ export default function DocumentEditorPage({
     setShowPlagiarismPanel(false);
   }
 
+  function downloadPlagiarismReport() {
+    const result = plagiarismResultRef.current || plagiarismResult;
+    if (!result || result.error) return;
+    const title = currentDocument?.title || 'Document';
+    const lines = [];
+    lines.push(`PLAGIARISM REPORT`);
+    lines.push(`Document: ${title}`);
+    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push('');
+    lines.push(`Overall similarity: ${result.overall_similarity_percentage ?? 0}%`);
+    lines.push(`Verdict: ${result.verdict ?? 'n/a'}`);
+    lines.push(`Checked against: ${result.checked_against ?? 0} other document(s) in workspace${
+      result.external_checked ? ` and ${result.external_papers_checked ?? 0} open-web source(s)` : ''
+    }`);
+    lines.push('');
+    if (result.sources?.length) {
+      lines.push('MATCHED SOURCES');
+      result.sources.forEach((s) => {
+        lines.push(`- ${s.title} — ${s.match_percentage}%${s.url ? ` (${s.url})` : ''}`);
+      });
+      lines.push('');
+    }
+    const flagged = (result.sentences || []).filter(s => s.label !== 'original');
+    lines.push(`FLAGGED PASSAGES (${flagged.length})`);
+    if (flagged.length) {
+      flagged.forEach((s, i) => {
+        lines.push(`${i + 1}. [${Math.round(s.similarity * 100)}% match${s.source_title ? ` · ${s.source_title}` : ''}]`);
+        lines.push(`   "${s.text}"`);
+      });
+    } else {
+      lines.push('None — no matching passages found.');
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const a = window.document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${title} - Plagiarism Report.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   async function runAiDetect() {
     const docId = currentDocument?.id;
     if (!docId) return;
@@ -1817,6 +1857,37 @@ export default function DocumentEditorPage({
     editor.normalize();
     setAiDetectResult(null);
     setShowAiDetectPanel(false);
+  }
+
+  function downloadAiReport() {
+    const result = aiDetectResultRef.current || aiDetectResult;
+    if (!result || result.error) return;
+    const title = currentDocument?.title || 'Document';
+    const lines = [];
+    lines.push(`AI DETECTION REPORT`);
+    lines.push(`Document: ${title}`);
+    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push('');
+    lines.push(`Overall AI probability: ${result.overall_ai_percentage ?? 0}%`);
+    lines.push(`Burstiness: ${result.burstiness?.toFixed?.(2) ?? result.burstiness ?? 'n/a'} (low = uniform = AI)`);
+    lines.push(`Verdict: ${result.verdict ?? 'n/a'}`);
+    lines.push('');
+    const flagged = (result.sentences || []).filter(s => s.label !== 'likely_human');
+    lines.push(`FLAGGED PASSAGES (${flagged.length})`);
+    if (flagged.length) {
+      flagged.forEach((s, i) => {
+        lines.push(`${i + 1}. [${Math.round(s.ai_probability * 100)}% AI · ${s.label === 'likely_ai' ? 'Likely AI' : 'Uncertain'}]`);
+        lines.push(`   "${s.text}"`);
+      });
+    } else {
+      lines.push('None — no AI passages flagged.');
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const a = window.document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${title} - AI Detection Report.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   async function runQualityCheck() {
@@ -1920,6 +1991,15 @@ export default function DocumentEditorPage({
     if (!text.trim() && (!attachedFile)) return;
     if (isThinking) return;
     const userText = text.trim();
+
+    // Any new prompt clears stale highlights/panel state left over from a
+    // previous AI-detect or plagiarism check. The report summary already
+    // posted to chat history is untouched — only the live document
+    // highlighting and side panel reset. If this prompt is itself a new
+    // check request, the intercepts below immediately re-populate fresh
+    // highlights right after.
+    clearAiHighlights();
+    clearPlagiarismHighlights();
 
     // ── Intercept: AI detection request ──────────────────────────────────────
     if (_isAiDetectRequest(userText) && !attachedFile) {
@@ -3415,6 +3495,13 @@ export default function DocumentEditorPage({
                 <div style={{color:'#ef4444',fontSize:12,padding:8}}>{aiDetectResult.error}</div>
               ) : aiDetectResult ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={downloadAiReport}
+                    style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%',padding:'7px 10px',marginBottom:12,fontSize:12,fontWeight:600,color:'#374151',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:6,cursor:'pointer'}}
+                  >
+                    <Download size={13}/> Download Report
+                  </button>
                   {/* Score gauge */}
                   <div style={{textAlign:'center',marginBottom:14}}>
                     {(() => {
@@ -3505,6 +3592,13 @@ export default function DocumentEditorPage({
                 <div style={{color:'#ef4444',fontSize:12,padding:8}}>{plagiarismResult.error}</div>
               ) : plagiarismResult ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={downloadPlagiarismReport}
+                    style={{display:'flex',alignItems:'center',justifyContent:'center',gap:6,width:'100%',padding:'7px 10px',marginBottom:12,fontSize:12,fontWeight:600,color:'#374151',background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:6,cursor:'pointer'}}
+                  >
+                    <Download size={13}/> Download Report
+                  </button>
                   {/* Score gauge */}
                   <div style={{textAlign:'center',marginBottom:14}}>
                     {(() => {
