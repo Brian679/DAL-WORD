@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -42,6 +43,18 @@ def _doc_context(document: Document) -> str:
             + "\n".join(comment_list)
         )
     return "\n".join(parts)
+
+
+_COMMENT_MARKER_RE = re.compile(r"\[Comment:\s*[^\]]+\]", re.IGNORECASE)
+
+
+def _strip_comment_markers(text: str) -> str:
+    """Remove inline [Comment: ...] reviewer annotations before content
+    analysis (AI detection, plagiarism, quality scoring) — those markers
+    hold reviewer metadata, not the author's own prose, and supervisors
+    reusing similar phrasing across students' work would otherwise read
+    as plagiarism between unrelated documents."""
+    return _COMMENT_MARKER_RE.sub("", text)
 
 
 class AgentActionView(APIView):
@@ -359,12 +372,12 @@ class AIDetectView(APIView):
         # Otherwise we flatten all document sections.
         custom_text = (request.data.get("text") or "").strip()
         if custom_text:
-            full_text = custom_text
+            full_text = _strip_comment_markers(custom_text)
         else:
             content = document.content or {}
             parts = []
             for section in content.get("sections", []):
-                body = (section.get("content") or "").strip()
+                body = _strip_comment_markers((section.get("content") or "").strip())
                 if body:
                     parts.append(body)
             full_text = "\n\n".join(parts)
@@ -389,14 +402,14 @@ class AcademicQualityView(APIView):
 
         custom_text = (request.data.get("text") or "").strip()
         if custom_text:
-            result = academic_quality_check(custom_text)
+            result = academic_quality_check(_strip_comment_markers(custom_text))
             return Response({"sections": [{"title": "Selection", "result": result}], "overall": result})
 
         content = document.content or {}
         sections_out = []
         all_text_parts = []
         for section in content.get("sections", []):
-            body = (section.get("content") or "").strip()
+            body = _strip_comment_markers((section.get("content") or "").strip())
             if not body:
                 continue
             all_text_parts.append(body)
@@ -436,12 +449,12 @@ class PlagiarismCheckView(APIView):
 
         custom_text = (request.data.get("text") or "").strip()
         if custom_text:
-            full_text = custom_text
+            full_text = _strip_comment_markers(custom_text)
         else:
             content = document.content or {}
             parts = []
             for section in content.get("sections", []):
-                body = (section.get("content") or "").strip()
+                body = _strip_comment_markers((section.get("content") or "").strip())
                 if body:
                     parts.append(body)
             full_text = "\n\n".join(parts)
@@ -451,7 +464,7 @@ class PlagiarismCheckView(APIView):
             other_content = other.content or {}
             parts = []
             for section in other_content.get("sections", []):
-                body = (section.get("content") or "").strip()
+                body = _strip_comment_markers((section.get("content") or "").strip())
                 if body:
                     parts.append(body)
             other_text = "\n\n".join(parts)
