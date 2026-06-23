@@ -178,3 +178,20 @@ export async function getDissertationPlan(docId, message) {
         return null;
     }
 }
+
+// Asks the agent to design a section plan for a non-dissertation document
+// (assignment, essay, report, ...) and decide whether it's substantial
+// enough to need a visible todo list before writing starts.
+export async function getDocumentPlan(docId, message) {
+    try {
+        const res = await fetch(`${API_BASE}/agent/${docId}/document-plan/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message }),
+        });
+        if (!res.ok) return null;
+        return res.json();
+    } catch {
+        return null;
+    }
+}

@@ -73,7 +73,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, detectAIContent, checkPlagiarism, runAgentAction } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -85,6 +85,10 @@ const INITIAL_CHATS = [{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: INITIA
 const MIN_EDITOR_HEIGHT = 900;
 const PAGE_CYCLE_PX = 1120;
 const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
+// Assignments, essays, reports, articles, etc. — anything else worth asking
+// the agent "does this need a todo list?" before writing. Dissertations are
+// handled separately above since they always need one.
+const LONG_DOCUMENT_REQUEST_RE = /(write|draft|create|generate|compose|produce|do)\b.{0,25}\b(assignment|essay|report|article|paper|case\s*stud(?:y|ies)|proposal|review|brief|memo)\b/i;
 
 const IMPROVE_STYLES = [
   {
@@ -123,6 +127,10 @@ function normalizeStep(step = '') {
 
 function looksLikeDissertationRequest(text = '') {
   return DISSERTATION_REQUEST_RE.test((text || '').trim());
+}
+
+function looksLikeLongDocumentRequest(text = '') {
+  return LONG_DOCUMENT_REQUEST_RE.test((text || '').trim());
 }
 
 function createFallbackPreviewPlan() {
@@ -176,6 +184,17 @@ function derivePlanFromDocument(previewPlan = [], sections = []) {
       const chapterContent = chapterEntry ? chapterEntry[1] : '';
       const subsectionRe = new RegExp(`(^|\\n)${escapeRegExp(subsectionTitle)}(\\n|$)`, 'i');
       if (subsectionRe.test(chapterContent)) {
+        normalized[idx].status = 'done';
+      }
+      continue;
+    }
+
+    // Plain "Writing <Section Title>" steps — used by the generic
+    // assignment/essay/report planner, which has no "Chapter N:" prefix.
+    const genericMatch = stepLabel.match(/^writing\s+(.+)$/i);
+    if (genericMatch) {
+      const sectionContent = chapterMap.get(genericMatch[1].toLowerCase().trim()) || '';
+      if (sectionContent.trim().length > 24) {
         normalized[idx].status = 'done';
       }
     }
@@ -2112,6 +2131,7 @@ export default function DocumentEditorPage({
     const currentChatId = activeChatId;
     const beforeAgentSections = cloneSections(draftSections);
     const dissertationRequest = looksLikeDissertationRequest(userText);
+    const genericDocRequest = !dissertationRequest && looksLikeLongDocumentRequest(userText);
     const progressMessageId = Date.now() + 1;
     // Send the writing-controls guidelines to the agent without cluttering
     // the visible chat bubble with the raw [Citation style: ...] prefix.
@@ -2192,12 +2212,62 @@ export default function DocumentEditorPage({
       startDissertationProgressPolling(currentDocument?.id, currentChatId, progressMessageId, previewPlan);
     }
 
+    // Assignments/essays/reports/articles don't always need a visible todo
+    // list — only long ones do. Ask the agent to plan the document first; it
+    // decides (via needs_todo) whether the piece is substantial enough to
+    // show progress, and only then do we surface the same todo-list UI used
+    // for dissertations.
+    let showPlanUi = dissertationRequest;
+    if (genericDocRequest) {
+      const docPlanResult = await getDocumentPlan(currentDocument?.id, effectiveText);
+      if (docPlanResult?.needs_todo && docPlanResult?.plan?.length) {
+        showPlanUi = true;
+        previewPlan = docPlanResult.plan;
+        const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
+        const stageLabel = firstInProgress
+          ? `Starting: ${statusLabel(firstInProgress.step || '')}...`
+          : 'Writing document...';
+
+        setChats((prev) =>
+          prev.map((chat) =>
+            chat.id === currentChatId
+              ? {
+                  ...chat,
+                  messages: [
+                    ...chat.messages,
+                    {
+                      id: progressMessageId,
+                      role: 'assistant',
+                      text: `This looks like a substantial ${docPlanResult.document_type || 'document'} (~${docPlanResult.estimated_words || ''} words) — generating a todo list before writing.`,
+                      summary: buildSummaryFromPlan(previewPlan, stageLabel),
+                      plan: previewPlan,
+                      workflow: {
+                        currentStep: statusLabel(firstInProgress?.step || ''),
+                        completedCount: previewPlan.filter((item) => item.status === 'done').length,
+                        totalCount: previewPlan.length,
+                        statuses: previewPlan.map((item) => item.status),
+                        updates: [
+                          'Todo list generated by AI',
+                          `Now doing: ${statusLabel(firstInProgress?.step || '')}`,
+                        ],
+                      },
+                    },
+                  ],
+                }
+              : chat
+          )
+        );
+        setLiveProgressMsgId(progressMessageId);
+        startDissertationProgressPolling(currentDocument?.id, currentChatId, progressMessageId, previewPlan);
+      }
+    }
+
     try {
       // ── Step 1: Preview (non-dissertation only) ──────────────────────────
       // Send directly without preview_only so the backend executes immediately
       const result = await chatWithDocument(
         currentDocument?.id, effectiveText, selectedModel,
-        dissertationRequest ? attachedFile : null,
+        showPlanUi ? attachedFile : null,
         /* previewOnly = */ false,
         { groundedResearch, verifyCitations: groundedResearch },
       );
@@ -2208,7 +2278,7 @@ export default function DocumentEditorPage({
       }
       clearProgressPolling();
 
-      if (dissertationRequest) {
+      if (showPlanUi) {
         await playbackDissertationResult(currentChatId, progressMessageId, result, previewPlan, beforeAgentSections);
       } else {
         const assistantMsgId = Date.now() + 1;
