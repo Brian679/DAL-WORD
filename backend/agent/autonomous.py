@@ -10379,20 +10379,51 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
     except Exception as exc:
         logger.warning("_llm_writing_plan failed: %s | raw=%s", exc, raw[:300])
 
-    # Fallback: minimal 5-section structure
+    # Fallback (LLM unavailable or returned unusable JSON). When the user gave
+    # no explicit length, keep the previous minimal 5-section structure. When
+    # they DID ask for an explicit length ("50-page assignment", "8000 words"),
+    # honour it here too — otherwise a long request silently collapses to a
+    # generic ~1500-word document with no to-do list, with no error shown.
     t = topic or "the topic"
+    explicit_words = user_guidelines.get("target_words")
+    if not explicit_words:
+        return {
+            "document_title": topic or "Document",
+            "document_type": "document",
+            "estimated_words": 1500,
+            "needs_todo": False,
+            "sections": [
+                {"title": "Introduction", "word_count": 280, "notes": f"Introduce {t} and state the aims"},
+                {"title": "Background", "word_count": 340, "notes": f"Contextualise {t} with relevant evidence"},
+                {"title": "Analysis", "word_count": 380, "notes": f"Critically examine the key dimensions of {t}"},
+                {"title": "Discussion", "word_count": 320, "notes": "Interpret findings and consider implications"},
+                {"title": "Conclusion", "word_count": 220, "notes": "Synthesise the key points and recommend next steps"},
+            ],
+        }
+
+    middle_pool = [
+        ("Background", f"Contextualise {t} with relevant evidence"),
+        ("Literature Review", f"Survey existing scholarship and debates on {t}"),
+        ("Analysis", f"Critically examine the key dimensions of {t}"),
+        ("Findings", f"Present the main findings relating to {t}"),
+        ("Discussion", "Interpret findings and consider implications"),
+        ("Implications", f"Discuss the broader implications of {t}"),
+        ("Recommendations", "Recommend practical next steps"),
+    ]
+    num_sections = max(3, min(len(middle_pool) + 2, round(explicit_words / 350)))
+    middle = middle_pool[: max(1, num_sections - 2)]
+    per_section = max(150, round(explicit_words / (len(middle) + 2)))
+
+    sections = [{"title": "Introduction", "word_count": per_section, "notes": f"Introduce {t} and state the aims"}]
+    sections += [{"title": title, "word_count": per_section, "notes": notes} for title, notes in middle]
+    sections.append({"title": "Conclusion", "word_count": per_section, "notes": "Synthesise the key points and recommend next steps"})
+
     return {
         "document_title": topic or "Document",
         "document_type": "document",
-        "estimated_words": 1500,
-        "needs_todo": False,
-        "sections": [
-            {"title": "Introduction", "word_count": 280, "notes": f"Introduce {t} and state the aims"},
-            {"title": "Background", "word_count": 340, "notes": f"Contextualise {t} with relevant evidence"},
-            {"title": "Analysis", "word_count": 380, "notes": f"Critically examine the key dimensions of {t}"},
-            {"title": "Discussion", "word_count": 320, "notes": "Interpret findings and consider implications"},
-            {"title": "Conclusion", "word_count": 220, "notes": "Synthesise the key points and recommend next steps"},
-        ],
+        "estimated_words": explicit_words,
+        "needs_todo": explicit_words > 1500,
+        "sections": sections,
     }
 
 
@@ -10502,6 +10533,7 @@ def _plan_and_write_document(
             text = _fallback_subsection_text(
                 topic, doc_type.capitalize(), title,
                 objectives=(document.content or {}).get("research_objectives"),
+                target_words=wc,
                 research_design=design,
                 sample_size=_infer_sample_size(document),
             )
