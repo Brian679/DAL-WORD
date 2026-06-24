@@ -7146,6 +7146,35 @@ def _fallback_subsection_body(
             "[Records of instrument calibration and validation against reference cases or benchmarks.]"
         )
 
+    # ── Non-dissertation document types (assignment, report, essay, article, ...) ──
+    # `section_title` is passed as `doc_type.capitalize()` at the one call site that
+    # writes these (see `_plan_and_write_document`), so `sec` reliably holds the
+    # document type here — never a real chapter title — which lets this branch
+    # avoid the dissertation-flavoured, topic-blind institutional-theory text below
+    # without risking any change to dissertation generation.
+    _non_dissertation_doc_types = {
+        "assignment", "report", "essay", "article", "presentation",
+        "case_study", "proposal", "lab_report", "review", "spreadsheet", "document",
+    }
+    if sec in _non_dissertation_doc_types:
+        return (
+            f"The {sub.lower()} of {topic} centres on the concepts, methods, and practical considerations "
+            f"needed to understand {field_label} in this context, rather than treating it as a single, "
+            "settled topic.\n\n"
+            f"A useful starting point is to distinguish the underlying principles of {field_label} from how "
+            "those principles are applied in practice: the underlying principles explain why a particular "
+            "method or approach works, while the applied dimension covers the specific tools, techniques, "
+            "and procedures used to put those principles to work. Considering both together gives a more "
+            "complete picture than focusing on either alone.\n\n"
+            f"In practice, work on {topic} also has to account for constraints such as data availability, "
+            "measurement accuracy or reliability, cost, and the specific context in which it is applied — "
+            "these constraints often shape which methods are feasible and how dependable the results are "
+            "likely to be, and matter as much as the underlying theory in determining real-world outcomes.\n\n"
+            f"Overall, a sound treatment of {sub.lower()} should connect theory, method, and practical "
+            f"constraint, using concrete examples relating to {topic} wherever possible, and should be "
+            "supported by citations to relevant, verifiable sources rather than unsupported claims."
+        )
+
     # ── Generic catch-all — four paragraphs (~350 words) for substantive coverage ──
     return (
         f"The study of {sub.lower()} within the context of {topic} reveals important insights into the mechanisms "
@@ -10319,6 +10348,106 @@ def build_dissertation_preview_plan(
     return plan
 
 
+# Keyword -> document_type, used by `_llm_writing_plan`'s offline fallback (no
+# LLM reachable) so a request for "an assignment" doesn't silently collapse
+# into a generic research-report shape. Order matters: more specific phrases
+# are checked first so e.g. "lab report" wins over the bare "report" it
+# contains, and "literature review" wins over essays that merely mention one.
+_FALLBACK_DOC_TYPE_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("lab_report", ("lab report", "laboratory report")),
+    ("case_study", ("case study",)),
+    ("proposal", ("proposal",)),
+    ("review", ("literature review", "systematic review", "book review")),
+    ("presentation", ("presentation", "slide deck", "slides", "powerpoint")),
+    ("spreadsheet", ("spreadsheet", "excel sheet")),
+    ("assignment", ("assignment", "coursework", "homework")),
+    ("report", ("report",)),
+    ("article", ("article", "blog post")),
+    ("essay", ("essay",)),
+]
+
+
+def _detect_fallback_document_type(instruction: str) -> str:
+    """Best-effort document_type guess for the no-LLM fallback path.
+
+    The LLM prompt above already infers this from the raw request; this
+    mirrors that inference for the offline/parse-failure path so the fallback
+    doesn't always default to a generic "document".
+    """
+    text = (instruction or "").lower()
+    for doc_type, keywords in _FALLBACK_DOC_TYPE_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return doc_type
+    return "document"
+
+
+def _fallback_middle_pool(doc_type: str, t: str) -> list[tuple[str, str]]:
+    """Section title/notes pool for the offline fallback plan, varied by
+    document_type so an assignment, essay, or article doesn't always get
+    forced into the same Background/Literature-Review/Findings IMRAD shape
+    a research report needs.
+    """
+    if doc_type == "assignment":
+        return [
+            ("Overview", f"Provide an overview of {t} and explain why it matters"),
+            ("Key Concepts", f"Explain the core concepts and terminology underpinning {t}"),
+            ("Critical Discussion", f"Critically discuss {t}, weighing different evidence and perspectives"),
+            ("Examples and Applications", f"Illustrate {t} with concrete examples and real-world applications"),
+            ("Evaluation", f"Evaluate the strengths, limitations, and challenges associated with {t}"),
+        ]
+    if doc_type == "essay":
+        return [
+            ("Background", f"Set out the context needed to understand {t}"),
+            ("Main Argument", f"Develop the central argument about {t}"),
+            ("Supporting Evidence", f"Present evidence and examples supporting the argument about {t}"),
+            ("Counterarguments", f"Address counterarguments and alternative perspectives on {t}"),
+            ("Critical Analysis", f"Critically analyse the implications of {t}"),
+        ]
+    if doc_type == "article":
+        return [
+            ("Background", f"Contextualise {t} for the reader"),
+            ("Key Developments", f"Describe key developments and the current state of {t}"),
+            ("Analysis", f"Analyse the significance of {t}"),
+            ("Outlook", f"Discuss the future outlook and implications of {t}"),
+        ]
+    if doc_type == "case_study":
+        return [
+            ("Background", f"Describe the background and context of {t}"),
+            ("Case Description", f"Describe the specific case relating to {t}"),
+            ("Analysis", f"Analyse the case in relation to {t}"),
+            ("Lessons Learned", f"Identify lessons learned and recommendations arising from {t}"),
+        ]
+    if doc_type == "proposal":
+        return [
+            ("Problem Statement", f"Define the problem or opportunity relating to {t}"),
+            ("Proposed Solution", f"Describe the proposed approach to {t}"),
+            ("Implementation Plan", f"Outline how the proposal on {t} would be implemented"),
+            ("Budget and Resources", "Outline resource and budget considerations"),
+        ]
+    if doc_type == "lab_report":
+        return [
+            ("Methods", f"Describe the methods used to investigate {t}"),
+            ("Results", f"Present the results obtained relating to {t}"),
+            ("Discussion", "Interpret the results and consider their significance"),
+        ]
+    if doc_type == "review":
+        return [
+            ("Literature Review", f"Survey existing scholarship and debates on {t}"),
+            ("Thematic Analysis", f"Organise and analyse themes emerging from the literature on {t}"),
+            ("Critical Evaluation", f"Critically evaluate the strengths and gaps in the literature on {t}"),
+        ]
+    # report / document / unrecognised type: the original generic research pool
+    return [
+        ("Background", f"Contextualise {t} with relevant evidence"),
+        ("Literature Review", f"Survey existing scholarship and debates on {t}"),
+        ("Analysis", f"Critically examine the key dimensions of {t}"),
+        ("Findings", f"Present the main findings relating to {t}"),
+        ("Discussion", "Interpret findings and consider implications"),
+        ("Implications", f"Discuss the broader implications of {t}"),
+        ("Recommendations", "Recommend practical next steps"),
+    ]
+
+
 def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> dict[str, Any]:
     """Ask the LLM to design a complete writing plan from the user's raw request.
 
@@ -10427,11 +10556,12 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
     # honour it here too — otherwise a long request silently collapses to a
     # generic ~1500-word document with no to-do list, with no error shown.
     t = topic or "the topic"
+    fallback_doc_type = _detect_fallback_document_type(instruction)
     explicit_words = user_guidelines.get("target_words")
     if not explicit_words:
         return {
             "document_title": topic or "Document",
-            "document_type": "document",
+            "document_type": fallback_doc_type,
             "estimated_words": 1500,
             "needs_todo": False,
             "needs_citations": False,
@@ -10444,15 +10574,7 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
             ],
         }
 
-    middle_pool = [
-        ("Background", f"Contextualise {t} with relevant evidence"),
-        ("Literature Review", f"Survey existing scholarship and debates on {t}"),
-        ("Analysis", f"Critically examine the key dimensions of {t}"),
-        ("Findings", f"Present the main findings relating to {t}"),
-        ("Discussion", "Interpret findings and consider implications"),
-        ("Implications", f"Discuss the broader implications of {t}"),
-        ("Recommendations", "Recommend practical next steps"),
-    ]
+    middle_pool = _fallback_middle_pool(fallback_doc_type, t)
     num_sections = max(3, min(len(middle_pool) + 2, round(explicit_words / 350)))
     middle = middle_pool[: max(1, num_sections - 2)]
     per_section = max(150, round(explicit_words / (len(middle) + 2)))
@@ -10463,10 +10585,10 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
 
     return {
         "document_title": topic or "Document",
-        "document_type": "document",
+        "document_type": fallback_doc_type,
         "estimated_words": explicit_words,
         "needs_todo": explicit_words > 1500,
-        "needs_citations": True,
+        "needs_citations": fallback_doc_type not in {"presentation", "spreadsheet"},
         "sections": sections,
     }
 
