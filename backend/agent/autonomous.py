@@ -9237,7 +9237,7 @@ def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) ->
         return "The document has no sections yet.", False
 
     source_docs = []
-    for other in Document.objects.exclude(pk=document.pk).only("id", "title", "content"):
+    for other in Document.objects.filter(user=document.user).exclude(pk=document.pk).only("id", "title", "content"):
         other_content = other.content or {}
         parts = [
             (s.get("content") or "").strip()

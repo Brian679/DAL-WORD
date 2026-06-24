@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import HomePage from './components/HomePage';
 import DocumentEditorPage from './components/DocumentEditorPage';
+import LoginPage from './components/LoginPage';
+import SignupPage from './components/SignupPage';
+import { useAuth } from './context/AuthContext';
 import { createDocument, getDocument, listDocuments, runAgentAction, updateDocument } from './api/client';
 import './styles.css';
 
 function getRouteFromPath(pathname) {
+  if (pathname === '/login') return { name: 'login', docId: null };
+  if (pathname === '/signup') return { name: 'signup', docId: null };
   const match = pathname.match(/^\/document\/([^/]+)$/);
   if (match) {
     return { name: 'document', docId: decodeURIComponent(match[1]) };
@@ -13,11 +18,13 @@ function getRouteFromPath(pathname) {
 }
 
 export default function App() {
+  const { user, loading: authLoading, logout } = useAuth();
   const [documents,   setDocuments]   = useState([]);
   const [message,     setMessage]     = useState('');
   const [route,       setRoute]       = useState(() => getRouteFromPath(window.location.pathname));
   const [chatHint,    setChatHint]    = useState(null);
   const [activeDoc,   setActiveDoc]   = useState(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   async function refreshDocuments() {
     try {
@@ -29,8 +36,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    refreshDocuments();
-  }, []);
+    if (user) refreshDocuments();
+  }, [user]);
 
   useEffect(() => {
     function onPopState() {
@@ -44,6 +51,15 @@ export default function App() {
     window.history.pushState({}, '', pathname);
     setRoute(getRouteFromPath(pathname));
   }
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user && route.name !== 'login' && route.name !== 'signup') {
+      navigate('/login');
+    } else if (user && (route.name === 'login' || route.name === 'signup')) {
+      navigate('/');
+    }
+  }, [authLoading, user, route.name]);
 
   async function handleNewDocument() {
     try {
@@ -106,6 +122,24 @@ export default function App() {
     }
   }
 
+  if (authLoading) {
+    return <div className="auth-page"><div className="auth-loading">Loading\u2026</div></div>;
+  }
+
+  if (!user) {
+    return route.name === 'signup' ? (
+      <SignupPage onNavigateLogin={() => navigate('/login')} />
+    ) : (
+      <LoginPage onNavigateSignup={() => navigate('/signup')} />
+    );
+  }
+
+  if (route.name === 'login' || route.name === 'signup') {
+    return null;
+  }
+
+  const initials = (user.username || '?').slice(0, 2).toUpperCase();
+
   return (
     <div className={`app-root${route.name === 'document' ? ' app-root--document' : ''}`}>
 
@@ -123,7 +157,25 @@ export default function App() {
           {message && <span className="status-pill">{message}</span>}
           <span className="header-icon-btn" title="Headphones">&#127911;</span>
           <span className="header-icon-btn" title="Settings">&#9881;</span>
-          <span className="user-avatar">ET</span>
+          <div className="user-menu">
+            <button className="user-avatar" onClick={() => setUserMenuOpen((open) => !open)}>
+              {initials}
+            </button>
+            {userMenuOpen && (
+              <div className="user-menu-dropdown">
+                <div className="user-menu-name">{user.username}</div>
+                <button
+                  className="user-menu-logout"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    logout();
+                  }}
+                >
+                  Log out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

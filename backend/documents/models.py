@@ -1,7 +1,11 @@
+from django.conf import settings
 from django.db import models
 
 
 class Document(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="documents", null=True, blank=True
+    )
     title = models.CharField(max_length=255)
     content = models.JSONField(default=dict)
     created_at = models.DateTimeField(auto_now_add=True)

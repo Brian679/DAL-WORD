@@ -10,8 +10,13 @@ from agent.views import _extract_file_text
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
-    queryset = Document.objects.all().order_by("-updated_at")
     serializer_class = DocumentSerializer
+
+    def get_queryset(self):
+        return Document.objects.filter(user=self.request.user).order_by("-updated_at")
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
     def perform_update(self, serializer):
         instance = serializer.save()

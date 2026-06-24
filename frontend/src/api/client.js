@@ -1,5 +1,113 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api').replace(/\/$/, '');
 
+const TOKEN_KEY = 'dalword_auth_tokens';
+
+function getTokens() {
+    try {
+        return JSON.parse(localStorage.getItem(TOKEN_KEY)) || null;
+    } catch {
+        return null;
+    }
+}
+
+function setTokens(tokens) {
+    localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+}
+
+function clearTokens() {
+    localStorage.removeItem(TOKEN_KEY);
+}
+
+export function isAuthenticated() {
+    return Boolean(getTokens()?.access);
+}
+
+function notifyLoggedOut() {
+    clearTokens();
+    window.dispatchEvent(new Event('auth:logout'));
+}
+
+let refreshInFlight = null;
+
+async function refreshAccessToken() {
+    const tokens = getTokens();
+    if (!tokens?.refresh) return null;
+    try {
+        const res = await fetch(`${API_BASE}/auth/refresh/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh: tokens.refresh }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const next = { access: data.access, refresh: tokens.refresh };
+        setTokens(next);
+        return next.access;
+    } catch {
+        return null;
+    }
+}
+
+// Drop-in replacement for fetch() that attaches the JWT access token and
+// transparently retries once via the refresh token on a 401 — callers don't
+// need to know tokens exist at all.
+async function apiFetch(url, options = {}) {
+    const tokens = getTokens();
+    const headers = new Headers(options.headers || {});
+    if (tokens?.access) headers.set('Authorization', `Bearer ${tokens.access}`);
+
+    let res = await fetch(url, { ...options, headers });
+    if (res.status !== 401 || !tokens?.refresh) return res;
+
+    if (!refreshInFlight) {
+        refreshInFlight = refreshAccessToken().finally(() => {
+            refreshInFlight = null;
+        });
+    }
+    const newAccess = await refreshInFlight;
+    if (!newAccess) {
+        notifyLoggedOut();
+        return res;
+    }
+    const retryHeaders = new Headers(options.headers || {});
+    retryHeaders.set('Authorization', `Bearer ${newAccess}`);
+    return fetch(url, { ...options, headers: retryHeaders });
+}
+
+export async function signup(username, email, password) {
+    const res = await fetch(`${API_BASE}/auth/signup/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, email, password }),
+    });
+    if (!res.ok) throw new Error(await readApiError(res, 'Signup failed'));
+    const data = await res.json();
+    setTokens({ access: data.access, refresh: data.refresh });
+    return data.user;
+}
+
+export async function login(username, password) {
+    const res = await fetch(`${API_BASE}/auth/login/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) throw new Error(await readApiError(res, 'Login failed'));
+    const data = await res.json();
+    setTokens({ access: data.access, refresh: data.refresh });
+    return data.user;
+}
+
+export async function getMe() {
+    const res = await apiFetch(`${API_BASE}/auth/me/`);
+    if (!res.ok) throw new Error(await readApiError(res, 'Failed to fetch current user'));
+    return res.json();
+}
+
+export function logout() {
+    clearTokens();
+}
+
 async function readApiError(res, fallbackMessage) {
     try {
         const data = await res.json();
@@ -30,13 +138,13 @@ async function readApiError(res, fallbackMessage) {
 }
 
 export async function listDocuments() {
-    const res = await fetch(`${API_BASE}/documents/`);
+    const res = await apiFetch(`${API_BASE}/documents/`);
     if (!res.ok) throw new Error(await readApiError(res, 'Failed to list documents'));
     return res.json();
 }
 
 export async function createDocument(payload) {
-    const res = await fetch(`${API_BASE}/documents/`, {
+    const res = await apiFetch(`${API_BASE}/documents/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -46,7 +154,7 @@ export async function createDocument(payload) {
 }
 
 export async function updateDocument(id, payload) {
-    const res = await fetch(`${API_BASE}/documents/${id}/`, {
+    const res = await apiFetch(`${API_BASE}/documents/${id}/`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -56,7 +164,7 @@ export async function updateDocument(id, payload) {
 }
 
 export async function getDocument(id) {
-    const res = await fetch(`${API_BASE}/documents/${id}/`);
+    const res = await apiFetch(`${API_BASE}/documents/${id}/`);
     if (!res.ok) throw new Error(await readApiError(res, 'Failed to fetch document'));
     return res.json();
 }
@@ -64,7 +172,7 @@ export async function getDocument(id) {
 export async function extractFileText(file) {
     const formData = new FormData();
     formData.append('file', file);
-    const res = await fetch(`${API_BASE}/documents/extract/`, {
+    const res = await apiFetch(`${API_BASE}/documents/extract/`, {
         method: 'POST',
         body: formData,
     });
@@ -74,7 +182,7 @@ export async function extractFileText(file) {
 
 // Unified agent endpoint: POST /api/agent/actions/
 export async function runAgentAction(docId, action, payload) {
-    const res = await fetch(`${API_BASE}/agent/${docId}/action/`, {
+    const res = await apiFetch(`${API_BASE}/agent/${docId}/action/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ doc_id: docId, action, payload }),
@@ -120,7 +228,7 @@ export async function chatWithDocument(
         });
         headers['Content-Type'] = 'application/json';
     }
-    const res = await fetch(`${API_BASE}/agent/${docId}/chat/`, {
+    const res = await apiFetch(`${API_BASE}/agent/${docId}/chat/`, {
         method: 'POST',
         headers,
         body,
@@ -133,7 +241,7 @@ export async function chatWithDocument(
 }
 
 export async function runResearchWorkflow(docId, message, topic = '') {
-    const res = await fetch(`${API_BASE}/agent/${docId}/research-workflow/`, {
+    const res = await apiFetch(`${API_BASE}/agent/${docId}/research-workflow/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, topic }),
@@ -146,7 +254,7 @@ export async function runResearchWorkflow(docId, message, topic = '') {
 }
 
 export async function detectAIContent(docId, text = '') {
-    const res = await fetch(`${API_BASE}/agent/${docId}/ai-detect/`, {
+    const res = await apiFetch(`${API_BASE}/agent/${docId}/ai-detect/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(text ? { text } : {}),
@@ -156,7 +264,7 @@ export async function detectAIContent(docId, text = '') {
 }
 
 export async function checkPlagiarism(docId, text = '') {
-    const res = await fetch(`${API_BASE}/agent/${docId}/plagiarism-check/`, {
+    const res = await apiFetch(`${API_BASE}/agent/${docId}/plagiarism-check/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(text ? { text } : {}),
@@ -167,7 +275,7 @@ export async function checkPlagiarism(docId, text = '') {
 
 export async function getDissertationPlan(docId, message) {
     try {
-        const res = await fetch(`${API_BASE}/agent/${docId}/dissertation-plan/`, {
+        const res = await apiFetch(`${API_BASE}/agent/${docId}/dissertation-plan/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message }),
@@ -184,7 +292,7 @@ export async function getDissertationPlan(docId, message) {
 // enough to need a visible todo list before writing starts.
 export async function getDocumentPlan(docId, message) {
     try {
-        const res = await fetch(`${API_BASE}/agent/${docId}/document-plan/`, {
+        const res = await apiFetch(`${API_BASE}/agent/${docId}/document-plan/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message }),

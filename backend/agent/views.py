@@ -65,7 +65,10 @@ class AgentActionView(APIView):
         action = request.data.get("action")
         payload = request.data.get("payload", {})
 
-        document = Document.objects.get(pk=document_id)
+        try:
+            document = Document.objects.get(pk=document_id, user=request.user)
+        except Document.DoesNotExist:
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
         updated = run_action(document, action, payload)
         return Response(DocumentSerializer(updated).data)
 
@@ -183,7 +186,7 @@ class ChatView(APIView):
                 attachment_text = file_text[:8000]
 
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -257,6 +260,8 @@ class ChatView(APIView):
 
 class GenerateDissertationView(APIView):
     def post(self, request, document_id: int):
+        if not Document.objects.filter(pk=document_id, user=request.user).exists():
+            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
         topic = request.data.get("topic", "Untitled Topic")
         task = generate_dissertation_sections.delay(document_id=document_id, topic=topic)
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
@@ -272,7 +277,7 @@ class ResearchWorkflowView(APIView):
             return Response({"error": "topic or message required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -330,7 +335,7 @@ class DissertationPlanView(APIView):
             return Response({"error": "message or topic required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -372,7 +377,7 @@ class DocumentPlanView(APIView):
             return Response({"error": "message or topic required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -410,7 +415,7 @@ class AIDetectView(APIView):
 
     def post(self, request, document_id: int):
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -442,7 +447,7 @@ class AcademicQualityView(APIView):
 
     def post(self, request, document_id: int):
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -484,7 +489,7 @@ class PlagiarismCheckView(APIView):
 
     def post(self, request, document_id: int):
         try:
-            document = Document.objects.get(pk=document_id)
+            document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -508,7 +513,7 @@ class PlagiarismCheckView(APIView):
             full_text = "\n\n".join(parts)
 
         source_docs = []
-        for other in Document.objects.exclude(pk=document_id).only("id", "title", "content"):
+        for other in Document.objects.filter(user=request.user).exclude(pk=document_id).only("id", "title", "content"):
             other_content = other.content or {}
             parts = []
             for section in other_content.get("sections", []):
