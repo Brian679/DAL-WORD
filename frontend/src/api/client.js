@@ -1,5 +1,9 @@
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api').replace(/\/$/, '');
 
+// Origin only (no /api suffix) — for building <img> src URLs against media files
+// served from the backend (e.g. generated charts/images), which live outside /api.
+export const API_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+
 const TOKEN_KEY = 'dalword_auth_tokens';
 
 function getTokens() {

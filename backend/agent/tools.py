@@ -140,8 +140,22 @@ def _as_list_text(value: Any, fallback: list[str]) -> list[str]:
     if isinstance(value, list):
         items = [str(item).strip() for item in value if str(item).strip()]
         if items:
-            return items[:4]
+            return items[:6]
     return fallback
+
+
+def _wrap_bullet_items(items: list[str], width: int = 26, max_item_chars: int | None = None) -> tuple[str, int]:
+    """Wrap each bullet item independently (rather than joining all items into
+    one blob before wrapping) so item boundaries survive textwrap.fill regardless
+    of how many items there are — otherwise fill() collapses the "\n" separators
+    between items and reflows bullets into each other once wrapping kicks in.
+    max_item_chars bounds each item's wrapped line count so a handful of unusually
+    long items can't blow past the panel's fixed drawing area on their own."""
+    lines: list[str] = []
+    for item in items:
+        text = shorten(item, width=max_item_chars, placeholder="...") if max_item_chars else item
+        lines.extend(fill(f"- {text}", width=width).split("\n"))
+    return "\n".join(lines), len(lines)
 
 
 def _draw_framework_diagram(ax: Any, spec: dict[str, Any]) -> None:
@@ -172,12 +186,33 @@ def _draw_framework_diagram(ax: Any, spec: dict[str, Any]) -> None:
     ))
     ax.text(0.50, 0.925, fill(title, width=58), fontsize=15, fontweight="bold", color="#0f2742", ha="center", va="center")
 
-    panels = [
-        (0.06, 0.33, 0.24, 0.44, "#f4f9f1", left_label, left_items),
-        (0.38, 0.33, 0.24, 0.44, "#fff7ea", middle_label, middle_items),
-        (0.70, 0.33, 0.24, 0.44, "#edf6ff", right_label, right_items),
+    # Bound each item's text before wrapping so a handful of unusually long items
+    # can't single-handedly blow up the line count — bound gets tighter as the
+    # panel holds more items, since space is shared between all of them.
+    max_item_chars = 70 if max(len(left_items), len(middle_items), len(right_items)) <= 2 else (
+        46 if max(len(left_items), len(middle_items), len(right_items)) <= 4 else 32
+    )
+    wrapped = [
+        (label, *_wrap_bullet_items(items, width=26, max_item_chars=max_item_chars))
+        for label, items in ((left_label, left_items), (middle_label, middle_items), (right_label, right_items))
     ]
-    for x, y, w, h, color, label, items in panels:
+    max_lines = max((n for _, _, n in wrapped), default=1) or 1
+
+    # Panel box height grows modestly with content (clamped) instead of staying
+    # fixed regardless of how many items there are — and font/line-spacing are
+    # shared across all three panels so they stay visually consistent rather than
+    # each panel independently shrinking its own text.
+    panel_y = 0.31
+    panel_h = max(0.34, min(0.52, 0.13 + max_lines * 0.034))
+    fontsize = max(6.8, min(9.2, 9.2 - max(0, max_lines - 5) * 0.35))
+    linespacing = max(1.05, 1.35 - max(0, max_lines - 5) * 0.04)
+
+    panels = [
+        (0.06, panel_y, 0.24, panel_h, "#f4f9f1", wrapped[0]),
+        (0.38, panel_y, 0.24, panel_h, "#fff7ea", wrapped[1]),
+        (0.70, panel_y, 0.24, panel_h, "#edf6ff", wrapped[2]),
+    ]
+    for x, y, w, h, color, (label, item_text, _n_lines) in panels:
         ax.add_patch(FancyBboxPatch(
             (x, y),
             w,
@@ -188,12 +223,11 @@ def _draw_framework_diagram(ax: Any, spec: dict[str, Any]) -> None:
             facecolor=color,
         ))
         ax.text(x + w / 2, y + h - 0.06, fill(label, width=24), fontsize=11, fontweight="bold", color="#1d2b36", ha="center", va="center")
+        ax.text(x + 0.02, y + h - 0.11, item_text, fontsize=fontsize, color="#2d3b46", ha="left", va="top", linespacing=linespacing)
 
-        item_text = "\n".join(f"- {item}" for item in items)
-        ax.text(x + 0.02, y + h - 0.11, fill(item_text, width=26), fontsize=9.2, color="#2d3b46", ha="left", va="top", linespacing=1.35)
-
-    ax.annotate("", xy=(0.38, 0.55), xytext=(0.30, 0.55), arrowprops={"arrowstyle": "-|>", "lw": 2.2, "color": "#2b4d6f"})
-    ax.annotate("", xy=(0.70, 0.55), xytext=(0.62, 0.55), arrowprops={"arrowstyle": "-|>", "lw": 2.2, "color": "#2b4d6f"})
+    arrow_y = panel_y + panel_h / 2
+    ax.annotate("", xy=(0.38, arrow_y), xytext=(0.30, arrow_y), arrowprops={"arrowstyle": "-|>", "lw": 2.2, "color": "#2b4d6f"})
+    ax.annotate("", xy=(0.70, arrow_y), xytext=(0.62, arrow_y), arrowprops={"arrowstyle": "-|>", "lw": 2.2, "color": "#2b4d6f"})
 
     ax.add_patch(FancyBboxPatch(
         (0.12, 0.12),

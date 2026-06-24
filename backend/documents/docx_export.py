@@ -4,6 +4,7 @@ uses in `contentToHtmlWithBlocks`/`paragraphChunkToHtml`
 (frontend/src/components/DocumentEditorPage.jsx) so the exported file
 matches what's shown on screen.
 """
+import logging
 import re
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +13,8 @@ from django.conf import settings
 from docx import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
+
+logger = logging.getLogger(__name__)
 
 _UL_RE = re.compile(r"^[-*•◦▪]\s+")
 _OL_RE = re.compile(r"^\d+[.):]\s+")
@@ -76,12 +79,25 @@ def _add_table_block(doc: DocxDocument, block: dict) -> None:
 
 def _add_image_block(doc: DocxDocument, block: dict) -> None:
     path = _resolve_media_path(block.get("src") or "")
+    image_added = False
     if path:
         try:
             doc.add_picture(str(path), width=Inches(5.5))
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            image_added = True
         except Exception:
-            pass
+            logger.warning("docx export: failed to embed image %s", path, exc_info=True)
+    else:
+        logger.warning("docx export: could not resolve media path for image src=%r", block.get("src"))
+
+    if not image_added:
+        p = doc.add_paragraph()
+        run = p.add_run(
+            f"[Figure could not be embedded: {block.get('caption') or block.get('src') or 'unknown'}]"
+        )
+        run.italic = True
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
     caption = block.get("caption")
     if caption:
         p = doc.add_paragraph()

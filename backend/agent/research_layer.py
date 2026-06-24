@@ -443,13 +443,131 @@ def citation_string(p: PaperRecord) -> str:
     return f"{author} ({year}). {title}. {venue}. DOI: {doi}"
 
 
-def build_citation_context(papers: list[PaperRecord], max_items: int = 12) -> str:
+def build_citation_context(papers: list[PaperRecord], max_items: int = 12, style: str = "APA") -> str:
     if not papers:
         return ""
-    lines = ["Use only the following verifiable sources when citing claims:"]
+    style_key = (style or "APA").strip().upper()
+    if style_key in {"IEEE", "VANCOUVER"}:
+        guidance = "Cite these in-text using the matching bracket number only, e.g. [1], [2]."
+    else:
+        guidance = "Cite these in-text using author-date format only, e.g. (Smith, 2020) — never the bracket numbers below."
+    lines = [f"Use only the following verifiable sources when citing claims. {guidance}"]
     for i, p in enumerate(papers[:max_items], start=1):
         lines.append(f"[{i}] {citation_string(p)}")
     return "\n".join(lines)
+
+
+def _split_author_name(name: str) -> tuple[str, str]:
+    """Split a full name into (surname, rest) — "Jane A. Doe" -> ("Doe", "Jane A.")."""
+    parts = name.split()
+    if len(parts) >= 2:
+        return parts[-1], " ".join(parts[:-1])
+    return name, ""
+
+
+def _authors_apa_style(authors: list[str]) -> str:
+    names = []
+    for a in authors[:6]:
+        surname, rest = _split_author_name(a)
+        if rest:
+            initials = "".join(f"{n[0]}." for n in rest.split())
+            names.append(f"{surname}, {initials}")
+        else:
+            names.append(surname)
+    if not names:
+        return "Unknown Author"
+    if len(authors) > 6:
+        return ", ".join(names) + ", et al."
+    if len(names) > 1:
+        return ", ".join(names[:-1]) + ", & " + names[-1]
+    return names[0]
+
+
+def format_reference_entry(paper: PaperRecord, style: str = "APA", index: int = 1) -> str:
+    """Format a single reference-list entry from a verified PaperRecord in the
+    requested citation style. Supported styles: APA, Harvard, MLA, Chicago, IEEE,
+    Vancouver (case-insensitive; unrecognised values fall back to APA). Only ever
+    called on real, retrieved papers — there is nothing here for an LLM to invent."""
+    style_key = (style or "APA").strip().upper()
+    authors = list(paper.authors or [])
+    year = str(paper.year) if paper.year else "n.d."
+    title = (paper.title or "Untitled").rstrip(".")
+    venue = paper.journal or (paper.source or "").replace("_", " ").title()
+    locator = f"https://doi.org/{paper.doi}" if paper.doi else (paper.url or "")
+
+    if style_key in {"IEEE", "VANCOUVER"}:
+        # Numbered style: "[n] F. Surname, F. Surname, "Title," Venue, Year."
+        names = []
+        for a in authors[:6]:
+            surname, rest = _split_author_name(a)
+            initials = "".join(f"{n[0]}." for n in rest.split()) if rest else ""
+            names.append(f"{initials} {surname}".strip())
+        author_str = ", ".join(names) if names else "Unknown Author"
+        if len(authors) > 6:
+            author_str += ", et al."
+        entry = f'[{index}] {author_str}, "{title}," {venue}, {year}.'
+        if locator:
+            entry += f" {locator}"
+        return entry
+
+    if style_key == "MLA":
+        # "Surname, First, et al. "Title." Venue, Year."
+        if authors:
+            surname, rest = _split_author_name(authors[0])
+            first_fmt = f"{surname}, {rest}" if rest else surname
+            author_str = f"{first_fmt}, et al" if len(authors) > 1 else first_fmt
+        else:
+            author_str = "Unknown Author"
+        entry = f'{author_str}. "{title}." {venue}, {year}.'
+        if locator:
+            entry += f" {locator}."
+        return entry
+
+    if style_key == "CHICAGO":
+        # Author-date: "Surname, First, and Surname, First. Year. "Title." Venue."
+        if authors:
+            surname, rest = _split_author_name(authors[0])
+            first_fmt = f"{surname}, {rest}" if rest else surname
+            if len(authors) > 1:
+                author_str = f"{first_fmt}, et al" if len(authors) > 2 else f"{first_fmt}, and {authors[1]}"
+            else:
+                author_str = first_fmt
+        else:
+            author_str = "Unknown Author"
+        entry = f'{author_str}. {year}. "{title}." {venue}.'
+        if locator:
+            entry += f" {locator}."
+        return entry
+
+    if style_key == "HARVARD":
+        # Close to APA, but "and" before the final author rather than "&".
+        names = []
+        for a in authors[:6]:
+            surname, rest = _split_author_name(a)
+            if rest:
+                initials = "".join(f"{n[0]}." for n in rest.split())
+                names.append(f"{surname}, {initials}")
+            else:
+                names.append(surname)
+        if not names:
+            author_str = "Unknown Author"
+        elif len(authors) > 6:
+            author_str = ", ".join(names) + ", et al."
+        elif len(names) > 1:
+            author_str = ", ".join(names[:-1]) + " and " + names[-1]
+        else:
+            author_str = names[0]
+        entry = f"{author_str}, {year}. {title}. {venue}."
+        if locator:
+            entry += f" Available at: {locator}."
+        return entry
+
+    # Default: APA
+    author_str = _authors_apa_style(authors)
+    entry = f"{author_str} ({year}). {title}. {venue}."
+    if locator:
+        entry += f" {locator}"
+    return entry
 
 
 def _title_similarity(a: str, b: str) -> float:

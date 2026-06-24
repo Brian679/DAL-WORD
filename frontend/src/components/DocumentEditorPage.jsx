@@ -74,7 +74,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx, API_ORIGIN } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -456,15 +456,18 @@ function renderFigureBlock(blk, key) {
   return (
     <figure key={key} className="doc-figure">
       <img
-        src={`http://127.0.0.1:8000${blk.src}`}
+        src={`${API_ORIGIN}${blk.src}`}
         alt={blk.caption || 'Generated image'}
         className="doc-figure-img"
         onError={(e) => {
           e.currentTarget.style.display = 'none';
           const fb = e.currentTarget.nextSibling;
-          if (fb) fb.textContent = 'Image generation failed';
+          if (fb) fb.style.display = 'block';
         }}
       />
+      <div className="doc-figure-error" style={{ display: 'none' }}>
+        Image failed to load{blk.caption ? ` — ${blk.caption}` : ''}
+      </div>
       {blk.caption && (
         <figcaption className="doc-figure-caption">{blk.caption}</figcaption>
       )}
@@ -489,13 +492,16 @@ function _escapeHtml(text) {
 function blockFigureHtmlString(block) {
   if (!block) return '';
   if (block.type === 'table') return tableBlockHtmlString(block);
-  const src = block.src ? `http://127.0.0.1:8000${block.src}` : '';
+  const src = block.src ? `${API_ORIGIN}${block.src}` : '';
   const caption = _escapeHtml(block.caption || '');
   const blockId = _escapeHtml(block.block_id || '');
   const blockType = _escapeHtml(block.type || 'image');
+  const errorText = `Image failed to load${caption ? ` — ${caption}` : ''}`;
   return (
     `<figure class="doc-figure" data-block-id="${blockId}" data-block-type="${blockType}" contenteditable="false">` +
-    `<img src="${src}" alt="${caption || 'Generated image'}" class="doc-figure-img" />` +
+    `<img src="${src}" alt="${caption || 'Generated image'}" class="doc-figure-img" ` +
+    `onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />` +
+    `<div class="doc-figure-error" style="display:none">${errorText}</div>` +
     (caption ? `<figcaption class="doc-figure-caption">${caption}</figcaption>` : '') +
     `</figure>`
   );

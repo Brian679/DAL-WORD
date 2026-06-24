@@ -3230,13 +3230,13 @@ def _framework_spec_from_inputs(
         return {
             "title": str(data.get("title") or default_title),
             "left_label": str(data.get("left_label") or default_left),
-            "left_items": [str(x) for x in (data.get("left_items") or [])][:4],
+            "left_items": [str(x) for x in (data.get("left_items") or [])][:6],
             "middle_label": str(data.get("middle_label") or default_middle),
-            "middle_items": [str(x) for x in (data.get("middle_items") or [])][:4],
+            "middle_items": [str(x) for x in (data.get("middle_items") or [])][:6],
             "right_label": str(data.get("right_label") or default_right),
-            "right_items": [str(x) for x in (data.get("right_items") or [])][:4],
+            "right_items": [str(x) for x in (data.get("right_items") or [])][:6],
             "control_label": str(data.get("control_label") or default_control),
-            "control_items": [str(x) for x in (data.get("control_items") or [])][:4],
+            "control_items": [str(x) for x in (data.get("control_items") or [])][:6],
             "notes": str(data.get("notes") or "")[0:180],
         }
     except Exception as exc:
@@ -3767,41 +3767,50 @@ def _retrieve_citation_pool(topic: str, document_id: int | None) -> list[Any]:
         return []
 
 
-def _apa_reference_entry(paper: Any) -> str:
-    authors = list(getattr(paper, "authors", None) or [])
-    if authors:
-        names: list[str] = []
-        for a in authors[:6]:
-            parts = a.split()
-            if len(parts) >= 2:
-                initials = "".join(f"{n[0]}." for n in parts[:-1])
-                names.append(f"{parts[-1]}, {initials}")
-            else:
-                names.append(a)
-        if len(authors) > 6:
-            author_str = ", ".join(names) + ", et al."
-        elif len(names) > 1:
-            author_str = ", ".join(names[:-1]) + ", & " + names[-1]
-        else:
-            author_str = names[0]
-    else:
-        author_str = "Unknown Author"
-    year = str(paper.year) if getattr(paper, "year", None) else "n.d."
-    title = (paper.title or "Untitled").rstrip(".")
-    venue = paper.journal or (paper.source or "").replace("_", " ").title()
-    locator = f"https://doi.org/{paper.doi}" if getattr(paper, "doi", None) else (paper.url or "")
-    entry = f"{author_str} ({year}). {title}. {venue}."
-    if locator:
-        entry += f" {locator}"
-    return entry
+_CITATION_NEEDED_DOC_TYPES = {
+    "essay", "report", "article", "assignment", "proposal", "case_study", "lab_report", "review",
+}
 
 
-def _format_reference_list(pool: list[Any], max_items: int = 15) -> str | None:
-    """Build a real APA-style reference list from retrieved papers only — no LLM invention."""
+def _document_needs_citations(document: Document, message: str = "") -> bool:
+    """Decide whether edits to this document should be grounded against real sources.
+    Used to gate citation-pool retrieval/repair on the EDIT path (_run_copilot_loop),
+    where — unlike fresh document generation — there is no cached `needs_citations`
+    plan flag to read, since the document may have been created in an earlier session
+    or via a different writer (e.g. the dissertation template)."""
+    content = document.content or {}
+    doc_type = content.get("document_type")
+    if doc_type:
+        return doc_type in _CITATION_NEEDED_DOC_TYPES
+    sections = content.get("sections", []) or []
+    # No document_type recorded => most likely a dissertation/thesis (chapter-numbered
+    # headings), which always cites prior research.
+    if any(_chapter_number_from_title(s.get("title", "")) is not None for s in sections):
+        return True
+    if any(
+        "reference" in (s.get("title", "") or "").lower()
+        or "bibliograph" in (s.get("title", "") or "").lower()
+        for s in sections
+    ):
+        return True
+    lowered = (message or "").lower()
+    return any(
+        kw in lowered
+        for kw in ("citation", "citations", "cite", "cited", "reference", "references", "source", "sources", "evidence", "literature")
+    )
+
+
+def _format_reference_list(pool: list[Any], max_items: int = 15, style: str = "APA") -> str | None:
+    """Build a real reference list from retrieved papers only, in the requested
+    citation style — no LLM invention. Numbered styles (IEEE, Vancouver) keep the
+    pool's ranked order so the numbers stay meaningful; author-date styles (APA,
+    Harvard, Chicago, MLA) sort alphabetically as those styles require."""
     if not pool:
         return None
+    from .research_layer import format_reference_entry
+
     seen: set[str] = set()
-    entries: list[str] = []
+    papers: list[Any] = []
     for paper in pool:
         if not getattr(paper, "title", None):
             continue
@@ -3809,11 +3818,18 @@ def _format_reference_list(pool: list[Any], max_items: int = 15) -> str | None:
         if key in seen:
             continue
         seen.add(key)
-        entries.append(_apa_reference_entry(paper))
-        if len(entries) >= max_items:
+        papers.append(paper)
+        if len(papers) >= max_items:
             break
-    if not entries:
+    if not papers:
         return None
+
+    style_key = (style or "APA").strip().upper()
+    if style_key in {"IEEE", "VANCOUVER"}:
+        return "\n\n".join(
+            format_reference_entry(p, style=style, index=i) for i, p in enumerate(papers, start=1)
+        )
+    entries = [format_reference_entry(p, style=style) for p in papers]
     entries.sort()
     return "\n\n".join(entries)
 
@@ -3848,11 +3864,12 @@ def _execute_subsection_nodes(
     specific_design = _specific_methodology(user_instruction, topic, document)
     document_brief = _extract_document_brief(document, topic, research_design, specific_design)
     has_hypotheses = _document_has_hypotheses(document)
+    citation_style = _parse_user_guidelines(user_instruction).get("citation_style", "APA")
     if citation_pool:
         from .research_layer import build_citation_context
 
         document_brief = (
-            f"{document_brief}\n\n{build_citation_context(citation_pool, max_items=12)}\n"
+            f"{document_brief}\n\n{build_citation_context(citation_pool, max_items=12, style=citation_style)}\n"
             "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
             "the verified sources listed above. Do not invent author names, years, or studies."
         )
@@ -4134,7 +4151,7 @@ def _execute_subsection_nodes(
             lowered_title = title.lower()
             real_references = (
                 ("reference" in lowered_title or "bibliograph" in lowered_title)
-                and _format_reference_list(citation_pool)
+                and _format_reference_list(citation_pool, style=citation_style)
             )
             if real_references:
                 # ── References/Bibliography: built directly from verified papers ──
@@ -4289,6 +4306,24 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         sec_match = re.search(r"\b\d+(?:\.\d+)+\b", text)
         if sec_match:
             return sec_match.group(0)
+        # Plain section-name reference, e.g. "in the introduction section",
+        # "rewrite the methodology section". Anchor on the determiner closest
+        # to "section" (not the start of the sentence) so a leading verb/clause
+        # ("change the second paragraph in...") doesn't get swept into the name.
+        sec_word = re.search(r"\bsection\b", text)
+        if sec_word:
+            window = text[:sec_word.start()][-60:]
+            det_matches = list(
+                re.finditer(r"\b(?:the|this|that|a|an|every|each|all|any)\s+", window)
+            )
+            if det_matches:
+                candidate = window[det_matches[-1].end():]
+            else:
+                candidate = " ".join(re.findall(r"[a-z0-9'\-]+", window)[-3:])
+            candidate = re.sub(r"[^a-z0-9 '\-]", "", candidate).strip()
+            candidate = " ".join(candidate.split()[:6])
+            if candidate:
+                return candidate
         return None
 
     target = _extract_target()
@@ -8783,7 +8818,8 @@ def run_agent(
                 document_id=document.id,
             )
             research_brief = build_research_brief(research_result)
-            citation_context = build_citation_context(research_result.top_papers, max_items=12)
+            _citation_style = _parse_user_guidelines(effective_message).get("citation_style", "APA")
+            citation_context = build_citation_context(research_result.top_papers, max_items=12, style=_citation_style)
             if research_brief:
                 doc_context = f"{doc_context}\n\n{research_brief}"
             if citation_context:
@@ -9520,6 +9556,195 @@ def _personalize_plan_steps(plan: list, section_name: str) -> None:
             step["step"] = f"Generating content for '{name}'"
 
 
+# ── Paragraph-level targeting ─────────────────────────────────────────────────
+# _extract_subsection_phrase/_heading_positions only ever resolve a request down to
+# a whole section or numbered subsection. When the user points at one paragraph
+# inside that block ("fix the second paragraph", "the paragraph about funding
+# sources", a quoted sentence), editing should touch only that paragraph and leave
+# the rest of the block byte-for-byte untouched.
+_PARAGRAPH_ORDINAL_WORDS: dict[str, int] = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "1st": 1, "2nd": 2, "3rd": 3, "4th": 4, "5th": 5,
+    "6th": 6, "7th": 7, "8th": 8, "9th": 9, "10th": 10,
+}
+
+_QUOTED_SNIPPET_RE = re.compile(r'["“]([^"”]{12,300})["”]')
+
+
+def _extract_paragraph_reference(message: str) -> dict[str, Any] | None:
+    """Detect a request aimed at ONE paragraph rather than a whole section, e.g.
+    'rewrite the second paragraph', 'fix the last paragraph', a quoted sentence, or
+    a paraphrased description ('the paragraph about funding sources'). Returns None
+    for ordinary section/subsection-level requests, which is the common case."""
+    text = (message or "").lower()
+
+    if "paragraph" in text:
+        if re.search(r"\blast\s+paragraph\b", text):
+            return {"ordinal": -1}
+        num_match = re.search(r"\bparagraph\s*(?:number\s*)?#?\s*(\d+)\b", text)
+        if num_match:
+            return {"ordinal": int(num_match.group(1))}
+        for word, num in _PARAGRAPH_ORDINAL_WORDS.items():
+            if re.search(rf"\b{word}\s+paragraph\b", text):
+                return {"ordinal": num}
+
+    quoted = _QUOTED_SNIPPET_RE.search(message or "")
+    if quoted:
+        return {"snippet": quoted.group(1).strip()}
+
+    about_match = re.search(
+        r"paragraph\s+(?:about|on|regarding|discussing|that\s+(?:talks?\s+about|mentions|says))\s+(.+?)(?:[.!?]|$)",
+        text,
+    )
+    if about_match:
+        return {"snippet": about_match.group(1).strip()}
+
+    return None
+
+
+def _split_paragraphs_with_offsets(text: str) -> list[tuple[int, int, str]]:
+    """Split body text into paragraph (start, end, raw_text) spans on blank-line
+    boundaries. Spans that are blank or contain only a [[BLOCK:id]] figure/chart
+    marker are excluded from ordinal counting — 'the second paragraph' refers to the
+    second paragraph of prose, not a figure placeholder. Offsets are exact: since
+    str.split() consumes the literal '\\n\\n' separator between every pair of
+    consecutive chunks, `end + 2` always lands exactly at the next chunk's start."""
+    spans: list[tuple[int, int, str]] = []
+    pos = 0
+    for chunk in text.split("\n\n"):
+        end = pos + len(chunk)
+        stripped = chunk.strip()
+        if stripped and not re.fullmatch(r"\[\[BLOCK:[^\]]+\]\]", stripped):
+            spans.append((pos, end, chunk))
+        pos = end + 2
+    return spans
+
+
+def _locate_paragraph_range(text: str, ref: dict[str, Any]) -> tuple[int, int, str] | None:
+    """Resolve a paragraph reference (ordinal index or text snippet) to a
+    (start, end, paragraph_text) character range within `text`. Returns None when no
+    paragraph confidently matches — callers should fall back to whole-block editing
+    rather than risk editing the wrong passage."""
+    spans = _split_paragraphs_with_offsets(text)
+    if not spans:
+        return None
+
+    if "ordinal" in ref:
+        idx = ref["ordinal"]
+        if idx == -1:
+            return spans[-1]
+        if 1 <= idx <= len(spans):
+            return spans[idx - 1]
+        return None
+
+    snippet = (ref.get("snippet") or "").strip().lower()
+    if not snippet:
+        return None
+    snippet_words = set(re.findall(r"[a-z0-9]+", snippet))
+    if not snippet_words:
+        return None
+
+    best_span: tuple[int, int, str] | None = None
+    best_score = 0.0
+    for start, end, chunk in spans:
+        chunk_lower = chunk.lower()
+        if snippet in chunk_lower:
+            return start, end, chunk
+        chunk_words = set(re.findall(r"[a-z0-9]+", chunk_lower))
+        if not chunk_words:
+            continue
+        overlap = len(snippet_words & chunk_words) / len(snippet_words)
+        if overlap > best_score:
+            best_score = overlap
+            best_span = (start, end, chunk)
+
+    return best_span if best_score >= 0.5 else None
+
+
+def _generate_targeted_edit(
+    *,
+    body_text: str,
+    target_label: str,
+    message: str,
+    topic: str,
+    paragraph_ref: dict[str, Any] | None,
+    citation_pool: list[Any],
+) -> tuple[str | None, str | None, bool]:
+    """Generate an edited version of `body_text` per the user's request, narrowing to
+    a single paragraph when `paragraph_ref` resolves to one within it. Returns
+    (new_body_text, error, paragraph_scoped): on success `new_body_text` is the FULL
+    updated block — a paragraph-level edit is already spliced back into the untouched
+    surrounding text — on failure it is None and `error` carries the exception message
+    (if any). `paragraph_scoped` reports whether the edit was narrowed to one paragraph,
+    so callers can phrase an accurate summary back to the user."""
+    paragraph_match = _locate_paragraph_range(body_text, paragraph_ref) if paragraph_ref else None
+
+    if paragraph_match:
+        start, end, excerpt = paragraph_match
+        scope_note = (
+            "Apply the user's request to ONLY the single paragraph shown below as "
+            "'Current content'. Do not summarize, shorten, or comment on the rest of "
+            "the section — it is not shown to you because it must not change."
+        )
+        current_text = excerpt.strip()
+        min_len = 15
+    else:
+        scope_note = (
+            "Apply the user's request to this section. Preserve all information the "
+            "user did not explicitly ask to change."
+        )
+        current_text = body_text
+        min_len = 50
+
+    citation_brief = ""
+    if citation_pool:
+        from .research_layer import build_citation_context
+
+        citation_style = _parse_user_guidelines(message).get("citation_style", "APA")
+        citation_brief = (
+            f"\n\n{build_citation_context(citation_pool, max_items=12, style=citation_style)}\n"
+            "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite "
+            "ONLY the verified sources listed above. Do not invent author names, years, or studies."
+        )
+
+    edit_prompt = (
+        "SYSTEM INSTRUCTION:\n"
+        "You are a focused, precise document editing agent.\n"
+        f"{scope_note}\n"
+        "Maintain academic tone and do not lose any important information that was not "
+        "meant to change.\n\n"
+        f"User request: {message}\n\n"
+        f"Document topic: {topic}\n\n"
+        f"{target_label}\n\n"
+        f"Current content:\n{current_text}\n"
+        f"{citation_brief}\n\n"
+        "Do NOT include any section/subsection heading in your output. "
+        "Return ONLY the rewritten text, with no commentary."
+    )
+
+    try:
+        new_text = generate_text(edit_prompt).strip()
+    except Exception as exc:
+        return None, str(exc), bool(paragraph_match)
+
+    if not new_text or len(new_text) <= min_len:
+        return None, None, bool(paragraph_match)
+
+    if citation_pool:
+        try:
+            from .research_layer import repair_citations
+
+            new_text = repair_citations(new_text, citation_pool, min_confidence=60).repaired_text
+        except Exception as exc:
+            logger.warning("_generate_targeted_edit: citation repair failed: %s", exc)
+
+    if paragraph_match:
+        start, end, _ = paragraph_match
+        return body_text[:start] + new_text + body_text[end:], None, True
+    return new_text, None, False
+
+
 def _run_copilot_loop(
     document: Document,
     message: str,
@@ -9553,6 +9778,26 @@ def _run_copilot_loop(
     if len(plan) > 1:
         plan[1]["status"] = "done"
 
+    # ── Paragraph-level reference (e.g. "the second paragraph", a quoted line) ──
+    # Resolved once up front so every edit path below narrows to it when present.
+    paragraph_ref = _extract_paragraph_reference(message)
+
+    # ── Citation grounding pool — mandatory whenever this document needs citations ──
+    # Retrieved once up front (same pattern as fresh-document generation) so every
+    # edit path below can ground claims and repair hallucinated citations, a gap
+    # that previously meant edits to existing documents were never checked.
+    do_citations = _document_needs_citations(document, message)
+    citation_pool: list[Any] = _retrieve_citation_pool(topic, document.id) if do_citations else []
+    citation_suffix = ""
+    if do_citations:
+        citation_suffix = (
+            f" Citations were checked against {len(citation_pool)} verified source(s) retrieved "
+            "from Crossref, arXiv, PubMed, and Semantic Scholar; unverifiable ones were flagged or replaced."
+            if citation_pool else
+            " No verified external sources could be retrieved right now (e.g. no network access) — "
+            "any citations in this edit should be checked manually."
+        )
+
     relevant_indices: list[int] = []
     _found_subsec = False
 
@@ -9572,36 +9817,41 @@ def _run_copilot_loop(
             if _chapter_number_from_title(_sec.get("title", "")) == _ch_num:
                 _found_chapter = True
                 _block = _extract_subsection_block_if_present(_sec.get("content", ""), target)
+                _edit_err = None
                 if _block:
                     _heading, _body = _block
-                    _edit_prompt = (
-                        f"User request: {message}\n\n"
-                        f"Document topic: {topic}\n\n"
-                        f"Subsection: {_heading}\n\n"
-                        f"Current content:\n{_body}\n\n"
-                        "Improve ONLY this subsection based on the user request. Maintain academic "
-                        "tone and do not lose any important information that was not meant to change. "
-                        "Do NOT include the subsection heading in your output. "
-                        "Return ONLY the improved body text."
-                    )
                     for _pi in range(2, len(plan)):
                         plan[_pi]["status"] = "done"
-                    try:
-                        _new_body = generate_text(_edit_prompt).strip()
-                        if _new_body and len(_new_body) > 50:
-                            _new_block = f"{_heading}\n{_new_body}"
-                            _new_ch_content = _replace_subsection_if_present(
-                                _sec.get("content", ""), target, _new_block
-                            )
-                            if _new_ch_content is not None:
-                                _all_secs[_si]["content"] = _new_ch_content
-                                document.content["sections"] = _all_secs
-                                _save(document, f"copilot:subsection:{target}")
-                                _all_done(plan)
-                                return f"Improved subsection {target}.", True
-                    except Exception as _sub_exc:
-                        logger.warning("Subsection edit failed for %s: %s", target, _sub_exc)
+                    _new_body, _edit_err, _para_scoped = _generate_targeted_edit(
+                        body_text=_body,
+                        target_label=f"Subsection: {_heading}",
+                        message=message,
+                        topic=topic,
+                        paragraph_ref=paragraph_ref,
+                        citation_pool=citation_pool,
+                    )
+                    if _new_body:
+                        _new_block = f"{_heading}\n{_new_body}"
+                        _new_ch_content = _replace_subsection_if_present(
+                            _sec.get("content", ""), target, _new_block
+                        )
+                        if _new_ch_content is not None:
+                            _all_secs[_si]["content"] = _new_ch_content
+                            document.content["sections"] = _all_secs
+                            _save(document, f"copilot:subsection:{target}")
+                            _all_done(plan)
+                            _scope = "the requested paragraph in" if _para_scoped else "subsection"
+                            return f"Improved {_scope} {target}.{citation_suffix}", True
+                    elif _edit_err:
+                        logger.warning("Subsection edit failed for %s: %s", target, _edit_err)
                 _all_done(plan)
+                if _edit_err:
+                    return (
+                        f"I found subsection {target} but could not generate the edit — the AI "
+                        f"service is currently unavailable ({_edit_err}). Please set GROK_API_KEY "
+                        "or GEMINI_API_KEY to enable AI editing.",
+                        False,
+                    )
                 return (
                     f"Could not locate subsection {target} within Chapter {_ch_num}. "
                     "Please verify the section number and try again.",
@@ -9627,6 +9877,7 @@ def _run_copilot_loop(
     if not relevant_indices and target and not _subsec_match:
         _target_lower = target.strip().lower()
         _all_secs = (document.content or {}).get("sections", [])
+        _found_subsec_err: str | None = None
         for _si, _sec in enumerate(_all_secs):
             _ch_content = _sec.get("content", "")
             if not _ch_content:
@@ -9659,42 +9910,46 @@ def _run_copilot_loop(
                         _block = (_stripped, _body_raw.strip())
                     if _block:
                         _heading_txt, _body_txt = _block
-                        _edit_prompt = (
-                            f"User request: {message}\n\n"
-                            f"Document topic: {topic}\n\n"
-                            f"Subsection heading: {_heading_txt}\n\n"
-                            f"Current content:\n{_body_txt}\n\n"
-                            "Improve ONLY this subsection according to the user request. "
-                            "Maintain academic tone. Do NOT touch any other section. "
-                            "Do NOT include the subsection heading in your output. "
-                            "Return ONLY the improved body text."
-                        )
                         for _pi in range(2, len(plan)):
                             plan[_pi]["status"] = "done"
-                        try:
-                            _new_body = generate_text(_edit_prompt).strip()
-                            if _new_body and len(_new_body) > 50:
-                                # Splice improved body back into the chapter
-                                if _subsec_id:
-                                    _new_block_txt = f"{_heading_txt}\n{_new_body}"
-                                    _new_ch = _replace_subsection_if_present(_ch_content, _subsec_id, _new_block_txt)
-                                else:
-                                    _new_ch = _ch_content.replace(
-                                        f"{_stripped}\n{_body_txt}",
-                                        f"{_stripped}\n{_new_body}",
-                                        1,
-                                    )
-                                if _new_ch:
-                                    _all_secs[_si]["content"] = _new_ch
-                                    document.content["sections"] = _all_secs
-                                    _save(document, f"copilot:subsec-name:{target[:40]}")
-                                    _all_done(plan)
-                                    return f"Enhanced '{_heading_txt}' in {_sec.get('title', 'the chapter')}.", True
-                        except Exception as _exc:
-                            logger.warning("Subsection-by-name edit failed for '%s': %s", target, _exc)
-                            # Primary LLM unavailable — try static academic fallback
+                        _new_body, _edit_err, _para_scoped = _generate_targeted_edit(
+                            body_text=_body_txt,
+                            target_label=f"Subsection heading: {_heading_txt}",
+                            message=message,
+                            topic=topic,
+                            paragraph_ref=paragraph_ref,
+                            citation_pool=citation_pool,
+                        )
+                        if _edit_err:
+                            logger.warning("Subsection-by-name edit failed for '%s': %s", target, _edit_err)
+                        if _new_body:
+                            # Splice improved body back into the chapter
+                            if _subsec_id:
+                                _new_block_txt = f"{_heading_txt}\n{_new_body}"
+                                _new_ch = _replace_subsection_if_present(_ch_content, _subsec_id, _new_block_txt)
+                            else:
+                                _new_ch = _ch_content.replace(
+                                    f"{_stripped}\n{_body_txt}",
+                                    f"{_stripped}\n{_new_body}",
+                                    1,
+                                )
+                            if _new_ch:
+                                _all_secs[_si]["content"] = _new_ch
+                                document.content["sections"] = _all_secs
+                                _save(document, f"copilot:subsec-name:{target[:40]}")
+                                _all_done(plan)
+                                _scope = "the requested paragraph in " if _para_scoped else ""
+                                return (
+                                    f"Enhanced {_scope}'{_heading_txt}' in "
+                                    f"{_sec.get('title', 'the chapter')}.{citation_suffix}",
+                                    True,
+                                )
+                        elif not paragraph_ref:
+                            # Whole-subsection edit failed (e.g. no API key) — fall back to a
+                            # deterministic academic template. Skipped for paragraph-scoped
+                            # requests: regenerating the whole subsection would silently
+                            # overwrite paragraphs the user never asked to change.
                             try:
-                                # Strip numeric prefix so specific section patterns match
                                 _subsec_name_clean = re.sub(r"^\d+(?:\.\d+)*\s*", "", _heading_txt).strip()
                                 _static_body = _fallback_subsection_text(
                                     topic or "", _sec.get("title", ""), _subsec_name_clean or _heading_txt,
@@ -9726,12 +9981,20 @@ def _run_copilot_loop(
                             except Exception:
                                 pass
                         _found_subsec = True
+                        _found_subsec_err = _edit_err
                         break
             if _found_subsec:
                 break
     # Subsection was located by name but all edit attempts failed (e.g. no API key).
     if _found_subsec:
         _all_done(plan)
+        if paragraph_ref and _found_subsec_err:
+            return (
+                f"I found '{target}' and the requested paragraph, but could not generate the "
+                f"edit — the AI service is currently unavailable ({_found_subsec_err}). Please set "
+                "GROK_API_KEY or GEMINI_API_KEY to enable AI editing.",
+                False,
+            )
         return (
             f"I found '{target}' in the document but could not enhance it — "
             "the AI service is currently unavailable (API key not configured). "
@@ -9766,7 +10029,7 @@ def _run_copilot_loop(
         return "I could not find the specified section in the document to modify. Could you clarify which section you mean?", False
 
     # Steps 2+: read → edit for each relevant section
-    edit_summaries: list[str] = []
+    edit_summaries: list[tuple[str, bool]] = []
     generation_error: str | None = None
     plan_cursor = 2
 
@@ -9787,31 +10050,20 @@ def _run_copilot_loop(
             plan[plan_cursor]["status"] = "done"
         plan_cursor += 1
 
-        edit_prompt = (
-            "SYSTEM INSTRUCTION:\n"
-            "You are a focused, precise document editing agent.\n"
-            "You must:\n"
-            "1. Understand exactly what the user asked and apply ONLY that change.\n"
-            "2. Do NOT rewrite, expand, or modify any part of the document that the user did not ask about.\n\n"
-            "Editing Behavior:\n"
-            "- Apply the user's specific request (improvement, fix, expansion, etc.) to this section only.\n"
-            "- Preserve all information that the user did not explicitly ask to change.\n"
-            "- Maintain academic tone.\n\n"
-            f"User request: {message}\n\n"
-            f"Document topic: {topic}\n\n"
-            f"Section: {sec_title}\n\n"
-            f"Current content:\n{current_content}\n\n"
-            "Write the updated version of this section. Do NOT include the section heading in the output. "
-            "Return ONLY the updated content."
+        new_content, edit_err, para_scoped = _generate_targeted_edit(
+            body_text=current_content,
+            target_label=f"Section: {sec_title}",
+            message=message,
+            topic=topic,
+            paragraph_ref=paragraph_ref,
+            citation_pool=citation_pool,
         )
-        try:
-            new_content = generate_text(edit_prompt).strip()
-            if new_content and len(new_content) > 50:
-                doc_edit_section(document, sec_title, new_content)
-                edit_summaries.append(sec_title)
-        except Exception as exc:
-            logger.warning("Copilot edit failed for section '%s': %s", sec_title, exc)
-            generation_error = str(exc)
+        if new_content:
+            doc_edit_section(document, sec_title, new_content)
+            edit_summaries.append((sec_title, para_scoped))
+        elif edit_err:
+            logger.warning("Copilot edit failed for section '%s': %s", sec_title, edit_err)
+            generation_error = edit_err
 
     updated = bool(edit_summaries)
     if updated:
@@ -9820,7 +10072,11 @@ def _run_copilot_loop(
     _all_done(plan)
 
     if edit_summaries:
-        reply = f"Updated {len(edit_summaries)} section(s): {', '.join(edit_summaries)}."
+        if len(edit_summaries) == 1 and edit_summaries[0][1]:
+            reply = f"Updated the requested paragraph in '{edit_summaries[0][0]}'.{citation_suffix}"
+        else:
+            names = ", ".join(title for title, _ in edit_summaries)
+            reply = f"Updated {len(edit_summaries)} section(s): {names}.{citation_suffix}"
     elif generation_error:
         reply = (
             f"I found the section but could not generate the edit — the AI service is "
@@ -10288,6 +10544,7 @@ def _rewrite_chapter_batch(
             table_counter=table_counter,
             on_node_completed=_persist_subsection_progress,
             default_word_count=chapter["word_count"],
+            user_instruction=instruction or "",
             citation_pool=citation_pool,
         )
 
@@ -10751,63 +11008,87 @@ def _plan_and_write_document(
         section_guide = _subsection_guidelines(title, topic)
         context_so_far = _full_context_for_generation(document)
 
-        citation_brief = ""
-        if do_citations and citation_pool:
-            from .research_layer import build_citation_context
+        lowered_title = title.lower()
+        real_references = (
+            do_citations
+            and ("reference" in lowered_title or "bibliograph" in lowered_title)
+            and _format_reference_list(citation_pool, style=user_guidelines["citation_style"])
+        )
 
-            citation_brief = (
-                f"\n\n{build_citation_context(citation_pool, max_items=12)}\n"
-                "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
-                "the verified sources listed above. Do not invent author names, years, or studies."
+        if real_references:
+            # ── References/Bibliography: built directly from verified papers ──
+            # retrieved from Crossref/arXiv/PubMed/Semantic Scholar — never asked
+            # of the LLM, so there is nothing here for it to hallucinate, and
+            # nothing for a review pass to usefully "tighten" either.
+            _broadcast_activity(f"Writing {title}")
+            text = (
+                "The following references were retrieved from open scholarly databases "
+                "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
+                "to this study topic:\n\n" + real_references
             )
-
-        _broadcast_activity(f"Writing {title}")
-        try:
-            text = generate_section_content(
-                title=title,
-                topic=topic,
-                context=(
-                    f"{section_guide}\n\n"
-                    f"Document type: {doc_type}\n"
-                    f"Full user request: {instruction[:600]}\n"
-                    f"Research design: {design}\n"
-                    f"Writing note for this section: {notes}\n"
-                    f"GUIDELINES TO FOLLOW: {_style_note}"
-                    f"{citation_brief}\n\n"
-                    f"Document written so far:\n{context_so_far[-3500:]}"
-                ),
-                word_count=wc,
-            )
-            if _looks_like_meta_commentary(text):
-                raise ValueError("Generated body reads like document meta-commentary, not section prose.")
-        except Exception:
-            text = _fallback_subsection_text(
-                topic, doc_type.capitalize(), title,
-                objectives=(document.content or {}).get("research_objectives"),
-                target_words=wc,
-                research_design=design,
-                sample_size=_infer_sample_size(document),
-            )
-
-        if do_citations and citation_pool:
-            try:
-                from .research_layer import repair_citations
-
-                text = repair_citations(text, citation_pool, min_confidence=60).repaired_text
-            except Exception as exc:
-                logger.warning("_plan_and_write_document: citation repair failed for '%s': %s", title, exc)
-
-        _done(plan, plan_cursor)
-        plan_cursor += 1
-
-        if do_review:
-            _broadcast_activity(f"Reviewing {title}")
-            text, section_review_notes = _review_and_revise_chapter(
-                title, text, [], topic, design, [],
-            )
-            review_notes.extend(section_review_notes)
             _done(plan, plan_cursor)
             plan_cursor += 1
+            if do_review:
+                _done(plan, plan_cursor)
+                plan_cursor += 1
+        else:
+            citation_brief = ""
+            if do_citations and citation_pool:
+                from .research_layer import build_citation_context
+
+                citation_brief = (
+                    f"\n\n{build_citation_context(citation_pool, max_items=12, style=user_guidelines['citation_style'])}\n"
+                    "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
+                    "the verified sources listed above. Do not invent author names, years, or studies."
+                )
+
+            _broadcast_activity(f"Writing {title}")
+            try:
+                text = generate_section_content(
+                    title=title,
+                    topic=topic,
+                    context=(
+                        f"{section_guide}\n\n"
+                        f"Document type: {doc_type}\n"
+                        f"Full user request: {instruction[:600]}\n"
+                        f"Research design: {design}\n"
+                        f"Writing note for this section: {notes}\n"
+                        f"GUIDELINES TO FOLLOW: {_style_note}"
+                        f"{citation_brief}\n\n"
+                        f"Document written so far:\n{context_so_far[-3500:]}"
+                    ),
+                    word_count=wc,
+                )
+                if _looks_like_meta_commentary(text):
+                    raise ValueError("Generated body reads like document meta-commentary, not section prose.")
+            except Exception:
+                text = _fallback_subsection_text(
+                    topic, doc_type.capitalize(), title,
+                    objectives=(document.content or {}).get("research_objectives"),
+                    target_words=wc,
+                    research_design=design,
+                    sample_size=_infer_sample_size(document),
+                )
+
+            if do_citations and citation_pool:
+                try:
+                    from .research_layer import repair_citations
+
+                    text = repair_citations(text, citation_pool, min_confidence=60).repaired_text
+                except Exception as exc:
+                    logger.warning("_plan_and_write_document: citation repair failed for '%s': %s", title, exc)
+
+            _done(plan, plan_cursor)
+            plan_cursor += 1
+
+            if do_review:
+                _broadcast_activity(f"Reviewing {title}")
+                text, section_review_notes = _review_and_revise_chapter(
+                    title, text, [], topic, design, [],
+                )
+                review_notes.extend(section_review_notes)
+                _done(plan, plan_cursor)
+                plan_cursor += 1
 
         sections.append({"title": title, "content": text})
         document.content = _content_snapshot()
