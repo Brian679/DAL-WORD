@@ -1,7 +1,11 @@
+import re
+
+from django.http import FileResponse
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from .docx_export import build_docx
 from .models import Document, DocumentVersion
 from .serializers import DocumentSerializer
 
@@ -36,3 +40,22 @@ class DocumentViewSet(viewsets.ModelViewSet):
         note = request.data.get("note", "snapshot")
         version = DocumentVersion.objects.create(document=document, content=document.content, note=note)
         return Response({"version_id": version.id, "note": version.note})
+
+    @action(detail=True, methods=["get"])
+    def export(self, request, pk=None):
+        # Param is deliberately NOT named "format" — DRF's content negotiation
+        # reserves that query param for its own renderer-suffix matching and
+        # raises Http404 before this method body ever runs if a registered
+        # renderer doesn't exist for the given value (there's no "docx" renderer).
+        document = self.get_object()
+        fmt = (request.query_params.get("as_format") or "docx").lower()
+        if fmt != "docx":
+            return Response({"error": f"unsupported export format: {fmt}"}, status=400)
+        buffer = build_docx(document)
+        safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", document.title or "document").strip() or "document"
+        return FileResponse(
+            buffer,
+            as_attachment=True,
+            filename=f"{safe_title}.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )

@@ -169,6 +169,18 @@ export async function getDocument(id) {
     return res.json();
 }
 
+// Downloads the document as a real .docx file (server-rendered with python-docx
+// so headings/lists/tables/images match what's shown in the editor).
+export async function exportDocumentDocx(id) {
+    const res = await apiFetch(`${API_BASE}/documents/${id}/export/?as_format=docx`);
+    if (!res.ok) throw new Error(await readApiError(res, 'Failed to export document'));
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : 'document.docx';
+    return { blob, filename };
+}
+
 export async function extractFileText(file) {
     const formData = new FormData();
     formData.append('file', file);

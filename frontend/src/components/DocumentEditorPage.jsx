@@ -57,6 +57,7 @@ import {
   FileSearch,
   Printer,
   Download,
+  Save,
   Upload,
   LayoutTemplate,
   PanelLeft,
@@ -73,7 +74,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -1602,6 +1603,27 @@ export default function DocumentEditorPage({
     await persistSectionsNow(target);
   }, [draftSections, onManualSave, onDocumentChanged]);
 
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const downloadDocx = useCallback(async () => {
+    const docId = currentDocument?.id;
+    if (!docId) return;
+    setIsDownloading(true);
+    try {
+      await persistSectionsNow(draftSections);
+      const { blob, filename } = await exportDocumentDocx(docId);
+      const a = window.document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      window.alert(err?.message || 'Failed to download document');
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [currentDocument?.id, draftSections]);
+
   function chatNameFromMessage(text) {
     const trimmed = text.trim();
     if (!trimmed) return 'New Chat';
@@ -2553,7 +2575,8 @@ export default function DocumentEditorPage({
               <div className="doc-quick-access">
                 <button className={`doc-qa-btn${ribbonCollapsed ? ' doc-tool-btn--active' : ''}`} title="Collapse Ribbon" onClick={() => setRibbonCollapsed((v) => !v)}><Menu size={15} /></button>
                 <button className="doc-qa-file" onClick={onBackHome} title="Back to Home">File</button>
-                <button className="doc-qa-btn" title="Save (Ctrl+S)" onClick={() => triggerSave()}><Download size={14} /></button>
+                <button className="doc-qa-btn" title="Save (Ctrl+S)" onClick={() => triggerSave()}><Save size={14} /></button>
+                <button className="doc-qa-btn" title="Download as Word (.docx)" disabled={isDownloading} onClick={downloadDocx}><Download size={14} /></button>
                 <button className="doc-qa-btn" title="Print (Ctrl+P)" onClick={() => window.print()}><Printer size={14} /></button>
                 <button className="doc-qa-btn" title="Undo (Ctrl+Z)" onClick={() => { richEditorRef.current?.focus(); document.execCommand('undo'); }}><RotateCcw size={14} /></button>
                 <div className="doc-improve-menu-wrap" ref={qaMoreBtnRef}>
@@ -3490,6 +3513,7 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Download document as Word (.docx)" disabled={isDownloading} onClick={downloadDocx}><Download size={13}/><span>Export DOCX</span></button>
                       <button className="doc-tool-btn doc-tool-btn--labeled" title="Download document as text" onClick={() => {
                         const text = richEditorRef.current?.textContent || '';
                         const blob = new Blob([text], { type: 'text/plain' });

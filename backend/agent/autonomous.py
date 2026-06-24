@@ -7640,10 +7640,10 @@ def _chapter_default_word_count(chapter_number: int | None) -> int:
 
 def _requested_page_target(instruction: str) -> int | None:
     text = (instruction or "").lower()
-    ranged = re.search(r"(\d+)\s*(?:-|to)\s*(\d+)\s*pages?", text)
+    ranged = re.search(r"(\d+)\s*(?:-|to)\s*(\d+)[\s-]*pages?", text)
     if ranged:
         return max(int(ranged.group(1)), int(ranged.group(2)))
-    single = re.search(r"(\d+)\s*pages?", text)
+    single = re.search(r"(\d+)[\s-]*pages?", text)
     if single:
         return int(single.group(1))
     return None
@@ -7652,13 +7652,13 @@ def _requested_page_target(instruction: str) -> int | None:
 def _requested_word_target(instruction: str) -> int | None:
     """Parse an explicit word count from the user's instruction."""
     text = (instruction or "").lower()
-    # "15000 words", "15,000 words", "15k words"
-    m = re.search(r"(\d[\d,]*)\s*k?\s*words?\b", text)
+    # "15000 words", "15,000 words", "15k words", "2000-word" (hyphenated adjective form)
+    m = re.search(r"(\d[\d,]*)[\s-]*k?[\s-]*words?\b", text)
     if m:
         raw = m.group(1).replace(",", "")
         val = int(raw)
         # detect "15k words" — if the original had a "k" before "word"
-        if re.search(r"\d+\s*k\s*words?\b", text):
+        if re.search(r"\d+[\s-]*k[\s-]*words?\b", text):
             val *= 1000
         return val
     # "15k" standalone — in a writing request context, treat as 15,000 words
