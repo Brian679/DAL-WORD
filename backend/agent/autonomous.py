@@ -10328,6 +10328,7 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
         '  "document_type": "essay|report|article|assignment|proposal|case_study|lab_report|review|presentation|plan|brief|other",\n'
         '  "estimated_words": 2500,\n'
         '  "needs_todo": true,\n'
+        '  "needs_citations": true,\n'
         '  "sections": [\n'
         '    {"title": "Specific section title", "word_count": 350, "notes": "one-sentence writing guide"},\n'
         "    ...\n"
@@ -10344,6 +10345,9 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
         "- If the user says 'X pages', convert: 1 page ≈ 500 words. "
         "If they say 'X words', use that directly.\n"
         "- needs_todo = true when estimated_words > 1500 OR the user explicitly asks for something substantial.\n"
+        "- needs_citations = true when document_type is essay, report, article, assignment, proposal, "
+        "case_study, lab_report, or review, or the request mentions sources/citations/evidence/references/"
+        "literature; false for presentation, spreadsheet, or purely creative/personal pieces.\n"
         "- Short items (Abstract, References, Dedication) → word_count 120-200. "
         "Core body sections → 300-600 words each.\n"
         "- Do NOT include a to-do list in the sections themselves.\n"
@@ -10374,6 +10378,7 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
                         "document_type": str(parsed.get("document_type") or "document"),
                         "estimated_words": int(parsed.get("estimated_words") or sum(s["word_count"] for s in sections)),
                         "needs_todo": bool(parsed.get("needs_todo", True)),
+                        "needs_citations": bool(parsed.get("needs_citations", True)),
                         "sections": sections,
                     }
     except Exception as exc:
@@ -10392,6 +10397,7 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
             "document_type": "document",
             "estimated_words": 1500,
             "needs_todo": False,
+            "needs_citations": False,
             "sections": [
                 {"title": "Introduction", "word_count": 280, "notes": f"Introduce {t} and state the aims"},
                 {"title": "Background", "word_count": 340, "notes": f"Contextualise {t} with relevant evidence"},
@@ -10423,20 +10429,34 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
         "document_type": "document",
         "estimated_words": explicit_words,
         "needs_todo": explicit_words > 1500,
+        "needs_citations": True,
         "sections": sections,
     }
 
 
 def writing_plan_to_flat_steps(writing_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Convert an `_llm_writing_plan` result into the flat todo-list format the
-    frontend renders (mirrors `llm_chapters_to_flat_steps` for dissertations)."""
+    frontend renders (mirrors `llm_chapters_to_flat_steps` for dissertations).
+
+    Mirrors the do_citations/do_review gating in `_plan_and_write_document` so the
+    preview shown before writing starts has the same shape as the live run."""
+    needs_todo = writing_plan.get("needs_todo", True)
+    do_citations = bool(needs_todo and writing_plan.get("needs_citations", True))
+    do_review = bool(needs_todo)
+
     steps: list[dict[str, Any]] = [{"step": "Planning your document", "status": "done"}]
-    first = True
+    if do_citations:
+        steps.append({"step": "Researching sources", "status": "in_progress"})
+
+    first = not do_citations
     for section in writing_plan.get("sections", []):
+        title = section.get("title", "Section")
         steps.append({
-            "step": f"Writing {section.get('title', 'Section')}",
+            "step": f"Writing {title}",
             "status": "in_progress" if first else "pending",
         })
+        if do_review:
+            steps.append({"step": f"Reviewing {title}", "status": "pending"})
         first = False
     return steps
 
@@ -10454,6 +10474,13 @@ def _plan_and_write_document(
       - how many sections and what to write in each
       - whether to show a detailed to-do list (for long pieces)
     No fixed templates. No pre-defined document types.
+
+    Long pieces (needs_todo) get the same research-grounding and self-review
+    pass `_write_dissertation` already runs per chapter: real citations are
+    retrieved and repaired when the document needs them, and each section is
+    auto-reviewed and tightened, with what changed reported in the reply.
+    Short pieces are unaffected — no extra retrieval, review, or progress
+    writes happen when needs_todo is False.
     """
     plan.clear()
     plan.append({"step": "Planning your document", "status": "pending"})
@@ -10490,28 +10517,92 @@ def _plan_and_write_document(
     sections_plan = writing_plan["sections"]
     estimated_words = writing_plan["estimated_words"]
 
+    needs_citations = writing_plan.get("needs_citations")
+    if needs_citations is None:
+        # Backward compat: a plan cached by DocumentPlanView before this field
+        # existed won't have the key — fall back to a document_type heuristic.
+        needs_citations = doc_type in {
+            "essay", "report", "article", "assignment", "proposal", "case_study", "lab_report", "review",
+        }
+    do_citations = bool(needs_todo and needs_citations)
+    do_review = bool(needs_todo)
+
     logger.info(
-        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s sections=%d level=%s style=%s",
-        doc_type, estimated_words, needs_todo, len(sections_plan),
+        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s do_citations=%s sections=%d level=%s style=%s",
+        doc_type, estimated_words, needs_todo, do_citations, len(sections_plan),
         user_guidelines["academic_level"], user_guidelines["citation_style"],
     )
 
     # Build the to-do list — always show section steps so the user sees progress
+    if do_citations:
+        plan.append({"step": "Researching sources", "status": "pending"})
     for item in sections_plan:
         plan.append({"step": f"Writing {item['title']}", "status": "pending"})
+        if do_review:
+            plan.append({"step": f"Reviewing {item['title']}", "status": "pending"})
     _done(plan, 0)
 
     design = _research_design(instruction, topic, document)
     sections: list[dict[str, Any]] = []
+    review_notes: list[str] = []
 
-    # ── Step 2: Write each section the AI designed ────────────────────────────
-    for idx, item in enumerate(sections_plan, start=1):
+    # ── Research grounding (mandatory for long, citation-needing documents) ──
+    citation_pool: list[Any] = []
+    if do_citations:
+        citation_pool = _retrieve_citation_pool(topic, document.id)
+        logger.info(
+            "_plan_and_write_document: retrieved %d candidate sources for citation grounding",
+            len(citation_pool),
+        )
+
+    def _content_snapshot() -> dict[str, Any]:
+        snapshot: dict[str, Any] = {
+            "topic": topic,
+            "sections": sections,
+            "document_type": doc_type,
+            "document_title": doc_title,
+        }
+        if do_citations:
+            snapshot["_research_sources_count"] = len(citation_pool)
+        return snapshot
+
+    def _broadcast_activity(label: str) -> None:
+        if not needs_todo:
+            return
+        try:
+            content = _content_snapshot()
+            content["_current_activity"] = label
+            document.content = content
+            document.save(update_fields=["content", "updated_at"])
+        except Exception:
+            pass
+
+    plan_cursor = 1
+    if do_citations:
+        document.content = _content_snapshot()
+        _save(document, "doc-step:research")
+        _done(plan, plan_cursor)
+        plan_cursor += 1
+
+    # ── Step 2: Write (and, for long pieces, review) each section ────────────
+    for item in sections_plan:
         title = item["title"]
         wc = item["word_count"]
         notes = item.get("notes", "")
         section_guide = _subsection_guidelines(title, topic)
         context_so_far = _full_context_for_generation(document)
 
+        citation_brief = ""
+        if do_citations and citation_pool:
+            from .research_layer import build_citation_context
+
+            citation_brief = (
+                f"\n\n{build_citation_context(citation_pool, max_items=12)}\n"
+                "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
+                "the verified sources listed above. Do not invent author names, years, or studies."
+            )
+
+        _broadcast_activity(f"Writing {title}")
         try:
             text = generate_section_content(
                 title=title,
@@ -10522,7 +10613,8 @@ def _plan_and_write_document(
                     f"Full user request: {instruction[:600]}\n"
                     f"Research design: {design}\n"
                     f"Writing note for this section: {notes}\n"
-                    f"GUIDELINES TO FOLLOW: {_style_note}\n\n"
+                    f"GUIDELINES TO FOLLOW: {_style_note}"
+                    f"{citation_brief}\n\n"
                     f"Document written so far:\n{context_so_far[-3500:]}"
                 ),
                 word_count=wc,
@@ -10538,22 +10630,31 @@ def _plan_and_write_document(
                 sample_size=_infer_sample_size(document),
             )
 
-        sections.append({"title": title, "content": text})
-        document.content = {
-            "topic": topic,
-            "sections": sections,
-            "document_type": doc_type,
-            "document_title": doc_title,
-        }
-        _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
-        _done(plan, idx)
+        if do_citations and citation_pool:
+            try:
+                from .research_layer import repair_citations
 
-    document.content = {
-        "topic": topic,
-        "sections": sections,
-        "document_type": doc_type,
-        "document_title": doc_title,
-    }
+                text = repair_citations(text, citation_pool, min_confidence=60).repaired_text
+            except Exception as exc:
+                logger.warning("_plan_and_write_document: citation repair failed for '%s': %s", title, exc)
+
+        _done(plan, plan_cursor)
+        plan_cursor += 1
+
+        if do_review:
+            _broadcast_activity(f"Reviewing {title}")
+            text, section_review_notes = _review_and_revise_chapter(
+                title, text, [], topic, design, [],
+            )
+            review_notes.extend(section_review_notes)
+            _done(plan, plan_cursor)
+            plan_cursor += 1
+
+        sections.append({"title": title, "content": text})
+        document.content = _content_snapshot()
+        _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
+
+    document.content = _content_snapshot()
     document.title = doc_title
     document.save(update_fields=["content", "title", "updated_at"])
     DocumentVersion.objects.create(
@@ -10565,8 +10666,19 @@ def _plan_and_write_document(
 
     total_words = sum(len(s["content"].split()) for s in sections)
     todo_note = " A writing plan was created and each section written in sequence." if needs_todo else ""
+    citation_note = ""
+    if do_citations:
+        citation_note = (
+            f" Citations were grounded in {len(citation_pool)} real sources retrieved from Crossref, "
+            "arXiv, PubMed, and Semantic Scholar."
+            if citation_pool else
+            " No verified external sources could be retrieved (e.g. no network access) — "
+            "in-text citations should be checked manually before submission."
+        )
+    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
     reply = (
-        f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words.{todo_note}"
+        f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words."
+        f"{todo_note}{citation_note}{review_note}"
     )
     return reply, True
 
@@ -10599,7 +10711,8 @@ def _review_and_revise_chapter(
     research_design: str,
     objectives: list[str],
 ) -> tuple[str, list[str]]:
-    """Self-review pass run right after a chapter is drafted.
+    """Self-review pass run right after a chapter (or, for the generic document
+    writer, a section) is drafted.
 
     Always runs two deterministic consistency checks regardless of LLM availability:
     strip any [[BLOCK:...]] marker that doesn't correspond to a generated figure/table
@@ -10608,6 +10721,9 @@ def _review_and_revise_chapter(
     available, also asks it to critique and tighten the chapter — that rewrite is only
     accepted if it keeps the exact same set of block markers and isn't a drastic
     truncation, so a "creative" rewrite can never break the figure/table linkage.
+    Callers without figures/tables or formal objectives (e.g. a plain essay
+    section) can pass `chapter_blocks=[], objectives=[]` — both checks become
+    no-ops and the prompt's objectives section falls back to "(none specified)".
     """
     notes: list[str] = []
     known_block_ids = {b.get("block_id") for b in chapter_blocks if b.get("block_id")}

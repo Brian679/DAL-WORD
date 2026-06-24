@@ -151,7 +151,7 @@ function escapeRegExp(value = '') {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function derivePlanFromDocument(previewPlan = [], sections = []) {
+function derivePlanFromDocument(previewPlan = [], sections = [], docMeta = {}) {
   const chapterMap = new Map(
     (sections || []).map((section) => [String(section?.title || '').toLowerCase(), String(section?.content || '')])
   );
@@ -162,8 +162,29 @@ function derivePlanFromDocument(previewPlan = [], sections = []) {
 
   for (let idx = 1; idx < normalized.length; idx += 1) {
     const stepLabel = normalizeStep(normalized[idx].step || '');
+    const researchMatch = stepLabel.match(/^researching\s+sources$/i);
+    const reviewMatch = stepLabel.match(/^reviewing\s+(.+?)(?:\s+for\s+consistency)?$/i);
     const chapterMatch = stepLabel.match(/^writing\s+(chapter\s*\d+:[^]+)$/i);
     const subsectionMatch = stepLabel.match(/^writing\s+(\d+\.\d+(?:\.\d+)?\s+.+)$/i);
+
+    if (researchMatch) {
+      const sourcesCount = docMeta?._research_sources_count;
+      if (sourcesCount !== undefined && sourcesCount !== null) {
+        normalized[idx].status = 'done';
+      }
+      continue;
+    }
+
+    if (reviewMatch) {
+      // A section/chapter's content is only persisted after its review pass
+      // completes, so the same content-length check used for "Writing" steps
+      // also proves the review step is done.
+      const reviewedContent = chapterMap.get(reviewMatch[1].toLowerCase().trim()) || '';
+      if (reviewedContent.trim().length > 24) {
+        normalized[idx].status = 'done';
+      }
+      continue;
+    }
 
     if (chapterMatch) {
       const chapterTitle = chapterMatch[1].toLowerCase();
@@ -1558,7 +1579,7 @@ export default function DocumentEditorPage({
         );
         setIsDirty(false);
 
-        const planFromDoc = derivePlanFromDocument(previewPlan, sections);
+        const planFromDoc = derivePlanFromDocument(previewPlan, sections, latestDoc?.content || {});
         const activeStep = planFromDoc.find((item) => item.status === 'in_progress');
         const stageLabel = activeStep
           ? `Generating ${normalizeStep(activeStep.step).replace(/^Writing\s+/i, '')}...`
@@ -1616,7 +1637,7 @@ export default function DocumentEditorPage({
 
     const finalPlan = (Array.isArray(result.plan) && result.plan.length)
       ? result.plan.map((item) => ({ ...item, status: 'done' }))
-      : derivePlanFromDocument(previewPlan, generatedSections).map((item) => ({ ...item, status: 'done' }));
+      : derivePlanFromDocument(previewPlan, generatedSections, result?.document?.content || {}).map((item) => ({ ...item, status: 'done' }));
     const finalWorkflow = buildWorkflowFromPlan(finalPlan, workflowStateRef.current[messageId] || null);
     finalWorkflow.updates = [`Completed: Dissertation generation finished`, ...finalWorkflow.updates].slice(0, 12);
     workflowStateRef.current[messageId] = finalWorkflow;
