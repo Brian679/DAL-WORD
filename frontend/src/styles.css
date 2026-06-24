@@ -1366,106 +1366,6 @@ ul {
     overflow: hidden;
 }
 
-.doc-ribbon-shell {
-    background: #f4f4f5;
-    border-bottom: 1px solid #d6d9df;
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
-    flex-shrink: 0;
-}
-
-.doc-ribbon-row {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 5px 12px;
-    overflow-x: auto;
-}
-
-.doc-ribbon-row--tabs {
-    border-bottom: 1px solid #e8e8ea;
-}
-
-.doc-ribbon-row--tools {
-    padding-top: 6px;
-    padding-bottom: 6px;
-}
-
-.doc-back-btn {
-    border: 1px solid #d5dae3;
-    background: #fff;
-    border-radius: 6px;
-    height: 24px;
-    padding: 0 8px;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11.5px;
-    color: var(--text-2);
-    flex-shrink: 0;
-}
-
-.doc-back-btn:hover {
-    background: #f1f3f4;
-}
-
-.doc-title-pill {
-    margin-right: 6px;
-    background: #fff;
-    border: 1px solid #d6d9df;
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 11px;
-    color: var(--text-2);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.doc-ribbon-tab {
-    font-size: 12px;
-    color: #4d5156;
-    padding: 3px 5px;
-    border-radius: 4px;
-    white-space: nowrap;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-
-.doc-ribbon-tab--active {
-    color: #1459b6;
-    font-weight: 600;
-}
-
-.doc-tool-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding-right: 10px;
-    margin-right: 4px;
-    border-right: 1px solid #e2e3e7;
-    flex-shrink: 0;
-}
-
-.doc-tool-group:last-child {
-    border-right: none;
-}
-
-.doc-tool-btn {
-    width: 24px;
-    height: 24px;
-    border: 1px solid transparent;
-    background: #ffffff;
-    border-radius: 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: #475569;
-}
-
-.doc-tool-btn:hover {
-    border-color: var(--border);
-    background: #f8fafc;
-}
-
 .doc-paper-zone {
     flex: 1;
     overflow: auto;
@@ -3145,97 +3045,29 @@ ul {
     background: #f7f7f8;
     border-bottom: 1px solid var(--border);
     box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
+    flex-shrink: 0;
 }
 
-.doc-ribbon-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    overflow-x: auto;
+.doc-ribbon-shell--collapsed .doc-ribbon-toolbar {
+    display: none;
 }
 
-.doc-ribbon-row--tabs {
-    border-bottom: 1px solid #e8e8ea;
-}
-
-.doc-ribbon-row--tools {
-    padding-top: 9px;
-    padding-bottom: 9px;
-}
-
-.doc-back-btn {
-    border: 1px solid var(--border);
-    background: #fff;
-    border-radius: 6px;
-    height: 30px;
-    padding: 0 10px;
+/* Generic native-<select> overlay trigger — an invisible <select> sits on
+   top of a normal-looking .doc-tool-btn so clicking it opens the browser's
+   native dropdown instead of needing a custom popover (used by Line Spacing). */
+.doc-select-overlay-wrap {
+    position: relative;
     display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12.5px;
-    color: var(--text-2);
 }
 
-.doc-back-btn:hover {
-    background: #f1f3f4;
-}
-
-.doc-title-pill {
-    margin-right: 6px;
-    background: #fff;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 12px;
-    font-size: 12px;
-    color: var(--text-2);
-    white-space: nowrap;
-}
-
-.doc-ribbon-tab {
-    font-size: 13px;
-    color: #4d5156;
-    padding: 4px 6px;
-    border-radius: 4px;
-    white-space: nowrap;
-}
-
-.doc-ribbon-tab--active {
-    color: #1459b6;
-    font-weight: 600;
-}
-
-.doc-tool-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding-right: 10px;
-    margin-right: 4px;
-    border-right: 1px solid #e2e3e7;
-}
-
-.doc-tool-group:last-child {
-    border-right: none;
-}
-
-.doc-tool-btn {
-    width: 30px;
-    height: 30px;
-    border: 1px solid transparent;
-    background: #ffffff;
-    border-radius: 6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: #475569;
-}
-
-.doc-tool-btn:hover {
-    border-color: var(--border);
-    background: #f8fafc;
+.doc-select-overlay-wrap select {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
 }
 /* ============================================================
-   WPS-Style Ribbon — New Classes
+   WPS-Style Ribbon
    ============================================================ */
 
 /* Tab bar row */
@@ -3246,7 +3078,7 @@ ul {
     padding: 0 10px;
     background: #f5f5f6;
     border-bottom: 1px solid #d9dde4;
-    height: 10%;
+    height: 30px;
     flex-shrink: 0;
 }
 
@@ -3433,10 +3265,10 @@ ul {
 .doc-ribbon-toolbar {
     display: flex;
     align-items: stretch;
-    padding: 6px 8px 4px;
+    padding: 5px 8px 3px;
     background: #f5f5f6;
     border-bottom: 1px solid #d9dde4;
-    min-height: 116px;
+    min-height: 84px;
     flex-shrink: 0;
     overflow-x: auto;
     overflow-y: hidden;
@@ -3492,17 +3324,17 @@ ul {
 
 /* Buttons */
 .doc-tool-btn {
-    width: 34px;
-    height: 34px;
+    width: 28px;
+    height: 28px;
     border: 1px solid transparent;
     background: transparent;
-    border-radius: 5px;
+    border-radius: 4px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     color: #374151;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
     padding: 0;
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
@@ -3514,53 +3346,36 @@ ul {
 }
 
 .doc-tool-btn--tall {
-    width: 42px;
-    height: 72px;
+    width: 44px;
+    height: 58px;
     flex-direction: column;
     gap: 2px;
-    font-size: 11px;
+    font-size: 10.5px;
 }
 
 .doc-tool-btn--wide {
-    min-width: 70px;
-    height: 32px;
-    padding: 0 8px;
-}
-
-.doc-font-select {
-    height: 34px;
-    border: 1px solid #c9cfd9;
-    border-radius: 7px;
-    background: #fff;
-    font-size: 13px;
-    color: #22252b;
-    padding: 0 8px;
-    cursor: pointer;
-}
-
-.doc-font-select--family {
-    width: 196px;
-}
-
-.doc-font-select--size {
-    width: 72px;
+    min-width: 64px;
+    height: 28px;
+    padding: 0 7px;
+    gap: 4px;
 }
 
 .doc-layout-group-page-setup {
-    padding-top: 3px;
-    min-width: 510px;
+    min-width: 178px;
 }
 
 .doc-layout-page-setup-wrap {
     display: grid;
-    grid-template-columns: 86px 1fr 84px;
+    grid-template-columns: 86px 84px;
     gap: 8px;
     align-items: start;
 }
 
 .doc-layout-icon-title {
-    height: 52px;
+    width: 86px;
+    height: 58px;
     border: 1px solid transparent;
+    background: transparent;
     border-radius: 4px;
     display: flex;
     flex-direction: column;
@@ -3569,17 +3384,36 @@ ul {
     gap: 1px;
     color: #2b579a;
     font-size: 11px;
-    cursor: default;
+    cursor: pointer;
+}
+
+.doc-layout-icon-title:hover {
+    background: #e8f0fe;
+    border-color: #c5d8f8;
+}
+
+.doc-layout-icon-title--active {
+    background: #dbe7fb;
+    border-color: #aecbf5;
 }
 
 .doc-layout-icon-title span {
     color: #2f343a;
 }
 
+.doc-margins-popover {
+    background: #fff;
+    border: 1px solid #d8dce3;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(20, 24, 33, 0.16);
+    padding: 12px 14px;
+    z-index: 1200;
+}
+
 .doc-layout-margins-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px 10px;
+    gap: 8px 14px;
 }
 
 .doc-layout-spin-row {
@@ -3595,13 +3429,13 @@ ul {
 }
 
 .doc-layout-spin-row input {
-    width: 68px;
-    height: 28px;
+    width: 56px;
+    height: 24px;
     border: 1px solid #cfd4db;
-    border-radius: 6px;
-    font-size: 22px;
-    line-height: 24px;
-    padding: 0 8px;
+    border-radius: 5px;
+    font-size: 12px;
+    line-height: 22px;
+    padding: 0 6px;
     color: #1f2937;
     background: #ffffff;
 }
@@ -3645,15 +3479,20 @@ ul {
 }
 
 .doc-layout-group-background {
+    align-items: flex-start;
+    min-width: 260px;
+}
+
+.doc-layout-background-row {
+    display: flex;
     flex-direction: row;
     align-items: flex-start;
     gap: 6px;
-    min-width: 330px;
 }
 
 .doc-layout-group-background .doc-tool-btn--tall {
-    width: 62px;
-    height: 54px;
+    width: 60px;
+    height: 58px;
     border: 1px solid transparent;
     color: #2b579a;
     gap: 1px;
@@ -3697,7 +3536,19 @@ ul {
 .doc-layout-group-sections {
     align-items: flex-start;
     justify-content: center;
-    min-width: 210px;
+    min-width: 260px;
+}
+
+.doc-layout-sections-cols {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+}
+
+.doc-layout-sections-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .doc-layout-group-settings {
@@ -3706,7 +3557,7 @@ ul {
 
 .doc-layout-group-settings .doc-tool-btn--tall {
     width: 52px;
-    height: 54px;
+    height: 58px;
     color: #2b579a;
     border: 1px solid #e0e6ee;
     background: #fff;
@@ -3717,28 +3568,29 @@ ul {
     font-size: 11px;
 }
 
-.doc-layout-text-btn--disabled,
-.doc-layout-text-btn--disabled:hover {
+.doc-layout-text-btn:disabled,
+.doc-layout-text-btn:disabled:hover {
     color: #9ca3af;
     border-color: transparent;
     background: transparent;
     cursor: not-allowed;
 }
 
-.doc-layout-text-btn--disabled svg {
+.doc-layout-text-btn:disabled svg {
     color: #9ca3af;
 }
 
-.doc-tool-btn--wide {
-    width: 52px;
-    flex-direction: row;
-    gap: 2px;
-    padding: 0 4px;
+.doc-layout-text-btn--active {
+    background: #dbe7fb;
+    border-color: #aecbf5;
+}
+
+.doc-layout-text-btn--active svg {
+    color: #1459b6;
 }
 
 .doc-tool-btn--fmt {
     width: 26px;
-    height: 24px;
 }
 
 .doc-tool-btn--active {
@@ -3761,25 +3613,26 @@ ul {
 
 .doc-tool-btn--labeled {
     width: auto;
-    padding: 0 6px;
-    gap: 3px;
+    min-width: 52px;
+    padding: 0 7px;
+    gap: 4px;
     font-size: 11px;
+    border: 1px solid transparent;
 }
 
 .doc-tool-btn--color {
     width: 26px;
-    height: 24px;
 }
 
 /* Font selects */
 .doc-font-select {
-    height: 24px;
+    height: 28px;
     border: 1px solid #d1d5db;
-    border-radius: 3px;
+    border-radius: 4px;
     background: #fff;
     font-size: 12px;
     color: #374151;
-    padding: 0 2px;
+    padding: 0 4px;
     cursor: pointer;
     outline: none;
 }
@@ -3846,6 +3699,7 @@ ul {
     • 1056 – 1086 px = gray gap between pages
 */
 .doc-paper-scroll {
+    position: relative;
     width: 816px;
     max-width: 100%;
     min-height: 1056px;
@@ -3860,6 +3714,21 @@ ul {
     box-shadow:
         0 1px 2px rgba(0, 0, 0, 0.15),
         0 3px 12px rgba(0, 0, 0, 0.18);
+}
+
+.doc-watermark {
+    position: absolute;
+    top: 45%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-38deg);
+    font-size: 86px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    color: rgba(120, 130, 145, 0.18);
+    white-space: nowrap;
+    pointer-events: none;
+    user-select: none;
+    z-index: 1;
 }
 
 /*
@@ -3942,6 +3811,52 @@ ul {
     content: 'Start typing your document here...';
     color: #aab0b8;
     pointer-events: none;
+}
+
+/* Show Formatting Marks — pilcrow at the end of every paragraph/heading/item,
+   matching Word's "¶" display toggle. */
+.doc-rich-editor--marks > p::after,
+.doc-rich-editor--marks > h1::after,
+.doc-rich-editor--marks > h2::after,
+.doc-rich-editor--marks > h3::after,
+.doc-rich-editor--marks > h4::after,
+.doc-rich-editor--marks li::after {
+    content: '¶';
+    color: #8aa0c0;
+    font-weight: bold;
+    margin-left: 3px;
+    user-select: none;
+}
+
+/* Line Numbers — per-paragraph counter in the left margin gutter. */
+.doc-rich-editor--linenums {
+    counter-reset: doc-line;
+}
+
+.doc-rich-editor--linenums > p,
+.doc-rich-editor--linenums > h1,
+.doc-rich-editor--linenums > h2,
+.doc-rich-editor--linenums > h3,
+.doc-rich-editor--linenums > h4,
+.doc-rich-editor--linenums li {
+    counter-increment: doc-line;
+    position: relative;
+}
+
+.doc-rich-editor--linenums > p::before,
+.doc-rich-editor--linenums > h1::before,
+.doc-rich-editor--linenums > h2::before,
+.doc-rich-editor--linenums > h3::before,
+.doc-rich-editor--linenums > h4::before,
+.doc-rich-editor--linenums li::before {
+    content: counter(doc-line);
+    position: absolute;
+    left: -38px;
+    width: 30px;
+    text-align: right;
+    font-size: 9.5px;
+    color: #9aa0a6;
+    user-select: none;
 }
 
 .doc-rich-editor h1 {
@@ -4160,19 +4075,6 @@ ul {
     margin-bottom: 0;
     margin-top: 12px;
 }
-
-/* doc-tool-btn--labeled needs gap */
-.doc-tool-btn--labeled {
-    width: auto;
-    min-width: 52px;
-    padding: 0 5px;
-    gap: 3px;
-    font-size: 11px;
-    flex-direction: column;
-    height: 52px;
-    border: 1px solid transparent;
-}
-
 
 /* WPS Ribbon specific layout classes */
 

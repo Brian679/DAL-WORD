@@ -972,6 +972,22 @@ export default function DocumentEditorPage({
   const [trackChanges, setTrackChanges] = useState(false);
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true);
   const [lineSpacing, setLineSpacing] = useState('1.5');
+  const [showLineNumbers, setShowLineNumbers] = useState(false);
+  const [qaMoreOpen, setQaMoreOpen] = useState(false);
+  const [qaMorePos, setQaMorePos] = useState({ top: 0, left: 0 });
+  const qaMoreBtnRef = useRef(null);
+  const [sectionPaneOpen, setSectionPaneOpen] = useState(false);
+  const [sectionPanePos, setSectionPanePos] = useState({ top: 0, left: 0 });
+  const sectionPaneBtnRef = useRef(null);
+  const [activeSectionIndex, setActiveSectionIndex] = useState(0);
+  const [marginsPanelOpen, setMarginsPanelOpen] = useState(false);
+  const [marginsPanelPos, setMarginsPanelPos] = useState({ top: 0, left: 0 });
+  const marginsBtnRef = useRef(null);
+  const [docTheme, setDocTheme] = useState('Default');
+  const [watermarkText, setWatermarkText] = useState('');
+  const [paperSize, setPaperSize] = useState('Letter');
+  const [isFullscreenView, setIsFullscreenView] = useState(false);
+  const [ribbonCollapsed, setRibbonCollapsed] = useState(false);
   const [pageMarginsInch, setPageMarginsInch] = useState({
     top: '1',
     bottom: '1',
@@ -1251,9 +1267,157 @@ export default function DocumentEditorPage({
     editor.style.columnCount = cols > 1 ? cols : '';
     editor.style.columnGap = cols > 1 ? '24px' : '';
   }
+
+  function sortParagraphsOrListItems() {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    let container = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : editor;
+    if (container.nodeType === Node.TEXT_NODE) container = container.parentElement;
+    const list = container?.closest?.('ul, ol');
+    if (list && editor.contains(list)) {
+      Array.from(list.children)
+        .filter((el) => el.tagName === 'LI')
+        .sort((a, b) => a.textContent.trim().localeCompare(b.textContent.trim()))
+        .forEach((li) => list.appendChild(li));
+    } else {
+      Array.from(editor.children)
+        .filter((el) => ['P', 'DIV', 'H1', 'H2', 'H3'].includes(el.tagName))
+        .sort((a, b) => a.textContent.trim().localeCompare(b.textContent.trim()))
+        .forEach((el) => editor.appendChild(el));
+    }
+    handleEditorInput({ currentTarget: editor });
+  }
+
+  function toggleParagraphBorderShading() {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let el = sel.getRangeAt(0).startContainer;
+    if (el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+    while (el && el !== editor && !['P', 'H1', 'H2', 'H3', 'H4', 'LI', 'DIV'].includes(el.nodeName)) el = el.parentElement;
+    if (!el || el === editor) return;
+    if (el.dataset.shaded === 'true') {
+      el.style.border = '';
+      el.style.background = '';
+      el.style.padding = '';
+      delete el.dataset.shaded;
+    } else {
+      el.style.border = '1px solid #999';
+      el.style.background = '#f5f5f5';
+      el.style.padding = '6px 8px';
+      el.dataset.shaded = 'true';
+    }
+    handleEditorInput({ currentTarget: editor });
+  }
+
+  const DOC_THEMES = [
+    { name: 'Default', font: 'Times New Roman', heading: '#1a1a1a' },
+    { name: 'Modern', font: 'Calibri', heading: '#2563eb' },
+    { name: 'Classic', font: 'Georgia', heading: '#7c2d12' },
+  ];
+
+  function cycleDocumentTheme() {
+    const next = DOC_THEMES[(DOC_THEMES.findIndex((t) => t.name === docTheme) + 1) % DOC_THEMES.length];
+    setDocTheme(next.name);
+    setFontFamily(next.font);
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.style.fontFamily = next.font;
+    editor.querySelectorAll('h1, h2, h3').forEach((h) => { h.style.color = next.heading; });
+    handleEditorInput({ currentTarget: editor });
+  }
+
+  function insertCoverPage() {
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const range = window.document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const titleText = (draftSections?.[0]?.title || currentDocument?.title || 'Document Title').replace(/</g, '&lt;');
+    const html = `<div style="text-align:center;padding-top:160px;"><h1 style="font-size:28px;margin-bottom:12px;">${titleText}</h1><p style="color:#777;">${new Date().toLocaleDateString()}</p></div><hr style="page-break-after:always;border:none;border-top:2px dashed #ccc;margin:16px 0;" />`;
+    document.execCommand('insertHTML', false, html);
+    handleEditorInput({ currentTarget: editor });
+  }
+
+  function toggleWatermark() {
+    if (watermarkText) {
+      setWatermarkText('');
+      return;
+    }
+    const text = window.prompt('Watermark text:', 'CONFIDENTIAL');
+    if (text) setWatermarkText(text);
+  }
+
+  function cyclePaperSize() {
+    const sizes = [
+      { name: 'Letter', w: 816, h: 1056 },
+      { name: 'A4', w: 794, h: 1123 },
+      { name: 'Legal', w: 816, h: 1344 },
+    ];
+    const next = sizes[(sizes.findIndex((s) => s.name === paperSize) + 1) % sizes.length];
+    setPaperSize(next.name);
+    const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+    if (scroll) {
+      scroll.style.width = next.w + 'px';
+      scroll.style.minHeight = next.h + 'px';
+    }
+  }
+
+  function jumpToSection(index) {
+    setActiveSectionIndex(index);
+    setSectionPaneOpen(false);
+    const editor = richEditorRef.current;
+    if (!editor) return;
+    const headings = editor.querySelectorAll('[data-section-title="true"]');
+    const titledPositions = draftSections.map((s, i) => (s.title ? i : null)).filter((i) => i !== null);
+    const pos = titledPositions.indexOf(index);
+    const target = pos >= 0 ? headings[pos] : null;
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const range = window.document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function deleteActiveSection() {
+    if (draftSections.length <= 1) return;
+    const target = draftSections[activeSectionIndex];
+    const label = target?.title || `Section ${activeSectionIndex + 1}`;
+    if (!window.confirm(`Delete "${label}"? This cannot be undone.`)) return;
+    removeDraftSection(activeSectionIndex);
+    setActiveSectionIndex((i) => Math.max(0, Math.min(i, draftSections.length - 2)));
+  }
+
+  function showDocumentStats() {
+    const editor = richEditorRef.current;
+    const text = editor?.textContent || '';
+    const wc = text.trim().split(/\s+/).filter(Boolean).length;
+    const cc = text.length;
+    const hc = editor?.querySelectorAll('h1,h2,h3').length || 0;
+    const tc = editor?.querySelectorAll('table').length || 0;
+    const ic = editor?.querySelectorAll('img').length || 0;
+    window.alert(`Document Statistics\n──────────────────\nWords: ${wc}\nCharacters: ${cc}\nHeadings: ${hc}\nTables: ${tc}\nImages: ${ic}`);
+  }
   // ── End insert helpers ─────────────────────────────────────────
 
   useEffect(() => () => clearProgressPolling(), []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreenView(!!window.document.fullscreenElement);
+    window.document.addEventListener('fullscreenchange', onFsChange);
+    return () => window.document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   const activeChat = useMemo(
     () => chats.find((chat) => chat.id === activeChatId) || chats[0],
@@ -2383,16 +2547,48 @@ export default function DocumentEditorPage({
         {/* ── Left column: ribbon + paper ── */}
         <div className="doc-left-col">
           {/* Ribbon */}
-          <div className="doc-ribbon-shell">
+          <div className={`doc-ribbon-shell${ribbonCollapsed ? ' doc-ribbon-shell--collapsed' : ''}`}>
             {/* ── Tab bar ── */}
             <div className="doc-ribbon-tabs">
               <div className="doc-quick-access">
-                <button className="doc-qa-btn" title="Menu"><Menu size={15} /></button>
+                <button className={`doc-qa-btn${ribbonCollapsed ? ' doc-tool-btn--active' : ''}`} title="Collapse Ribbon" onClick={() => setRibbonCollapsed((v) => !v)}><Menu size={15} /></button>
                 <button className="doc-qa-file" onClick={onBackHome} title="Back to Home">File</button>
-                <button className="doc-qa-btn" title="Save"><Download size={14} /></button>
-                <button className="doc-qa-btn" title="Print"><Printer size={14} /></button>
-                <button className="doc-qa-btn" title="Undo"><RotateCcw size={14} /></button>
-                <button className="doc-qa-btn" title="More"><ChevronDown size={14} /></button>
+                <button className="doc-qa-btn" title="Save (Ctrl+S)" onClick={() => triggerSave()}><Download size={14} /></button>
+                <button className="doc-qa-btn" title="Print (Ctrl+P)" onClick={() => window.print()}><Printer size={14} /></button>
+                <button className="doc-qa-btn" title="Undo (Ctrl+Z)" onClick={() => { richEditorRef.current?.focus(); document.execCommand('undo'); }}><RotateCcw size={14} /></button>
+                <div className="doc-improve-menu-wrap" ref={qaMoreBtnRef}>
+                  <button
+                    className="doc-qa-btn"
+                    title="More"
+                    onClick={() => {
+                      if (!qaMoreOpen) {
+                        const rect = qaMoreBtnRef.current?.getBoundingClientRect();
+                        if (rect) setQaMorePos({ top: rect.bottom + 4, left: rect.left });
+                      }
+                      setQaMoreOpen((v) => !v);
+                    }}
+                  ><ChevronDown size={14} /></button>
+                  {qaMoreOpen && createPortal(
+                    <>
+                      <div className="doc-improve-menu-backdrop" onClick={() => setQaMoreOpen(false)} />
+                      <div className="doc-improve-menu" style={{ position: 'fixed', top: qaMorePos.top, left: qaMorePos.left }}>
+                        <button type="button" className="doc-improve-menu-item" onClick={() => { richEditorRef.current?.focus(); document.execCommand('redo'); setQaMoreOpen(false); }}>
+                          <span className="doc-improve-menu-item-label">Redo</span>
+                        </button>
+                        <button type="button" className="doc-improve-menu-item" onClick={() => { showDocumentStats(); setQaMoreOpen(false); }}>
+                          <span className="doc-improve-menu-item-label">Word Count</span>
+                        </button>
+                        <button type="button" className="doc-improve-menu-item" onClick={() => { window.print(); setQaMoreOpen(false); }}>
+                          <span className="doc-improve-menu-item-label">Print Preview</span>
+                        </button>
+                        <button type="button" className="doc-improve-menu-item" onClick={() => { setQaMoreOpen(false); onBackHome?.(); }}>
+                          <span className="doc-improve-menu-item-label">Close Document</span>
+                        </button>
+                      </div>
+                    </>,
+                    window.document.body
+                  )}
+                </div>
               </div>
               <div className="doc-ribbon-tab-list">
                 {['Home', 'Insert', 'Page Layout', 'References', 'Review', 'View', 'Tools', 'WPS AI'].map((tab) => (
@@ -2532,16 +2728,26 @@ export default function DocumentEditorPage({
                       <button className={`doc-tool-btn${activeFormats.insertOrderedList ? ' doc-tool-btn--active' : ''}`} title="Numbered List" onClick={() => execFmt('insertOrderedList')}><ListOrdered size={14}/></button>
                       <button className="doc-tool-btn" title="Decrease Indent" onClick={() => execFmt('outdent')}><IndentDecrease size={14}/></button>
                       <button className="doc-tool-btn" title="Increase Indent" onClick={() => execFmt('indent')}><IndentIncrease size={14}/></button>
-                      <button className="doc-tool-btn" title="Sort" onClick={() => {}}><span style={{fontSize:'11px'}}>↕</span></button>
-                      <button className="doc-tool-btn" title="Show Formatting Marks" onClick={() => {}}><span style={{fontSize:'13px',fontWeight:'bold'}}>¶</span></button>
+                      <button className="doc-tool-btn" title="Sort paragraphs/list items A–Z" onClick={sortParagraphsOrListItems}><span style={{fontSize:'11px'}}>↕</span></button>
+                      <button className={`doc-tool-btn${showFormattingMarks ? ' doc-tool-btn--active' : ''}`} title="Show/Hide Formatting Marks (Ctrl+*)" onClick={() => setShowFormattingMarks((v) => !v)}><span style={{fontSize:'13px',fontWeight:'bold'}}>¶</span></button>
                     </div>
                     <div className="doc-tool-group-row">
                       <button className={`doc-tool-btn${activeFormats.justifyLeft ? ' doc-tool-btn--active' : ''}`} title="Align Left (Ctrl+L)" onClick={() => execFmt('justifyLeft')}><AlignLeft size={14}/></button>
                       <button className={`doc-tool-btn${activeFormats.justifyCenter ? ' doc-tool-btn--active' : ''}`} title="Center (Ctrl+E)" onClick={() => execFmt('justifyCenter')}><AlignCenter size={14}/></button>
                       <button className={`doc-tool-btn${activeFormats.justifyRight ? ' doc-tool-btn--active' : ''}`} title="Align Right (Ctrl+R)" onClick={() => execFmt('justifyRight')}><AlignRight size={14}/></button>
                       <button className={`doc-tool-btn${activeFormats.justifyFull ? ' doc-tool-btn--active' : ''}`} title="Justify" onClick={() => execFmt('justifyFull')}><AlignJustify size={14}/></button>
-                      <button className="doc-tool-btn" title="Line Spacing" onClick={() => {}}><span style={{fontSize:'10px',lineHeight:'1'}}>≡↕</span></button>
-                      <button className="doc-tool-btn" title="Borders & Shading" onClick={() => {}}><span style={{fontSize:'12px',border:'1px solid currentColor',padding:'0 2px'}}>▣</span></button>
+                      <div className="doc-select-overlay-wrap" title="Line Spacing">
+                        <button className="doc-tool-btn" tabIndex={-1}><span style={{fontSize:'10px',lineHeight:'1'}}>≡↕</span></button>
+                        <select value={lineSpacing} onChange={(e) => applyLineSpacing(e.target.value)}>
+                          <option value="1">1.0</option>
+                          <option value="1.15">1.15</option>
+                          <option value="1.5">1.5</option>
+                          <option value="2">2.0</option>
+                          <option value="2.5">2.5</option>
+                          <option value="3">3.0</option>
+                        </select>
+                      </div>
+                      <button className="doc-tool-btn" title="Borders & Shading" onClick={toggleParagraphBorderShading}><span style={{fontSize:'12px',border:'1px solid currentColor',padding:'0 2px'}}>▣</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Paragraph</span>
@@ -2781,57 +2987,77 @@ export default function DocumentEditorPage({
               <div className="doc-ribbon-toolbar">
                 <div className="doc-tool-group doc-layout-group-page-setup">
                   <div className="doc-layout-page-setup-wrap">
-                    <div className="doc-layout-icon-title" title="Margins">
-                      <LayoutTemplate size={24} />
-                      <span>Margins</span>
-                      <ChevronDown size={11} />
-                    </div>
-
-                    <div className="doc-layout-margins-grid">
-                      <div className="doc-layout-spin-row">
-                        <label>Top:</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.05"
-                          value={pageMarginsInch.top}
-                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, top: e.target.value })}
-                        />
-                        <span>in</span>
-                      </div>
-                      <div className="doc-layout-spin-row">
-                        <label>Bottom:</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.05"
-                          value={pageMarginsInch.bottom}
-                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, bottom: e.target.value })}
-                        />
-                        <span>in</span>
-                      </div>
-                      <div className="doc-layout-spin-row">
-                        <label>Left:</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.05"
-                          value={pageMarginsInch.left}
-                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, left: e.target.value })}
-                        />
-                        <span>in</span>
-                      </div>
-                      <div className="doc-layout-spin-row">
-                        <label>Right:</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.05"
-                          value={pageMarginsInch.right}
-                          onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, right: e.target.value })}
-                        />
-                        <span>in</span>
-                      </div>
+                    <div className="doc-improve-menu-wrap" ref={marginsBtnRef}>
+                      <button
+                        type="button"
+                        className={`doc-layout-icon-title${marginsPanelOpen ? ' doc-layout-icon-title--active' : ''}`}
+                        title="Margins"
+                        onClick={() => {
+                          if (!marginsPanelOpen) {
+                            const rect = marginsBtnRef.current?.getBoundingClientRect();
+                            if (rect) setMarginsPanelPos({ top: rect.bottom + 4, left: rect.left });
+                          }
+                          setMarginsPanelOpen((v) => !v);
+                        }}
+                      >
+                        <LayoutTemplate size={24} />
+                        <span>Margins</span>
+                        <ChevronDown size={11} />
+                      </button>
+                      {marginsPanelOpen && createPortal(
+                        <>
+                          <div className="doc-improve-menu-backdrop" onClick={() => setMarginsPanelOpen(false)} />
+                          <div className="doc-margins-popover" style={{ position: 'fixed', top: marginsPanelPos.top, left: marginsPanelPos.left }}>
+                            <div className="doc-layout-margins-grid">
+                              <div className="doc-layout-spin-row">
+                                <label>Top:</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.05"
+                                  value={pageMarginsInch.top}
+                                  onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, top: e.target.value })}
+                                />
+                                <span>in</span>
+                              </div>
+                              <div className="doc-layout-spin-row">
+                                <label>Bottom:</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.05"
+                                  value={pageMarginsInch.bottom}
+                                  onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, bottom: e.target.value })}
+                                />
+                                <span>in</span>
+                              </div>
+                              <div className="doc-layout-spin-row">
+                                <label>Left:</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.05"
+                                  value={pageMarginsInch.left}
+                                  onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, left: e.target.value })}
+                                />
+                                <span>in</span>
+                              </div>
+                              <div className="doc-layout-spin-row">
+                                <label>Right:</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.05"
+                                  value={pageMarginsInch.right}
+                                  onChange={(e) => applyPageMarginsInches({ ...pageMarginsInch, right: e.target.value })}
+                                />
+                                <span>in</span>
+                              </div>
+                            </div>
+                          </div>
+                        </>,
+                        window.document.body
+                      )}
                     </div>
 
                     <div className="doc-layout-mini-icons">
@@ -2868,13 +3094,14 @@ export default function DocumentEditorPage({
                 </div>
 
                 <div className="doc-tool-group doc-layout-group-background">
+                  <div className="doc-layout-background-row">
                   <div className="doc-layout-quick-stack">
-                    <button className="doc-layout-text-btn" title="Themes">
+                    <button className="doc-layout-text-btn" title={`Theme: ${docTheme} (click to cycle)`} onClick={cycleDocumentTheme}>
                       <Type size={14} />
-                      <span>Themes</span>
+                      <span>{docTheme === 'Default' ? 'Themes' : docTheme}</span>
                       <ChevronDown size={10} />
                     </button>
-                    <button className="doc-layout-text-btn" title="Cover Page">
+                    <button className="doc-layout-text-btn" title="Insert Cover Page" onClick={insertCoverPage}>
                       <Image size={14} />
                       <span>Cover Page</span>
                       <ChevronDown size={10} />
@@ -2901,50 +3128,90 @@ export default function DocumentEditorPage({
                     <Palette size={22} />
                     <span>Page Color</span>
                   </button>
-                  <button className="doc-layout-text-btn" title="Watermark">
-                    <Globe size={14} />
-                    <span>Watermark</span>
-                    <ChevronDown size={10} />
-                  </button>
-                  <button className="doc-layout-text-btn" title="Line Numbers">
-                    <ListOrdered size={14} />
-                    <span>Line Numbers</span>
-                    <ChevronDown size={10} />
-                  </button>
+                  <div className="doc-layout-quick-stack">
+                    <button className={`doc-layout-text-btn${watermarkText ? ' doc-layout-text-btn--active' : ''}`} title="Insert/Remove Watermark" onClick={toggleWatermark}>
+                      <Globe size={14} />
+                      <span>Watermark</span>
+                      <ChevronDown size={10} />
+                    </button>
+                    <button className={`doc-layout-text-btn${showLineNumbers ? ' doc-layout-text-btn--active' : ''}`} title="Toggle Line Numbers" onClick={() => setShowLineNumbers((v) => !v)}>
+                      <ListOrdered size={14} />
+                      <span>Line Numbers</span>
+                    </button>
+                  </div>
+                  </div>
                   <span className="doc-tool-group-label">Page Background</span>
                 </div>
 
                 <div className="doc-tool-group doc-layout-group-sections">
-                  <button className="doc-layout-text-btn" title="Blank Page" onClick={() => insertPageBreak()}>
-                    <FileText size={14} />
-                    <span>Blank Page</span>
-                    <ChevronDown size={10} />
-                  </button>
-                  <button className="doc-layout-text-btn" title="Breaks" onClick={() => insertPageBreak()}>
-                    <Minus size={14} />
-                    <span>Breaks</span>
-                    <ChevronDown size={10} />
-                  </button>
-                  <button className="doc-layout-text-btn" title="Table Of Contents">
-                    <BookOpen size={14} />
-                    <span>Table Of Contents</span>
-                    <ChevronDown size={10} />
-                  </button>
-                  <button className="doc-layout-text-btn" title="Section Pane">
-                    <PanelLeft size={14} />
-                    <span>Section Pane</span>
-                  </button>
-                  <button className="doc-layout-text-btn doc-layout-text-btn--disabled" title="Delete Section" disabled>
-                    <X size={14} />
-                    <span>Delete Section</span>
-                  </button>
+                  <div className="doc-layout-sections-cols">
+                    <div className="doc-layout-sections-col">
+                      <button className="doc-layout-text-btn" title="Blank Page" onClick={() => insertPageBreak()}>
+                        <FileText size={14} />
+                        <span>Blank Page</span>
+                        <ChevronDown size={10} />
+                      </button>
+                      <button className="doc-layout-text-btn" title="Breaks" onClick={() => insertPageBreak()}>
+                        <Minus size={14} />
+                        <span>Breaks</span>
+                        <ChevronDown size={10} />
+                      </button>
+                    </div>
+                    <div className="doc-layout-sections-col">
+                      <button className="doc-layout-text-btn" title="Update Table Of Contents" disabled={isUpdatingToc} onClick={updateTableOfContents}>
+                        <BookOpen size={14} />
+                        <span>Table Of Contents</span>
+                        <ChevronDown size={10} />
+                      </button>
+                      <div className="doc-improve-menu-wrap" ref={sectionPaneBtnRef}>
+                        <button
+                          className={`doc-layout-text-btn${sectionPaneOpen ? ' doc-layout-text-btn--active' : ''}`}
+                          title="Jump to a section"
+                          onClick={() => {
+                            if (!sectionPaneOpen) {
+                              const rect = sectionPaneBtnRef.current?.getBoundingClientRect();
+                              if (rect) setSectionPanePos({ top: rect.bottom + 4, left: rect.left });
+                            }
+                            setSectionPaneOpen((v) => !v);
+                          }}
+                        >
+                          <PanelLeft size={14} />
+                          <span>Section Pane</span>
+                        </button>
+                        {sectionPaneOpen && createPortal(
+                          <>
+                            <div className="doc-improve-menu-backdrop" onClick={() => setSectionPaneOpen(false)} />
+                            <div className="doc-improve-menu" style={{ position: 'fixed', top: sectionPanePos.top, left: sectionPanePos.left }}>
+                              {draftSections.map((s, i) => (
+                                <button
+                                  key={i}
+                                  type="button"
+                                  className={`doc-improve-menu-item${i === activeSectionIndex ? ' doc-ribbon-tab-menu-item--active' : ''}`}
+                                  onClick={() => jumpToSection(i)}
+                                >
+                                  <span className="doc-improve-menu-item-label">{s.title || `Section ${i + 1}`}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </>,
+                          window.document.body
+                        )}
+                      </div>
+                    </div>
+                    <div className="doc-layout-sections-col">
+                      <button className="doc-layout-text-btn" title="Delete the selected section" disabled={draftSections.length <= 1} onClick={deleteActiveSection}>
+                        <X size={14} />
+                        <span>Delete Section</span>
+                      </button>
+                    </div>
+                  </div>
                   <span className="doc-tool-group-label">Sections</span>
                 </div>
 
                 <div className="doc-tool-group doc-layout-group-settings">
-                  <button className="doc-tool-btn doc-tool-btn--tall" title="Settings">
+                  <button className="doc-tool-btn doc-tool-btn--tall" title={`Paper size: ${paperSize} (click to cycle)`} onClick={cyclePaperSize}>
                     <Settings2 size={20} />
-                    <span>Settings</span>
+                    <span>{paperSize}</span>
                     <ChevronDown size={10} />
                   </button>
                   <span className="doc-tool-group-label">Settings</span>
@@ -3134,12 +3401,20 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled doc-tool-btn--active" title="Print Layout view"><FileText size={13}/><span>Print Layout</span></button>
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Full screen reading" onClick={() => {
-                        const el = window.document.documentElement;
-                        if (window.document.fullscreenElement) window.document.exitFullscreen?.();
-                        else el.requestFullscreen?.();
-                      }}><Maximize size={13}/><span>Full Screen</span></button>
+                      <button
+                        className={`doc-tool-btn doc-tool-btn--labeled${!isFullscreenView ? ' doc-tool-btn--active' : ''}`}
+                        title="Print Layout view"
+                        onClick={() => { if (window.document.fullscreenElement) window.document.exitFullscreen?.(); }}
+                      ><FileText size={13}/><span>Print Layout</span></button>
+                      <button
+                        className={`doc-tool-btn doc-tool-btn--labeled${isFullscreenView ? ' doc-tool-btn--active' : ''}`}
+                        title="Full screen reading"
+                        onClick={() => {
+                          const el = window.document.documentElement;
+                          if (window.document.fullscreenElement) window.document.exitFullscreen?.();
+                          else el.requestFullscreen?.();
+                        }}
+                      ><Maximize size={13}/><span>Full Screen</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Document Views</span>
@@ -3241,16 +3516,7 @@ export default function DocumentEditorPage({
                 <div className="doc-tool-group">
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
-                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Document statistics" onClick={() => {
-                        const editor = richEditorRef.current;
-                        const text = editor?.textContent || '';
-                        const wc = text.trim().split(/\s+/).filter(Boolean).length;
-                        const cc = text.length;
-                        const hc = editor?.querySelectorAll('h1,h2,h3').length || 0;
-                        const tc = editor?.querySelectorAll('table').length || 0;
-                        const ic = editor?.querySelectorAll('img').length || 0;
-                        window.alert(`Document Statistics\n──────────────────\nWords: ${wc}\nCharacters: ${cc}\nHeadings: ${hc}\nTables: ${tc}\nImages: ${ic}`);
-                      }}><FileSearch size={13}/><span>Doc Info</span></button>
+                      <button className="doc-tool-btn doc-tool-btn--labeled" title="Document statistics" onClick={showDocumentStats}><FileSearch size={13}/><span>Doc Info</span></button>
                     </div>
                   </div>
                   <span className="doc-tool-group-label">Information</span>
@@ -3432,8 +3698,6 @@ export default function DocumentEditorPage({
                         <Wand2 size={13}/>
                         <span>Reduce Similarity</span>
                       </button>
-                    </div>
-                    <div className="doc-tool-group-row">
                       <button
                         className="doc-tool-btn doc-tool-btn--labeled"
                         title="Clear plagiarism highlights"
@@ -3480,11 +3744,12 @@ export default function DocumentEditorPage({
           <section className="doc-paper-zone">
             <div className="doc-page-canvas">
               <div className="doc-paper-scroll">
+                {!!watermarkText && <div className="doc-watermark">{watermarkText}</div>}
                 <div className="doc-page-body-zone">
                   {!!manualError && <p className="doc-manual-error">{manualError}</p>}
                   <div
                     ref={richEditorRef}
-                    className="doc-rich-editor"
+                    className={`doc-rich-editor${showFormattingMarks ? ' doc-rich-editor--marks' : ''}${showLineNumbers ? ' doc-rich-editor--linenums' : ''}`}
                     contentEditable
                     suppressContentEditableWarning
                     spellCheck
