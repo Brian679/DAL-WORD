@@ -3703,14 +3703,51 @@ _META_COMMENTARY_PHRASES: tuple[str, ...] = (
     "the strongest opportunity is",
     "my take on your document",
     "what is working is that",
+    # Recap/padding: the model describes or summarizes a heading instead of
+    # writing its actual content — a different failure mode than the
+    # review/critique phrases above, but equally unusable as section prose.
+    "this section discusses",
+    "this section discussed",
+    "this section covers",
+    "this section examines",
+    "this section will discuss",
+    "this section will explore",
+    "this chapter discusses",
+    "this chapter discussed",
+    "this chapter covers",
+    "this chapter will discuss",
+    "as discussed above",
+    "as discussed in the above",
+    "as mentioned above",
+    "as noted above",
+    "as outlined above",
+    "as highlighted above",
+    "as previously discussed",
+    "as previously mentioned",
+    "the above discussion",
+    "the above section",
+    "the above heading",
+    "the above analysis",
+    "from the above discussion",
+    "from the foregoing",
+    "the foregoing discussion",
+    "the foregoing analysis",
+    "in light of the above",
+    "to summarize the above",
+    "in summary of the above",
+    "all of the above shows",
+    "all of the above discussion",
 )
 
 
 def _looks_like_meta_commentary(text: str) -> bool:
-    """True when generated body text reads like a review/critique of the document itself
-    (e.g. the model treats a 'write the chapter summary' request as 'review the document')
-    rather than genuine chapter prose. Content like this must never be saved as a section
-    body — callers should treat it the same as a generation failure and fall back.
+    """True when generated body text isn't genuine chapter/section prose — either because
+    it reads like a review/critique of the document itself (e.g. the model treats a
+    'write the chapter summary' request as 'review the document'), or because it merely
+    recaps/describes a heading ("this section discusses...", "as discussed above...")
+    instead of writing the substantive content that heading promised. Content like this
+    must never be saved as a section body — callers should treat it the same as a
+    generation failure and fall back.
     """
     low = (text or "").lower()
     return any(p in low for p in _META_COMMENTARY_PHRASES)
@@ -10748,10 +10785,16 @@ def _review_and_revise_chapter(
         prompt = (
             "You are self-reviewing a dissertation chapter you just wrote. Read it for internal "
             "consistency, repetition, and whether it stays on-topic and tied to the stated "
-            "objectives. Return ONLY the corrected full chapter text — no commentary, no markdown "
-            "fences. Every line that looks like '[[BLOCK:some-id]]' is a placeholder for a figure "
-            "or table; you may move surrounding prose around it but you must keep every one of "
-            "those marker lines exactly as written, and must not add new ones.\n\n"
+            "objectives. Specifically hunt for and fix recap/padding sentences that describe or "
+            "summarize a heading instead of delivering its content — e.g. 'this section "
+            "discusses...', 'as discussed/mentioned/noted above...', 'the above discussion "
+            "shows...', 'the foregoing analysis...'. Either delete each such sentence outright or "
+            "replace it with the genuine substantive content it was standing in for; never leave a "
+            "sentence that merely refers back to or recaps prior text. Return ONLY the corrected "
+            "full chapter text — no commentary, no markdown fences. Every line that looks like "
+            "'[[BLOCK:some-id]]' is a placeholder for a figure or table; you may move surrounding "
+            "prose around it but you must keep every one of those marker lines exactly as written, "
+            "and must not add new ones.\n\n"
             f"Chapter: {chapter_title}\n"
             f"Topic: {topic}\n"
             f"Research design: {research_design}\n"

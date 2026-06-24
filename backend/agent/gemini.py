@@ -410,6 +410,11 @@ def generate_section_content(
         f"{ctx_block}"
         f"Write ~{word_count} words of scholarly content for this section.\n"
         "Requirements:\n"
+        "• Write the actual content this heading promises — never describe, summarize, or "
+        "refer to the section/chapter itself. Banned: 'this section discusses/covers/examines', "
+        "'this chapter discusses', 'as discussed/mentioned/noted above', 'the above discussion', "
+        "'the foregoing analysis', or any sentence that recaps a heading instead of delivering "
+        "its content. A reader must never catch you talking ABOUT the writing instead of writing.\n"
         "• Write SPECIFICALLY about this topic — not generic filler that fits any study.\n"
         "• Ground claims in the context provided (objectives, methodology, findings).\n"
         "• Use varied sentence rhythm — short punchy sentences alongside longer analyses.\n"
@@ -419,7 +424,7 @@ def generate_section_content(
         f"• Avoid AI clichés: {_AI_CLICHE_PHRASES}.\n"
         "• Do not open consecutive paragraphs with the same word or phrase.\n"
         f"• Aim for ~{word_count} words — do not stop early.\n\n"
-        "Begin writing now:"
+        "Begin writing the substantive content now — no preamble, no meta-commentary:"
     )
     return generate_text(prompt)
 
