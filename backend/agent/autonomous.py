@@ -2725,6 +2725,50 @@ def generate_dissertation_plan_llm(
     return _fallback_dissertation_chapters(topic or "the study", message, objectives)
 
 
+def _topic_concept_phrases(topic: str) -> list[str]:
+    """Split a dissertation topic into 1-2 substantive concept phrases — the study's
+    actual constructs — so the offline Chapter 2 plan can name them in its headings
+    instead of falling back to bare generic labels like "Conceptual Framework" with
+    nothing topic-specific attached. Handles the common dissertation-title shapes
+    ("Impact/Effect/Role of X on Y", "Relationship between X and Y", "X and Y among Z")
+    and degrades to a single cleaned phrase when the topic doesn't split cleanly.
+    """
+    topic = (topic or "").strip()
+    if not topic:
+        return []
+
+    def clean(phrase: str) -> str:
+        phrase = re.sub(r"^(a|an|the)\s+", "", phrase.strip(), flags=re.IGNORECASE).strip(" .,;:")
+        return " ".join(phrase.split()[:6])
+
+    m = re.match(
+        r"^(?:the\s+)?(?:impact|effects?|influence|role)\s+of\s+(.+?)\s+on\s+(.+?)"
+        r"(?:\s+(?:in|among|within)\s+.+)?$",
+        topic, flags=re.IGNORECASE,
+    ) or re.match(
+        r"^(?:the\s+)?relationship\s+between\s+(.+?)\s+and\s+(.+?)"
+        r"(?:\s+(?:in|among|within)\s+.+)?$",
+        topic, flags=re.IGNORECASE,
+    )
+    if m:
+        return [c for c in (clean(g) for g in m.groups()) if c]
+
+    # No recognizable "X on/and Y" shape — drop a trailing population/context clause
+    # (e.g. "... Among Remote Bank Employees") and split what's left on "and".
+    trimmed = topic
+    for connector in (" among ", " within ", " in "):
+        idx = trimmed.lower().rfind(connector)
+        if idx > 0:
+            trimmed = trimmed[:idx]
+            break
+
+    parts = [p for p in re.split(r"\s+and\s+", trimmed, flags=re.IGNORECASE) if p.strip()]
+    if len(parts) >= 2:
+        return [clean(parts[0]), clean(parts[1])]
+
+    return [clean(trimmed)] if clean(trimmed) else []
+
+
 def _fallback_dissertation_chapters(
     topic: str, message: str = "", objectives: list[str] | None = None
 ) -> list[dict[str, Any]]:
@@ -2734,8 +2778,15 @@ def _fallback_dissertation_chapters(
     to a recognizable named theory (see _select_named_theory) — a topic with no natural
     theoretical anchor gets no such section, and therefore no theory diagram either, instead
     of the same generic framework being forced onto every dissertation regardless of subject.
+    Its Conceptual Framework / Empirical Review / Research Gap headings are likewise anchored
+    to concept phrases pulled from the topic itself (see _topic_concept_phrases), so two
+    dissertations on different subjects don't end up with an identical Chapter 2 outline.
     """
     theory = _select_named_theory(topic, message, objectives)
+    concepts = _topic_concept_phrases(topic)
+    c1 = concepts[0] if concepts else (topic or "the study").strip()
+    c2 = concepts[1] if len(concepts) > 1 else c1
+
     chapter2_sections = [{"title": "2.1 Introduction", "sections": []}]
     next_num = 2
     if theory:
@@ -2743,7 +2794,13 @@ def _fallback_dissertation_chapters(
             {"title": f"2.{next_num} Theoretical Framework: {theory['name']}", "sections": []}
         )
         next_num += 1
-    for label in ("Conceptual Framework", "Empirical Review", "Research Gap", "Chapter Summary"):
+    gap_label = f"Research Gap in {c1} and {c2}" if c1 != c2 else f"Research Gap in {c1}"
+    for label in (
+        f"Conceptual Framework of {c1}",
+        f"Empirical Review of {c2}",
+        gap_label,
+        "Chapter Summary",
+    ):
         chapter2_sections.append({"title": f"2.{next_num} {label}", "sections": []})
         next_num += 1
 
