@@ -481,8 +481,14 @@ Discussion, Conclusion, References, Appendices."""
     return [{"title": title, "subsections": []} for title in defaults]
 
 
-def extract_formal_objectives(full_document_text: str, topic: str) -> list[str]:
-    """Analyze the full document context to extract or synthesize clear, professional research objectives."""
+def extract_formal_objectives(full_document_text: str, topic: str, is_system_build: bool = False) -> list[str]:
+    """Analyze the full document context to extract or synthesize clear, professional research objectives.
+
+    is_system_build flags a software/web/information-system build topic (no human survey
+    respondents) so the offline fallback below can produce SDLC-shaped objectives (review,
+    design and build, test) instead of the survey-study objectives that fit most other
+    topics — the caller (autonomous._extract_objectives) computes this from the topic text.
+    """
     prompt = f"""Read the full research document text provided below and determine the core research objectives.
 Topic: {topic}
 
@@ -507,6 +513,15 @@ Example output format:
 
     # Fallback if prediction fails
     short_topic = (topic or "the study topic").strip()
+    if is_system_build:
+        return [
+            f"To review existing approaches to {short_topic} and identify the limitations "
+            "the proposed system is intended to address",
+            f"To design and develop a system for {short_topic} that meets functional and "
+            "non-functional requirements derived from those limitations",
+            "To test and evaluate the developed system against its defined requirements and "
+            "performance targets",
+        ]
     return [
         f"To determine the current state of {short_topic}",
         f"To evaluate key drivers and constraints affecting {short_topic}",

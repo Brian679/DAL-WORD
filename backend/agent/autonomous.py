@@ -462,6 +462,11 @@ _SECTION_VISUAL_SPECS: list[dict[str, Any]] = [
         "kind": "table", "title": "Reliability and Validity Summary",
         "meta": {"table_type": "reliability"}, "designs_only": ["quantitative", "mixed"],
     },
+    {
+        "chapter": 3, "keyword": "architecture",
+        "kind": "image", "title": "System Architecture Diagram",
+        "meta": {"image_kind": "system_architecture"}, "designs_only": None,
+    },
     # Chapter 5
     {
         "chapter": 5, "keyword": "summary of findings",
@@ -614,6 +619,31 @@ DISSERTATION_TEMPLATE: list[dict[str, Any]] = [
         "title": "Appendices",
         "subsections": [],
     },
+]
+
+# Chapter 3 skeleton used in place of DISSERTATION_TEMPLATE's survey-shaped subsections
+# (Target Population, Sampling Techniques, Reliability and Validity, ...) when the topic is a
+# software/web/information-system build with no human survey respondents (see
+# _is_system_build_topic). An SDLC-shaped methodology — existing-system review, requirements,
+# system design, database design, tools, testing — fits what such a study actually does.
+# Bare (unnumbered) labels are the canonical form — both the offline fallback chapter planner
+# (_fallback_dissertation_chapters / _default_sections_for_chapter, via _chapter3_default_labels)
+# and the chat-driven rewrite path (_chapter_nodes_for_generation, via the pre-numbered
+# _SYSTEM_BUILD_CHAPTER3_SUBSECTIONS derived below) need this same skeleton.
+_SYSTEM_BUILD_CHAPTER3_LABELS: list[str] = [
+    "Introduction",
+    "Research Design",
+    "Overview of the Existing System",
+    "System Requirements",
+    "System Design and Architecture",
+    "Database Design",
+    "Tools and Technologies Used",
+    "System Testing Strategy",
+    "Ethical Considerations",
+    "Chapter Summary",
+]
+_SYSTEM_BUILD_CHAPTER3_SUBSECTIONS: list[str] = [
+    f"3.{i} {label}" for i, label in enumerate(_SYSTEM_BUILD_CHAPTER3_LABELS, start=1)
 ]
 
 
@@ -1273,7 +1303,19 @@ _RESPONDENT_HINTS = (
     "consumer", "student", "teacher", "patient", "citizen", "manager", "user experience",
     "stakeholder", "satisfaction", "smes", "small and medium enterpr",
 )
-_NO_RESPONDENT_HINTS = (
+# Split into two groups so callers can tell *which kind* of no-respondent study this is —
+# a software/web/information-system build (SDLC-shaped: requirements, design, database,
+# testing) versus a hardware/algorithmic engineering build (trial-shaped: test scenarios,
+# performance measurements). Both groups still combine into one for _uses_human_respondents.
+_NO_RESPONDENT_HINTS_SYSTEM_BUILD = (
+    "web app", "web application", "website", "web portal", "web-based system",
+    "web-based platform", "mobile app", "mobile application", "information system",
+    "management information system", "geographic information system",
+    "gis-based", "gis based", "geospatial", "database system", "decision support system",
+    "recommender system", "content management system", "e-commerce system", "expert system",
+    "software application",
+)
+_NO_RESPONDENT_HINTS_TECHNICAL = (
     "robot", "robotic", "drone", "uav", "embedded system", "firmware", "microcontroller",
     "arduino", "raspberry pi", "sensor", "actuator", "circuit", "pcb", "iot device",
     "algorithm", "neural network", "machine learning model", "deep learning model",
@@ -1282,6 +1324,7 @@ _NO_RESPONDENT_HINTS = (
     "software system", "network protocol", "encryption", "compiler", "operating system",
     "database performance", "api throughput", "latency", "signal processing",
 )
+_NO_RESPONDENT_HINTS = _NO_RESPONDENT_HINTS_SYSTEM_BUILD + _NO_RESPONDENT_HINTS_TECHNICAL
 
 
 def _uses_human_respondents(topic: str, message: str, objectives: list[str] | None = None) -> bool:
@@ -1296,6 +1339,18 @@ def _uses_human_respondents(topic: str, message: str, objectives: list[str] | No
     if any(hint in text for hint in _NO_RESPONDENT_HINTS):
         return False
     return True
+
+
+def _is_system_build_topic(topic: str, message: str = "", objectives: list[str] | None = None) -> bool:
+    """Narrower than _uses_human_respondents()==False: true only for software/web/information-
+    system build studies, so Chapter 3 can use an SDLC-shaped skeleton (requirements, system
+    design, database design, tools and technologies, testing strategy) instead of the
+    trial-and-measurement skeleton that fits a hardware/algorithmic engineering build.
+    """
+    text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
+    if any(hint in text for hint in _RESPONDENT_HINTS):
+        return False
+    return any(hint in text for hint in _NO_RESPONDENT_HINTS_SYSTEM_BUILD)
 
 
 # Topics in law, policy, philosophy, history, theology, literature, and similar fields are
@@ -1325,6 +1380,30 @@ def _is_doctrinal_topic(topic: str, message: str, objectives: list[str] | None =
     return any(hint in text for hint in _DOCTRINAL_HINTS)
 
 
+def _fallback_objectives_for_topic(topic: str) -> list[str]:
+    """Generic objectives used when no LLM is available to extract them. Forked by topic
+    genre so a software/web-system build topic gets SDLC-shaped objectives (review, design
+    and build, test) instead of the survey-study objectives that fit most other topics —
+    those survey-shaped objectives would otherwise drive Chapter 4 into per-objective
+    sections about a study that doesn't exist.
+    """
+    short_topic = (topic or "the study topic").strip()
+    if _is_system_build_topic(short_topic):
+        return [
+            f"To review existing approaches to {short_topic} and identify the limitations "
+            "the proposed system is intended to address",
+            f"To design and develop a system for {short_topic} that meets functional and "
+            "non-functional requirements derived from those limitations",
+            "To test and evaluate the developed system against its defined requirements and "
+            "performance targets",
+        ]
+    return [
+        f"To determine the current state of {short_topic}",
+        f"To evaluate key drivers and constraints affecting {short_topic}",
+        f"To propose evidence-based recommendations for improving outcomes in {short_topic}",
+    ]
+
+
 def _extract_objectives(document: Document, topic: str) -> list[str]:
     """Dynamically analyze the whole document and extract objectives using the LLM."""
     from agent.gemini import extract_formal_objectives
@@ -1335,23 +1414,15 @@ def _extract_objectives(document: Document, topic: str) -> list[str]:
     for sec in sections:
         full_text_blocks.append(f"### {sec.get('title', '')}")
         full_text_blocks.append(sec.get("content", ""))
-    
+
     full_text = "\n\n".join(full_text_blocks).strip()
     if not full_text:
         # Fallback if doc is empty
-        short_topic = (topic or "the study topic").strip()
-        return [
-            f"To determine the current state of {short_topic}",
-            f"To evaluate key drivers and constraints affecting {short_topic}",
-            f"To propose evidence-based recommendations for improving outcomes in {short_topic}",
-        ]
+        return _fallback_objectives_for_topic(topic)
 
     # Use the LLM to professionally extract and write the objectives
-    llm_objectives = extract_formal_objectives(full_text, topic)
-    return llm_objectives or [
-        f"To determine the current state of {topic}",
-        f"To evaluate key drivers and constraints affecting {topic}"
-    ]
+    llm_objectives = extract_formal_objectives(full_text, topic, is_system_build=_is_system_build_topic(topic))
+    return llm_objectives or _fallback_objectives_for_topic(topic)
 
 
 def _objective_section_title(objective: str) -> str:
@@ -3028,6 +3099,20 @@ _CHAPTER_KIND_DEFAULT_LABELS: dict[str, list[str]] = {
 }
 
 
+def _chapter3_default_labels(
+    topic: str, message: str = "", objectives: list[str] | None = None
+) -> list[str]:
+    """Pick the Chapter 3 (Methodology) label set: the SDLC-shaped skeleton for a
+    software/web/information-system build topic (see _is_system_build_topic), otherwise the
+    survey/trial-and-measurement default. Centralizes the choice so the offline fallback
+    planner (_fallback_dissertation_chapters) and the gap-filler for an LLM-or-user plan that
+    names Chapter 3 but leaves it empty (_default_sections_for_chapter) stay consistent.
+    """
+    if _is_system_build_topic(topic, message, objectives):
+        return _SYSTEM_BUILD_CHAPTER3_LABELS
+    return _CHAPTER_KIND_DEFAULT_LABELS["methodology"]
+
+
 def _default_chapter2_sections(
     chapter_number: int | None, topic: str, message: str = "", objectives: list[str] | None = None
 ) -> list[dict[str, Any]]:
@@ -3096,6 +3181,8 @@ def _default_sections_for_chapter(
     kind = _infer_chapter_kind(title, chapter_number)
     if kind == "literature":
         return _default_chapter2_sections(chapter_number, topic, message, objectives)
+    if kind == "methodology":
+        return _numbered_sections(chapter_number, _chapter3_default_labels(topic, message, objectives))
     if kind in _CHAPTER_KIND_DEFAULT_LABELS:
         return _numbered_sections(chapter_number, _CHAPTER_KIND_DEFAULT_LABELS[kind])
     # Unrecognized chapter purpose (e.g. a custom extra chapter in a user template) —
@@ -3122,7 +3209,7 @@ def _fallback_dissertation_chapters(
         {"title": "Chapter 2: Literature Review",
          "sections": _default_chapter2_sections(2, topic, message, objectives)},
         {"title": "Chapter 3: Research Methodology",
-         "sections": _numbered_sections(3, _CHAPTER_KIND_DEFAULT_LABELS["methodology"])},
+         "sections": _numbered_sections(3, _chapter3_default_labels(topic, message, objectives))},
         {"title": "Chapter 4: Results and Discussion", "sections": [
             {"title": "4.1 Introduction", "sections": []},
             {"title": "4.2 Presentation of Findings", "sections": []},
@@ -4358,6 +4445,30 @@ def _execute_subsection_nodes(
                 "analysis stage, providing a visual summary of the procedure described in this "
                 "chapter."
             )
+        elif kind == "image" and meta.get("image_kind") == "system_architecture":
+            figure_no = figure_counter[0]
+            figure_counter[0] += 1
+            diagram_prompt = (
+                f"System architecture diagram for {topic}, showing a layered design with a "
+                "presentation/user-interface layer, an application or business-logic layer, and "
+                "a data/database layer, with arrows showing how requests and data flow between them"
+            )
+            image_path = generate_image(diagram_prompt)
+            figure_caption = f"Figure {figure_no}: System Architecture for {topic}"
+            block_id = f"fig-{figure_no}-{len(blocks) + 1}"
+            blocks.append({
+                "type": "image",
+                "src": image_path,
+                "caption": figure_caption,
+                "block_id": block_id,
+            })
+            body = (
+                f"{figure_caption}\n"
+                f"[[BLOCK:{block_id}]]\n"
+                "Interpretation: The diagram summarises the system's layered architecture and how "
+                "the presentation, application-logic, and data layers interact, providing a visual "
+                "reference for the design decisions described in this section."
+            )
         elif kind == "chart" and meta.get("chart_type") in {"framework", "theory_model"}:
             is_theory = meta.get("chart_type") == "theory_model"
             figure_no = figure_counter[0]
@@ -4545,6 +4656,7 @@ def _execute_subsection_nodes(
                     research_design=research_design,
                     specific_design=specific_design,
                     sample_size=_infer_sample_size(document),
+                    document=document,
                 )
                 if grounding:
                     body = f"{grounding} {body}"
@@ -4630,7 +4742,7 @@ def _execute_subsection_nodes(
                 fallback_fn=lambda t, s, sub, wc: _fallback_subsection_text(
                     t, s, sub, objectives=_doc_objectives, target_words=wc,
                     research_design=research_design, specific_design=specific_design,
-                    sample_size=_infer_sample_size(document),
+                    sample_size=_infer_sample_size(document), document=document,
                 ),
                 user_instruction=user_instruction,
             )
@@ -5401,10 +5513,32 @@ def _explicit_section_target_from_message(message: str) -> str | None:
     return None
 
 
+_OBJECTIVE_COMPOUND_VERB_HINTS: tuple[str, ...] = (
+    "identify", "assess", "determine", "evaluate", "examine", "analyse", "analyze",
+    "investigate", "explore", "develop", "design", "build", "construct", "implement",
+    "test", "propose", "establish", "validate", "ascertain", "measure", "compare",
+    "review", "recommend", "derive", "document",
+)
+
+
 def _objective_to_question(objective: str, topic: str) -> str:
     """Convert a research objective statement into an interrogative research question."""
     cleaned = objective.strip().rstrip(".")
-    remainder, replaced = re.subn(r"^to\s+\w+\s+", "", cleaned, count=1, flags=re.IGNORECASE)
+    body, has_to = re.subn(r"^to\s+", "", cleaned, count=1, flags=re.IGNORECASE)
+    if not has_to:
+        return f"What is the relationship between {topic} and {cleaned}?"
+
+    # Compound objectives ("review X and identify Y", "design and develop Z", "test and
+    # evaluate W") pair a second verb clause onto the first. Splitting that into a "What is
+    # <noun phrase>?" stem (the logic below) drops the second verb clause and reads as
+    # nonsense — e.g. "What is existing approaches to X and identify the limitations...?".
+    # Keep the whole clause intact behind a wrapper that stays grammatical regardless of how
+    # many verb clauses it contains.
+    and_tokens = [t.lower() for t in re.findall(r"\band\s+(\w+)", body, flags=re.IGNORECASE)]
+    if any(t in _OBJECTIVE_COMPOUND_VERB_HINTS for t in and_tokens):
+        return f"What does the study aim to achieve in seeking to {body}?"
+
+    remainder, replaced = re.subn(r"^\w+\s+", "", body, count=1, flags=re.IGNORECASE)
     if not replaced:
         return f"What is the relationship between {topic} and {cleaned}?"
     remainder = remainder.strip()
@@ -5558,6 +5692,133 @@ _FALLBACK_TECHNICAL_ELABORATIONS: tuple[str, ...] = (
     "These results sit alongside broader systems-engineering trade-offs inherent in {topic}, where improving one "
     "performance dimension routinely entails a measurable cost along another, and the optimal balance depends on "
     "the priorities of the specific application.",
+    "Documentation quality also mediates how reproducible these results are. Design decisions and test "
+    "procedures for {topic} that are not clearly recorded are difficult for an independent team to verify or "
+    "extend, which limits the practical value of the findings beyond the original development effort.",
+    "Reliance on third-party components introduces a dependency risk that is easy to overlook when interpreting "
+    "results for {topic}. Behaviour can shift when a sourced part, driver, or firmware build is revised or "
+    "discontinued, independent of any change made by the design team itself.",
+    "Usability across the range of operating conditions end users actually encounter is a relevant consideration "
+    "for {topic}. Performance recorded under controlled test conditions does not guarantee an equally favourable "
+    "experience once exposed to the variability of real-world use.",
+    "The rigour of the production and quality-assurance process shapes how confidently these results generalise "
+    "to {topic} as manufactured. Findings drawn from a single hand-built unit may not hold once subsequent "
+    "batches are produced through an ongoing manufacturing process.",
+    "Backward compatibility constraints frequently mediate how design choices for {topic} can evolve in practice. "
+    "Even a clearly superior alternative approach can be impractical where it would break compatibility with "
+    "existing interfaces, fixtures, or installed units already in the field.",
+    "Behaviour under simultaneous or overlapping operation is a relevant consideration for {topic}. Results "
+    "gathered from isolated, single-unit testing do not automatically reveal issues that only surface once "
+    "multiple units or subsystems operate at the same time.",
+    "Visibility into real-world behaviour after deployment — through field monitoring, diagnostics, and failure "
+    "logging — is relevant to a full appreciation of {topic}. Issues that are rare or context-dependent often "
+    "surface only once field data accumulates beyond what pre-deployment testing can capture.",
+    "Domain-specific regulatory or safety-certification obligations are relevant to a full appreciation of "
+    "{topic}. Requirements that are satisfied in a development or bench-testing context do not automatically "
+    "guarantee compliance once the system is certified and deployed in the field.",
+    "The skills and capacity available to the team responsible for {topic} frequently mediate which design "
+    "options are practically achievable, independent of which option is technically preferable on paper.",
+    "Feedback gathered after initial deployment is relevant to a full appreciation of {topic}. Conclusions drawn "
+    "purely from pre-deployment testing can be revised once real field performance and user feedback are "
+    "factored in.",
+)
+
+
+# Parallel to _FALLBACK_TECHNICAL_ELABORATIONS, but for a software/web/information-system
+# build topic (see _is_system_build_topic) rather than a hardware/algorithmic engineering
+# build — requirements, architecture, and deployment language instead of sensors, power
+# budgets, and mechanical/electrical components, which otherwise leaked into every chapter
+# of a web-app dissertation regardless of the Chapter 3 fix targeting only that chapter.
+_FALLBACK_SYSTEM_BUILD_ELABORATIONS: tuple[str, ...] = (
+    "Within the wider body of software engineering practice that informs {topic}, comparable systems generally "
+    "converge on the view that quality is shaped by the interaction of architectural choices and the specific "
+    "data and usage patterns the system must support, rather than by any single design decision in isolation.",
+    "Developers working in this space must weigh competing constraints such as development time, infrastructure "
+    "cost, and long-term maintainability; the available evidence suggests that the most durable systems for "
+    "{topic} arise where architectural intent is matched by disciplined testing and documentation.",
+    "The different design considerations behind {topic} are not independent: the user interface, the underlying "
+    "business logic, and the data layer interact in ways that a purely component-by-component treatment would "
+    "understate, which is why an integrated requirements-to-testing approach is needed to make sense of overall "
+    "system quality.",
+    "Taken together, these considerations underscore the multidimensional nature of {topic}. No single design "
+    "decision is sufficient on its own; the strongest systems integrate sound requirements analysis, a coherent "
+    "architecture, and a disciplined testing regime capable of catching defects before deployment.",
+    "Conclusions about {topic} are strongest when they rest on a cumulative body of testing evidence — unit "
+    "tests, integration tests, and user acceptance feedback — rather than an isolated demonstration, which is "
+    "why repeated, documented testing remains important throughout development.",
+    "Alternative system designs reported in the literature on {topic} differ in emphasis, but most converge on "
+    "the conclusion that a clearly documented requirements baseline is necessary to evaluate competing "
+    "architectures fairly.",
+    "From an applied standpoint, developers, students, and future maintainers building on {topic} need to "
+    "translate these insights into practice with attention to data integrity, access control, and the operating "
+    "environment in which the system will be deployed.",
+    "Results of this kind are typically sensitive to the specific dataset, user load, and deployment environment "
+    "under study, and {topic} is no exception — generalising beyond the conditions examined here should be done "
+    "cautiously.",
+    "Methodologically, the strength of any conclusion about {topic} depends on the quality of the underlying "
+    "test evidence. Triangulating functional testing, performance testing, and user feedback strengthens "
+    "confidence in the observed results.",
+    "These system characteristics are rarely static: they tend to shift over time as the underlying data grows, "
+    "usage patterns evolve, and incremental feature changes accumulate across iterations of {topic}.",
+    "These design choices also have implications for the long-term scalability and maintenance cost of {topic} "
+    "beyond an initial release. Choices that perform well with a small dataset do not always translate cleanly "
+    "into a system that remains responsive as usage grows.",
+    "The scope of testing, the size of the dataset used, and the specific deployment environment examined all "
+    "bound the conclusions that can be drawn about {topic}, a limitation worth bearing in mind when generalising "
+    "from a single test environment.",
+    "Security and privacy considerations are relevant to a full appreciation of {topic}. Vulnerabilities that are "
+    "tolerable in a development environment may carry materially different risk profiles once the system is "
+    "deployed and handling real user data.",
+    "Hosting and infrastructure constraints frequently mediate how these design choices translate into a viable "
+    "deployment of {topic}. Even a technically sound design can be impractical where it exceeds the available "
+    "budget for servers, storage, or third-party services.",
+    "Maintainability and code quality are relevant to the long-term viability of {topic}. A system that performs "
+    "well at launch but is difficult to update, debug, or extend carries hidden lifecycle costs that should "
+    "factor into any overall assessment.",
+    "Comparative evidence from alternative architectures sharpens interpretation here. Where {topic} has been "
+    "approached using competing technology stacks or design patterns, convergent results strengthen confidence "
+    "in the conclusions, while divergent results point to context-specific trade-offs worth investigating "
+    "further.",
+    "Data quality and integrity considerations — validation, consistency checks, and backup strategy — are a "
+    "relevant consideration for {topic}. Results obtained against clean test data do not automatically "
+    "generalise to the messier data the system will encounter in production.",
+    "Integration considerations also bear on the practical significance of these results. A module or component "
+    "that performs well in isolation can still introduce unexpected interactions once integrated into the "
+    "larger system developed for {topic}.",
+    "Consistency across environments, not just across individual test runs, is relevant to these conclusions. "
+    "Differences between development, staging, and production environments can introduce variation that a "
+    "single-environment evaluation of {topic} would not capture.",
+    "These results sit alongside broader software-engineering trade-offs inherent in {topic}, where improving "
+    "one quality attribute routinely entails a measurable cost along another, and the optimal balance depends "
+    "on the priorities of the specific application.",
+    "Documentation quality also mediates how reproducible these results are. Design decisions and test "
+    "procedures for {topic} that are not clearly recorded are difficult for an independent team to verify or "
+    "extend, which limits the practical value of the findings beyond the original development effort.",
+    "Reliance on third-party libraries and APIs introduces a dependency risk that is easy to overlook when "
+    "interpreting results for {topic}. Behaviour can shift when an external library, driver, or service is "
+    "updated or deprecated, independent of any change made by the development team itself.",
+    "Usability across the range of devices, browsers, and connection conditions end users actually encounter is "
+    "a relevant consideration for {topic}. Performance recorded under controlled test conditions does not "
+    "guarantee an equally favourable experience once exposed to the variability of real-world use.",
+    "The cadence and rigour of the release process shape how confidently these results generalise to {topic} as "
+    "delivered. Findings drawn from a single build or test cycle may not hold once subsequent changes are "
+    "introduced through ongoing iteration.",
+    "Backward compatibility constraints frequently mediate how design choices for {topic} can evolve in "
+    "practice. Even a clearly superior alternative approach can be impractical where it would break "
+    "compatibility with data or interfaces already in use.",
+    "Behaviour under concurrent or simultaneous use is a relevant consideration for {topic}. Results gathered "
+    "from sequential, single-user testing do not automatically reveal issues that only surface once multiple "
+    "operations occur at the same time.",
+    "Visibility into real-world behaviour after deployment — through logging, monitoring, and error tracking — "
+    "is relevant to a full appreciation of {topic}. Issues that are rare or context-dependent often surface "
+    "only once usage data accumulates beyond what pre-deployment testing can capture.",
+    "Domain-specific regulatory or data-handling obligations are relevant to a full appreciation of {topic}. "
+    "Requirements that are satisfied in a development or testing context do not automatically guarantee "
+    "compliance once the system handles real user data in production.",
+    "The skills and capacity available to the team responsible for {topic} frequently mediate which design "
+    "options are practically achievable, independent of which option is technically preferable on paper.",
+    "Feedback gathered after initial deployment is relevant to a full appreciation of {topic}. Conclusions drawn "
+    "purely from pre-launch testing can be revised once real usage patterns and user feedback are factored in.",
 )
 
 
@@ -5826,6 +6087,60 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_BACKGROUND_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "Interest in {topic} has grown substantially as advances in web technologies, cloud infrastructure, and "
+        "data management tools have made increasingly capable software systems practical to design, build, and "
+        "deploy. The background of this study situates the research problem within this broader technical "
+        "trajectory, drawing on established software engineering principles and prior system designs to justify "
+        "the relevance and timing of the present effort.\n\n"
+        "Across the field, developers have reported steady gains in usability, reliability, and performance, "
+        "driven by improvements in development frameworks, database technologies, and software testing "
+        "methodology {cite1}. However, published system descriptions vary widely in rigor and scope — many "
+        "implementations are described without a clearly documented requirements baseline or a systematic "
+        "evaluation of how well the resulting system meets user needs. This gap is particularly evident where a "
+        "legacy manual process is being replaced and the costs of poor requirements analysis or weak system "
+        "design are not immediately visible.\n\n"
+        "Against this backdrop, the present study addresses a clear technical need: to analyse the existing "
+        "process or system, design and build a solution that addresses its limitations, and evaluate the result "
+        "against clearly defined requirements. By documenting its design choices and evaluation results in "
+        "detail, the study contributes findings that are transferable to further development, comparable "
+        "system-building efforts, and practical deployment decisions."
+    ),
+    (
+        "Although {topic} sits at the intersection of several fast-moving areas of software practice, much of the "
+        "published work describing similar systems stops short of a rigorous, requirements-driven evaluation of "
+        "the finished product. This study begins from that gap: rather than assuming a system will meet user "
+        "needs because comparable systems have been reported elsewhere, it commits to building and testing one "
+        "against an explicit set of requirements.\n\n"
+        "Across the wider field, practitioners report steady improvements in development tooling, database "
+        "design practice, and deployment infrastructure, driven by advances that have made previously "
+        "impractical systems newly feasible {cite1}. Yet detailed, reproducible evidence describing exactly how "
+        "well a given system satisfies its requirements — and under what conditions it does not — remains "
+        "comparatively scarce, particularly for systems built under realistic time and resource constraints "
+        "rather than by a fully staffed development team.\n\n"
+        "It is this shortfall that the present study sets out to address, by producing a working system together "
+        "with a transparent, structured record of how it was designed and tested. In doing so, it aims to "
+        "generate findings that are directly transferable to further development, comparable system-building "
+        "efforts, and practical deployment decisions."
+    ),
+    (
+        "The development of systems addressing {topic} has accelerated noticeably as advances in web frameworks, "
+        "database technologies, and domain-specific tooling have lowered the practical barriers to building "
+        "increasingly capable software. What was once feasible only with a specialised development team is now "
+        "within reach of a much wider range of developers and researchers.\n\n"
+        "This broadening of access has not been matched by an equivalent broadening of rigorous requirements "
+        "analysis and testing practice {cite1}. Many reported systems describe a working prototype rather than a "
+        "system evaluated systematically against the functional and non-functional requirements it was meant to "
+        "satisfy, making it difficult to judge whether the system genuinely solves the problem it was built "
+        "for.\n\n"
+        "The present study responds to this gap directly, committing to a requirements-driven design-and-build "
+        "approach that documents not only what was built but precisely how it was tested, against what "
+        "requirements, and with what result. The resulting evidence is intended to be transferable to further "
+        "development, comparable system-building efforts, and practical deployment decisions."
+    ),
+)
+
 _BACKGROUND_VARIANTS_DOCTRINAL: tuple[str, ...] = (
     (
         "{topic} has long occupied an unsettled place within the relevant doctrinal and scholarly tradition, with "
@@ -5978,6 +6293,53 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_PROBLEM_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "Despite growing interest in {topic}, a practical gap persists: many existing systems are described without a "
+        "clearly documented requirements baseline or a rigorous, repeatable evaluation against defined acceptance "
+        "criteria {cite1}. Reported outcomes are often anecdotal or limited to a single demonstration session rather "
+        "than systematic testing across the range of use cases the system is meant to support.\n\n"
+        "This limitation has real consequences — developers and adopters operate with incomplete evidence about how a "
+        "given system performs outside the specific conditions under which it was first demonstrated, increasing the "
+        "risk of unreliable behaviour once deployed more broadly. The problem, therefore, is not merely academic; it "
+        "carries direct implications for how such systems should be specified, built, and tested. This study is "
+        "designed to address that gap directly by producing a working system and subjecting it to structured, "
+        "repeatable testing against clearly defined requirements."
+    ),
+    (
+        "A recurring difficulty in published accounts of systems related to {topic} is that they are frequently "
+        "described without a clearly documented requirements baseline, or without test results detailed enough to "
+        "support a fair comparison against alternative designs {cite1}. A single successful demonstration is often "
+        "presented as sufficient evidence of a system's adequacy.\n\n"
+        "That gap matters in practice. Developers and adopters working from such reports are left to estimate how a "
+        "system will behave outside the narrow conditions under which it was first shown to work, increasing the risk "
+        "that a design judged adequate in one setting performs unreliably in another. This study addresses that gap "
+        "directly, producing a working system together with a structured, repeatable evaluation against clearly "
+        "defined requirements and acceptance criteria."
+    ),
+    (
+        "Despite the volume of work published on systems related to {topic}, comparatively little of it offers a "
+        "level of testing detail sufficient to support confident replication or fair comparison {cite1}. Reported "
+        "outcomes are often presented without the requirements, use cases, or test scenarios needed to interpret them "
+        "rigorously.\n\n"
+        "The practical cost of this gap falls on exactly the people best placed to build on existing work: developers "
+        "and researchers attempting to extend or compare systems are forced to re-derive a baseline requirements and "
+        "testing approach from scratch, slowing progress across the field. This study is designed to close that gap "
+        "by subjecting a working system to systematic, clearly documented testing against defined requirements."
+    ),
+    (
+        "However promising the body of work on {topic} may appear, it offers strikingly little evidence specific to "
+        "the data volumes, user workflows, and deployment constraints a given system would actually face in practice "
+        "{cite1}. Most published systems are validated under conditions chosen for convenience rather than "
+        "representativeness, and their behaviour outside those conditions is rarely tested rather than assumed.\n\n"
+        "The cost of that assumption is not trivial: where real deployment conditions differ even modestly from the "
+        "conditions a system was demonstrated under, performance and reliability can degrade in ways the published "
+        "record gives no basis for anticipating. This study is designed to remove that uncertainty, generating "
+        "primary, requirements-grounded test evidence rather than extrapolating from demonstrations run under more "
+        "convenient circumstances."
+    ),
+)
+
 _PROBLEM_VARIANTS_DOCTRINAL: tuple[str, ...] = (
     (
         "Despite sustained scholarly engagement with {topic}, a critical gap persists in the literature: there is "
@@ -6087,6 +6449,39 @@ _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_DISCUSSION_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "The findings are broadly consistent with the design expectations established in the literature review "
+        "{cite1}. The observed system performance confirms that {topic} is a multidimensional engineering problem "
+        "shaped by requirements clarity, architectural choices, and the range of usage conditions under which the "
+        "system is tested.\n\n"
+        "Where deviations from prior implementations are observed, these may be attributed to differences in "
+        "technology stack, deployment environment, or evaluation methodology. In particular, the relatively stronger "
+        "performance recorded in this study compared to earlier work may reflect refinements made during iterative "
+        "testing, or the use of a more tightly controlled set of test scenarios."
+    ),
+    (
+        "On the whole, the observed system behaviour aligns with what the design rationale set out in Chapter 3 "
+        "would lead one to expect {cite1}. {topic} emerges from this evidence as a multidimensional engineering "
+        "problem — one in which requirements clarity, architectural choices, and usage-condition range interact "
+        "rather than operate independently.\n\n"
+        "Where the present results diverge from earlier implementations, the most plausible explanation lies in "
+        "features specific to this study's test setup: refinements introduced during iterative testing, or a more "
+        "tightly controlled set of test scenarios than comparable prior work. These are differences of degree rather "
+        "than of kind, and they do not undermine the overall pattern so much as refine it."
+    ),
+    (
+        "Considered together, the results sit comfortably within the range of outcomes the design literature on "
+        "{topic} would predict {cite1}, even though testing was not designed simply to reproduce earlier results. "
+        "Requirements clarity, architectural choices, and usage-condition range again emerge as the factors that "
+        "best explain variation in measured system performance across test runs.\n\n"
+        "Where this study's findings depart from earlier implementations, the departure is more plausibly explained "
+        "by differences in test environment configuration or evaluation timing than by any fundamental disagreement "
+        "about the underlying engineering problem. Read this way, the discrepancies sharpen the existing picture "
+        "rather than contradict it."
+    ),
+)
+
 _DISCUSSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
     (
         "The themes identified are broadly consistent with the theoretical positions advanced in the literature "
@@ -6116,6 +6511,132 @@ _DISCUSSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "differences in source selection or interpretive emphasis than by any fundamental disagreement about the "
         "underlying doctrinal question. Read this way, the discrepancies sharpen the existing picture rather than "
         "contradict it."
+    ),
+)
+
+# Per-objective Chapter 4 "Findings"/"Presentation of Findings" interpretation paragraph —
+# the catch-all reached when a subsection title is neither "discussion" nor "presentation"/
+# "finding" (e.g. the objective text itself used as the heading, as in "4.3 Identify the
+# limitations..."). Several objective-titled subsections hit this same catch-all within one
+# chapter, so (unlike most other genre branches in this dispatcher) it must vary by
+# `subsection`, not just by genre, or every objective renders the exact same paragraph.
+_OBJECTIVE_FINDINGS_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "The analysis provides source-level evidence on the recurring lines of argument, highlighting both "
+        "dominant positions and areas of genuine disagreement across the corpus. Close reading shows that some "
+        "sources advance a settled view, while others reveal unresolved tensions that warrant further scholarly "
+        "attention.\n\n"
+        "The discussion links these recurring arguments to the study context and prior commentary, explaining how "
+        "jurisdiction, period, and disciplinary orientation shape the strength and direction of each position. "
+        "This interpretation provides a basis for the recommendations that follow and for refinement of future "
+        "inquiry."
+    ),
+    (
+        "Close reading of the corpus relevant to this objective surfaces a recurring set of positions, alongside "
+        "genuine points of disagreement that a single-narrative summary would obscure. Some sources converge on "
+        "settled doctrine, while others expose tensions that remain unresolved in the literature.\n\n"
+        "These patterns are read here against the study context established earlier, with jurisdiction, period, "
+        "and disciplinary orientation offered as the most plausible explanations for why authorities diverge as "
+        "they do. The resulting picture grounds the recommendations developed later in this chapter."
+    ),
+    (
+        "Evidence bearing on this objective is drawn together from across the reviewed corpus, distinguishing "
+        "between positions that command broad authoritative support and those that remain genuinely contested. "
+        "This distinction matters for how much interpretive weight each position can bear.\n\n"
+        "Read in light of the study's context, the pattern of agreement and disagreement traces back to "
+        "differences in jurisdiction, period, and disciplinary orientation rather than to any single decisive "
+        "authority. The interpretation offered here informs the conclusions drawn for this objective."
+    ),
+)
+
+_OBJECTIVE_FINDINGS_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends "
+        "and areas of divergence across indicators. Descriptive and comparative interpretation shows that some "
+        "dimensions record stronger outcomes, while others reveal implementation and performance gaps that "
+        "warrant targeted intervention.\n\n"
+        "The discussion links these observed patterns to the study context and prior literature, explaining how "
+        "institutional conditions, process maturity, and governance quality shape the magnitude and direction of "
+        "outcomes. This interpretation provides an evidence base for practical recommendations and for refinement "
+        "of future inquiry."
+    ),
+    (
+        "Evidence specific to this objective points to a consistent direction across most indicators, with a "
+        "smaller set of measures diverging enough to warrant separate comment rather than being averaged away. "
+        "The stronger-performing dimensions and the weaker ones are interpreted together rather than in "
+        "isolation.\n\n"
+        "Set against the institutional context described earlier, this pattern is most plausibly explained by "
+        "differences in process maturity and governance quality across the cases examined, rather than by chance "
+        "variation alone. This reading feeds directly into the recommendations developed later in this chapter."
+    ),
+    (
+        "For this objective, the data show a broadly consistent trend punctuated by a handful of indicators that "
+        "depart from it — a pattern worth interpreting on its own terms rather than treating as noise. Both the "
+        "convergent and divergent results carry information about where the underlying processes are working as "
+        "intended and where they are not.\n\n"
+        "Considered alongside prior literature and the institutional conditions surrounding this study, the "
+        "divergence is best read as a signal of uneven process maturity rather than a contradiction of the "
+        "overall trend. This grounds the practical recommendations offered for this objective."
+    ),
+)
+
+_OBJECTIVE_FINDINGS_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "The results provide objective-level evidence on the observed system behaviour, highlighting both "
+        "dominant trends and areas of divergence across test scenarios. Descriptive and comparative interpretation "
+        "shows that some functional areas record stronger outcomes, while others reveal implementation or "
+        "performance gaps that warrant targeted refinement.\n\n"
+        "The discussion links these observed patterns to the study context and prior implementations, explaining "
+        "how requirements clarity, architectural choices, and test coverage shape the magnitude and direction of "
+        "outcomes. This interpretation provides an evidence base for practical recommendations and for refinement "
+        "of future development."
+    ),
+    (
+        "Test evidence specific to this objective points to consistently favourable behaviour across most "
+        "scenarios, with a smaller set of cases departing from that trend clearly enough to warrant separate "
+        "comment rather than being smoothed over in an aggregate figure.\n\n"
+        "Read against the requirements and architecture established in Chapter 3, this pattern is best explained "
+        "by where requirements were most precisely specified and where test coverage was most thorough, rather "
+        "than by chance variation in the test runs themselves. This reading directly informs the recommendations "
+        "developed later in this chapter."
+    ),
+    (
+        "For this objective, the developed system meets its defined targets in the great majority of test "
+        "scenarios, with the exceptions concentrated in a recognisable subset of cases rather than scattered "
+        "randomly across the test suite. Both the passing and the divergent cases carry diagnostic value.\n\n"
+        "Considered alongside the design rationale and prior implementations referenced earlier, the divergent "
+        "cases are most plausibly attributable to specific architectural or implementation choices rather than to "
+        "a fundamental flaw in the overall approach — a distinction that shapes the refinements recommended for "
+        "this objective."
+    ),
+)
+
+_OBJECTIVE_FINDINGS_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "The results provide objective-level evidence on the observed performance, highlighting both dominant "
+        "trends and areas of divergence across test scenarios. Descriptive and comparative interpretation shows "
+        "that some configurations record stronger outcomes, while others reveal performance gaps that warrant "
+        "targeted refinement.\n\n"
+        "The discussion links these observed patterns to the study context and prior implementations, explaining "
+        "how component selection, test conditions, and design maturity shape the magnitude and direction of "
+        "outcomes. This interpretation provides an evidence base for practical recommendations and for refinement "
+        "of future development."
+    ),
+    (
+        "Test evidence specific to this objective shows a broadly consistent performance trend, with a smaller "
+        "set of configurations diverging clearly enough to warrant individual comment rather than being absorbed "
+        "into an averaged result.\n\n"
+        "Set against the design rationale established in Chapter 3, the divergent configurations are most "
+        "plausibly explained by differences in component selection and test conditions rather than by measurement "
+        "noise alone. This reading directly informs the recommendations developed later in this chapter."
+    ),
+    (
+        "For this objective, measured performance meets the defined targets across the great majority of test "
+        "configurations, with departures concentrated in a recognisable subset of cases rather than distributed "
+        "randomly. Both the passing and the divergent configurations carry diagnostic value for the design.\n\n"
+        "Read alongside prior implementations and the design maturity of the test setup, the divergent cases point "
+        "to specific component or configuration choices rather than a fundamental flaw in the overall design — a "
+        "distinction that shapes the refinements recommended for this objective."
     ),
 )
 
@@ -6173,6 +6694,38 @@ _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "through a design capable of measurable, repeatable performance once the relevant variables are properly "
         "controlled. Stronger, more consistent results consistently track careful component selection, calibration, "
         "and control-strategy tuning, while weaker results track naive or untuned implementations.\n\n"
+        "This conclusion is not an isolated reading of the present test data; it converges with comparable work "
+        "consulted throughout the dissertation {cite1}, reinforcing the case that disciplined attention to design "
+        "detail and systematic testing is what ultimately determines reliable system performance."
+    ),
+)
+
+_CONCLUSION_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "Based on the test evidence presented, the study concludes that {topic} can be addressed by a system that "
+        "delivers measurable, repeatable performance under the evaluated conditions. The data confirm that careful "
+        "requirements analysis, sound architectural design, and systematic testing yield substantially stronger and "
+        "more reliable results than an ad hoc or untested implementation.\n\n"
+        "The study's conclusions are grounded in primary test data and corroborated by comparable work in the "
+        "literature {cite1}, lending confidence to the interpretation that targeted attention to design detail and "
+        "systematic testing is essential for achieving a reliable, maintainable system."
+    ),
+    (
+        "Taken as a whole, the test evidence gathered in this study supports the conclusion that {topic} can be "
+        "addressed through a system capable of measurable, repeatable performance under the conditions evaluated. "
+        "Where requirements analysis, architectural design, and testing receive deliberate attention, the results "
+        "obtained are markedly stronger and more reliable than those of an ad hoc or untested implementation.\n\n"
+        "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, "
+        "comparable work reviewed earlier in the dissertation {cite1}. Together, they support the view that careful "
+        "attention to design detail and systematic testing is a precondition for achieving a reliable, maintainable "
+        "system."
+    ),
+    (
+        "In summary, the evidence assembled here points clearly to the conclusion that {topic} can be resolved "
+        "through a system capable of measurable, repeatable performance once the relevant requirements are properly "
+        "captured and tested against. Stronger, more reliable results consistently track careful requirements "
+        "analysis, architectural design, and systematic testing, while weaker results track ad hoc or untested "
+        "implementations.\n\n"
         "This conclusion is not an isolated reading of the present test data; it converges with comparable work "
         "consulted throughout the dissertation {cite1}, reinforcing the case that disciplined attention to design "
         "detail and systematic testing is what ultimately determines reliable system performance."
@@ -6283,6 +6836,45 @@ _RECOMMENDATION_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+_RECOMMENDATION_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "Based on the findings, the following recommendations are offered to developers, students, and future "
+        "researchers:\n\n"
+        "1. Future development should invest in a more detailed requirements specification where the current system "
+        "shows the greatest gaps between expected and observed behaviour.\n"
+        "2. The system architecture should be reviewed periodically to ensure it remains well matched to growth in "
+        "data volume and user load encountered in deployment.\n"
+        "3. Developers should document test cases and results in detail to support reproducibility and comparison "
+        "with future systems.\n"
+        "4. Future work should evaluate the system across a wider range of usage scenarios and over longer operating "
+        "periods to assess long-term reliability and maintainability."
+    ),
+    (
+        "The test evidence generated by this study points toward several concrete actions for developers, students, "
+        "and future researchers:\n\n"
+        "1. Subsequent builds should prioritise a more detailed requirements specification in exactly the areas "
+        "where this system showed the greatest gap between expected and observed behaviour.\n"
+        "2. The system architecture should be revisited periodically to confirm it remains well matched as data "
+        "volume and user load grow.\n"
+        "3. Developers should record test cases, datasets, and results in enough detail to support independent "
+        "reproduction and fair comparison with future systems.\n"
+        "4. Future work should extend testing to a wider range of usage scenarios and longer operating periods to "
+        "establish long-term reliability and maintainability."
+    ),
+    (
+        "In light of the findings, developers, students, and future researchers are encouraged to act on the "
+        "following:\n\n"
+        "1. Future iterations should target a more detailed requirements specification in the areas where the gap "
+        "between expected and observed behaviour was greatest.\n"
+        "2. The system architecture should be reassessed at regular intervals so that it stays matched to evolving "
+        "data volume and user load.\n"
+        "3. Developers should keep detailed records of test cases and results to support reproducibility and fair "
+        "comparison with later systems.\n"
+        "4. Future work should broaden testing to cover a wider range of usage scenarios and longer operating "
+        "periods to establish long-term reliability and maintainability."
+    ),
+)
+
 _RECOMMENDATION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
     (
         "Based on the analysis, the following recommendations are offered to scholars, practitioners, and policymakers:\n\n"
@@ -6326,6 +6918,7 @@ def _expand_fallback_text(
     subsection: str,
     target_words: int,
     pool: tuple[str, ...] = _FALLBACK_ELABORATIONS,
+    usage_counts: dict[int, int] | None = None,
 ) -> str:
     """Lightly pad deterministic fallback prose toward target_words with generic elaboration.
 
@@ -6337,7 +6930,9 @@ def _expand_fallback_text(
     already contributed: undershooting target_words is preferable to diluting the
     subsection with repetitive boilerplate. `pool` lets personal/reflective sections
     (dedication, acknowledgements) pad with appropriately-toned text instead of
-    academic-register elaboration.
+    academic-register elaboration. `usage_counts`, when provided, is a mutable
+    index -> times-used map shared across every subsection of the same document/pool — it
+    lets the caller spread draws evenly across the whole pool (see the sort step below).
     """
     base_words = _word_count(body)
     word_ceiling = int(target_words * 0.85)
@@ -6361,16 +6956,31 @@ def _expand_fallback_text(
         stride = 1 + (zlib.crc32(f"{subsection}|stride".encode()) % (pool_size - 1))
         while math.gcd(stride, pool_size) != 1:
             stride += 1
-    rotated = tuple(pool[(offset + i * stride) % pool_size] for i in range(pool_size))
+    rotated_indices = [(offset + i * stride) % pool_size for i in range(pool_size)]
+    # Per-subsection rotation alone still collides often: with ~20 entries shared across a
+    # 30+ subsection dissertation, many subsections independently land on the same index by
+    # chance, rendering the identical paragraph verbatim in unrelated chapters. A *binary*
+    # used/unused flag only postpones this — once every entry has been drawn once (which
+    # happens well before the document is half done), it degenerates back to plain
+    # per-subsection rotation and the collisions return. Sorting by how many times an index
+    # has been used so far (stable, so ties keep this subsection's own permutation order)
+    # keeps every subsequent draw gravitating toward whichever entries are *least* used
+    # across the whole document, bounding the worst-case repeat count at
+    # ceil(total draws / pool_size) instead of letting a handful of indices absorb most of
+    # the demand.
+    if usage_counts is not None:
+        rotated_indices.sort(key=lambda idx: usage_counts.get(idx, 0))
     max_paragraphs = 3
     parts = [body]
     added_words = 0
-    for template in rotated[:max_paragraphs]:
+    for idx in rotated_indices[:max_paragraphs]:
         if added_words >= max_added_words:
             break
-        paragraph = template.format(topic=topic, section_title=section_title, subsection=subsection)
+        paragraph = pool[idx].format(topic=topic, section_title=section_title, subsection=subsection)
         parts.append(paragraph)
         added_words += _word_count(paragraph)
+        if usage_counts is not None:
+            usage_counts[idx] = usage_counts.get(idx, 0) + 1
     return "\n\n".join(parts)
 
 
@@ -6383,6 +6993,7 @@ def _fallback_subsection_text(
     research_design: str = "",
     specific_design: str | None = None,
     sample_size: int | None = None,
+    document: Any | None = None,
 ) -> str:
     """Return substantive academic fallback text when model generation fails.
 
@@ -6390,6 +7001,9 @@ def _fallback_subsection_text(
     is configured), falls back to deterministic per-topic text and pads it toward
     target_words so total document length stays consistent with the chapter's target —
     the deterministic branches alone are far too short to hit a 50-100 page dissertation.
+
+    `document`, when passed, lets padding paragraphs avoid repeating across the many
+    subsections of the same document — see `_expand_fallback_text`'s `used_indices`.
     """
     sub_lower = subsection.strip().lower()
     is_personal = "dedication" in sub_lower or "acknowledgement" in sub_lower or "acknowledgment" in sub_lower
@@ -6428,9 +7042,24 @@ def _fallback_subsection_text(
         pool = _FALLBACK_PERSONAL_ELABORATIONS
     elif _uses_human_respondents(topic, "", objectives):
         pool = _FALLBACK_ELABORATIONS
+    elif _is_system_build_topic(topic, "", objectives):
+        pool = _FALLBACK_SYSTEM_BUILD_ELABORATIONS
     else:
         pool = _FALLBACK_TECHNICAL_ELABORATIONS
-    return _expand_fallback_text(body, topic, section_title, subsection, target_words, pool=pool)
+    usage_counts = None
+    if document is not None:
+        registry = getattr(document, "_elaboration_usage_counts", None)
+        if registry is None:
+            registry = {}
+            try:
+                document._elaboration_usage_counts = registry
+            except Exception:
+                registry = None
+        if registry is not None:
+            usage_counts = registry.setdefault(id(pool), {})
+    return _expand_fallback_text(
+        body, topic, section_title, subsection, target_words, pool=pool, usage_counts=usage_counts,
+    )
 
 
 def _fallback_subsection_body(
@@ -6444,6 +7073,7 @@ def _fallback_subsection_body(
 ) -> str:
     """Deterministic, per-topic placeholder text for one dissertation subsection."""
     survey_based = _uses_human_respondents(topic, "", objectives)
+    is_system_build = (not survey_based) and _is_system_build_topic(topic, "", objectives)
     is_doctrinal = _is_doctrinal_topic(topic, "", objectives)
     is_qualitative = research_design == "qualitative"
     is_mixed = research_design == "mixed"
@@ -6645,14 +7275,18 @@ def _fallback_subsection_body(
     # ── Chapter 1 Introduction subsections ─────────────────────────────────
     if "background" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
         pool = _BACKGROUND_VARIANTS_DOCTRINAL if is_doctrinal else (
-            _BACKGROUND_VARIANTS_SURVEY if survey_based else _BACKGROUND_VARIANTS_TECHNICAL
+            _BACKGROUND_VARIANTS_SURVEY if survey_based else (
+                _BACKGROUND_VARIANTS_SYSTEM_BUILD if is_system_build else _BACKGROUND_VARIANTS_TECHNICAL
+            )
         )
         cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|background", k=1)[0])
         return _seeded_pick(topic, pool).format(topic=topic, cite1=cite1)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
         pool = _PROBLEM_VARIANTS_DOCTRINAL if is_doctrinal else (
-            _PROBLEM_VARIANTS_SURVEY if survey_based else _PROBLEM_VARIANTS_TECHNICAL
+            _PROBLEM_VARIANTS_SURVEY if survey_based else (
+                _PROBLEM_VARIANTS_SYSTEM_BUILD if is_system_build else _PROBLEM_VARIANTS_TECHNICAL
+            )
         )
         cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|problem", k=1)[0])
         return _seeded_pick(f"{topic}|problem", pool).format(topic=topic, cite1=cite1)
@@ -6816,6 +7450,36 @@ def _fallback_subsection_body(
                 "framework and the empirical hypotheses examined later in the study."
             )
         if "theoretical" in sub_lower or "theory" in sub_lower or "theories" in sub_lower:
+            # When the topic matches a recognizable named theory (see _select_named_theory),
+            # the chapter heading already names it (_default_chapter2_sections bakes the name
+            # into the section title) — the body must describe that same theory's actual
+            # constructs, not generic genre boilerplate that would contradict the heading
+            # (e.g. a "Technology Acceptance Model" heading followed by body text about
+            # feedback control theory and sensor models).
+            named_theory = _select_named_theory(topic, "", objectives)
+            if named_theory:
+                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
+                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+
+                def _join_items(items: list[str]) -> str:
+                    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f", and {items[-1]}"
+
+                left_items = _join_items(named_theory["left_items"])
+                middle_items = _join_items(named_theory["middle_items"])
+                right_items = _join_items(named_theory["right_items"])
+                return (
+                    f"This section presents {named_theory['name']} as the theoretical lens guiding the study of "
+                    f"{topic}. The framework was selected because its core constructs map directly onto the "
+                    "relationships this study sets out to examine, offering more explanatory traction than a "
+                    "generic or loosely related alternative.\n\n"
+                    f"{named_theory['name']} links three sets of constructs: {named_theory['left_label'].lower()} "
+                    f"such as {left_items} {c1}; the central {named_theory['middle_label'].lower()}, namely "
+                    f"{middle_items}; and the resulting {named_theory['right_label'].lower()}, captured here as "
+                    f"{right_items} {c2}. Applied to {topic}, the framework suggests that "
+                    f"{named_theory['left_label'].lower()} shape the {named_theory['middle_label'].lower()}, which "
+                    f"in turn determines the {named_theory['right_label'].lower()} of central interest to this "
+                    "study."
+                )
             if is_doctrinal:
                 c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
                 c1, c2 = _citation_paren(c1), _citation_paren(c2)
@@ -7355,6 +8019,80 @@ def _fallback_subsection_body(
                 "and tested, so that the results reported in Chapter 4 can be properly interpreted and, where "
                 "appropriate, replicated."
             )
+        if is_system_build and "existing system" in sub_lower:
+            return (
+                f"Prior to designing the proposed system, the existing approach to {topic} was reviewed in order "
+                "to identify its key limitations and the specific gap the new system is intended to close. This "
+                "existing approach typically relies on manual or fragmented processes — paper records, "
+                "spreadsheets, or disconnected software tools — that make it difficult to maintain accurate, "
+                "up-to-date, and easily searchable information.\n\n"
+                "Key weaknesses identified in the existing approach include limited accessibility, the absence of "
+                "a unified spatial or relational view of the data, slow retrieval of records, and a high risk of "
+                "data duplication or loss. These weaknesses directly motivate the functional and non-functional "
+                "requirements defined in the next section."
+            )
+        if is_system_build and "requirement" in sub_lower:
+            return (
+                "Functional and non-functional requirements for the system were derived from the research "
+                "objectives set out in Chapter 1 and from the limitations of the existing approach identified "
+                "above. Functional requirements specify what the system must do — for example, allowing users "
+                "to create, search, update, and remove records, and to view relevant information through an "
+                "appropriate interface — while non-functional requirements specify the quality attributes the "
+                "system must exhibit, such as usability, response time, security, and reliability under expected "
+                "load.\n\n"
+                "Requirements were prioritised according to their importance to the core research objectives, "
+                "with essential requirements implemented first and lower-priority requirements treated as "
+                "candidates for future enhancement. This prioritisation is reflected directly in the system "
+                "design and architecture presented in the next section."
+            )
+        if is_system_build and ("architecture" in sub_lower or "system design" in sub_lower):
+            return (
+                "The system was designed around a layered architecture comprising a presentation layer "
+                "responsible for user interaction, an application/business-logic layer responsible for "
+                "processing requests and enforcing rules, and a data layer responsible for persistent storage "
+                "and retrieval. This separation of concerns supports maintainability and allows individual "
+                "layers to be modified or extended with minimal impact on the others.\n\n"
+                "The architecture diagram below summarises how these layers interact, alongside the principal "
+                "external services or data sources the system depends on. Each component was scoped directly "
+                "against the functional requirements defined above to ensure that no part of the design exceeds "
+                "what the research objectives actually require."
+            )
+        if is_system_build and "database" in sub_lower:
+            return (
+                f"The system's underlying data was modelled using an entity-relationship approach, identifying "
+                f"the principal entities relevant to {topic}, their attributes, and the relationships between "
+                "them. Each entity was normalised to reduce data redundancy and protect the integrity of stored "
+                "records as the system is used and updated over time.\n\n"
+                "Key design decisions — including primary and foreign key relationships, indexing of frequently "
+                "queried fields, and the choice between relational and spatial data structures where geographic "
+                "information is involved — were guided directly by the access patterns implied by the functional "
+                "requirements, ensuring the database can support the system's expected query volume and "
+                "response-time targets."
+            )
+        if is_system_build and "tools and technolog" in sub_lower:
+            return (
+                "The system was implemented using a combination of established, well-documented technologies "
+                "selected for their suitability to the project's requirements and the team's familiarity with "
+                "them. This typically spans a front-end framework for building the user interface, a back-end "
+                "framework or language for implementing application logic, a database management system for "
+                "persistent storage, and, where the system involves geographic or location-based functionality, "
+                "a mapping or geographic information system (GIS) library or service for rendering and querying "
+                "spatial data.\n\n"
+                "Version control and a structured development workflow were used throughout implementation to "
+                "track changes, support collaboration, and make it possible to revert or compare design "
+                "decisions made over the course of the project."
+            )
+        if is_system_build and ("testing strategy" in sub_lower or "system testing" in sub_lower):
+            return (
+                "The developed system was evaluated using a structured testing strategy comprising unit testing "
+                "of individual components, integration testing of the interactions between components, and "
+                "system or user-acceptance testing against the functional and non-functional requirements "
+                "defined in this chapter. Test cases were derived directly from the requirements, with both "
+                "typical and edge-case scenarios included to assess robustness.\n\n"
+                "Results of this testing process, including the extent to which the system met its defined "
+                "performance and usability targets, are presented and discussed in Chapter 4 in relation to the "
+                "research objectives set out in Chapter 1."
+            )
         if "research design" in sub_lower or sub_lower.strip().endswith("design"):
             return (
                 "A design-and-build, experimental research approach was adopted, consistent with the engineering "
@@ -7427,6 +8165,16 @@ def _fallback_subsection_body(
                 "identified and discussed so that the findings can be applied responsibly."
             )
         if "summary" in sub_lower:
+            if is_system_build:
+                return (
+                    f"This chapter has described the research design adopted for developing and evaluating the "
+                    f"system for {topic}, including a review of the existing approach, the functional and "
+                    "non-functional requirements derived from it, the resulting system design and database "
+                    "structure, the tools and technologies used in implementation, and the strategy used to "
+                    "test the completed system.\n\n"
+                    "The next chapter presents and discusses the results obtained from applying this "
+                    "methodology, organised around the research objectives set out in Chapter 1."
+                )
             return (
                 f"This chapter has described the research design, test scenarios and configurations, data "
                 f"collection procedures, and analysis techniques used to evaluate the system developed for "
@@ -7562,38 +8310,19 @@ def _fallback_subsection_body(
             )
         if "discussion" in sub_lower:
             pool = _DISCUSSION_VARIANTS_DOCTRINAL if is_doctrinal else (
-                _DISCUSSION_VARIANTS_SURVEY if survey_based else _DISCUSSION_VARIANTS_TECHNICAL
+                _DISCUSSION_VARIANTS_SURVEY if survey_based else (
+                    _DISCUSSION_VARIANTS_SYSTEM_BUILD if is_system_build else _DISCUSSION_VARIANTS_TECHNICAL
+                )
             )
             cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|discussion", k=1)[0])
             return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic, cite1=cite1)
         if is_doctrinal:
-            return (
-                "The analysis provides source-level evidence on the recurring lines of argument, highlighting both "
-                "dominant positions and areas of genuine disagreement across the corpus. Close reading shows that "
-                "some sources advance a settled view, while others reveal unresolved tensions that warrant further "
-                "scholarly attention.\n\n"
-                "The discussion links these recurring arguments to the study context and prior commentary, "
-                "explaining how jurisdiction, period, and disciplinary orientation shape the strength and direction "
-                "of each position. This interpretation provides a basis for the recommendations that follow and for "
-                "refinement of future inquiry."
-            )
+            return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_DOCTRINAL).format(topic=topic)
         if survey_based:
-            return (
-                "The results provide objective-level evidence on the observed patterns, highlighting both dominant trends and areas of divergence across indicators. "
-                "Descriptive and comparative interpretation shows that some dimensions record stronger outcomes, while others reveal implementation and performance gaps "
-                "that warrant targeted intervention.\n\n"
-                "The discussion links these observed patterns to the study context and prior literature, explaining how institutional conditions, process maturity, "
-                "and governance quality shape the magnitude and direction of outcomes. This interpretation provides an evidence base for practical recommendations "
-                "and for refinement of future inquiry."
-            )
-        return (
-            "The results provide objective-level evidence on the observed performance, highlighting both dominant trends and areas of divergence across test "
-            "scenarios. Descriptive and comparative interpretation shows that some configurations record stronger outcomes, while others reveal performance "
-            "gaps that warrant targeted refinement.\n\n"
-            "The discussion links these observed patterns to the study context and prior implementations, explaining how component selection, test "
-            "conditions, and design maturity shape the magnitude and direction of outcomes. This interpretation provides an evidence base for practical "
-            "recommendations and for refinement of future development."
-        )
+            return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_SURVEY).format(topic=topic)
+        if is_system_build:
+            return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_SYSTEM_BUILD).format(topic=topic)
+        return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_TECHNICAL).format(topic=topic)
 
     # ── Chapter 5 / Conclusion subsections ────────────────────────────────
     if "chapter 5" in sec or "conclusion" in sec or "recommendation" in sec:
@@ -7639,6 +8368,17 @@ def _fallback_subsection_body(
                     "categories consistently reported superior outcomes across all measured dimensions.\n\n"
                     "These findings collectively support the study's central argument and align with the theoretical propositions advanced in the conceptual framework."
                 )
+            if is_system_build:
+                return (
+                    f"The study set out to examine {topic}, guided by three primary research objectives. "
+                    "Evaluation of the developed system generated the following key findings: first, the system met its "
+                    "defined functional and non-functional requirements across the majority of test scenarios; second, "
+                    "specific design choices — particularly the system architecture and database design — measurably "
+                    "influenced the strength of observed performance gains; and third, performance remained consistent "
+                    "across repeated test runs, indicating a reliable and reproducible result.\n\n"
+                    "These findings collectively support the study's central argument and align with the technical propositions "
+                    "advanced in the design framework presented in Chapter 3."
+                )
             return (
                 f"The study set out to examine {topic}, guided by three primary research objectives. "
                 "Evaluation of the developed system generated the following key findings: first, the system achieved its "
@@ -7651,13 +8391,17 @@ def _fallback_subsection_body(
             )
         if "conclusion" in sub_lower:
             pool = _CONCLUSION_VARIANTS_DOCTRINAL if is_doctrinal else (
-                _CONCLUSION_VARIANTS_SURVEY if survey_based else _CONCLUSION_VARIANTS_TECHNICAL
+                _CONCLUSION_VARIANTS_SURVEY if survey_based else (
+                    _CONCLUSION_VARIANTS_SYSTEM_BUILD if is_system_build else _CONCLUSION_VARIANTS_TECHNICAL
+                )
             )
             cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conclusion", k=1)[0])
             return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic, cite1=cite1)
         if "recommendation" in sub_lower:
             pool = _RECOMMENDATION_VARIANTS_DOCTRINAL if is_doctrinal else (
-                _RECOMMENDATION_VARIANTS_SURVEY if survey_based else _RECOMMENDATION_VARIANTS_TECHNICAL
+                _RECOMMENDATION_VARIANTS_SURVEY if survey_based else (
+                    _RECOMMENDATION_VARIANTS_SYSTEM_BUILD if is_system_build else _RECOMMENDATION_VARIANTS_TECHNICAL
+                )
             )
             return _seeded_pick(f"{topic}|recommendation", pool).format(topic=topic)
         if "limitation" in sub_lower:
@@ -7679,6 +8423,17 @@ def _fallback_subsection_body(
                     "Second, the sample was drawn from a specific organisational context, which may limit generalisability to other sectors or regions.\n\n"
                     "Third, self-reported data are susceptible to response bias, despite the use of validated instruments and anonymity assurances. "
                     "Future studies should address these limitations through longitudinal panels, multi-sector samples, and mixed-methods triangulation."
+                )
+            if is_system_build:
+                return (
+                    "This study is subject to several limitations that should be considered when interpreting its findings. "
+                    "First, testing was conducted against a defined and necessarily limited set of requirements and use cases; behaviour under "
+                    "usage patterns outside this range cannot be assumed without further testing. Second, the evaluation relied on the specific "
+                    "dataset and deployment environment used during this study, which may limit generalisability to production-scale data "
+                    "volumes or alternative hosting environments.\n\n"
+                    "Third, functional and performance testing, despite being systematic, cannot exhaustively cover every possible input or "
+                    "usage combination. Future studies should address these limitations through testing across a broader range of datasets, "
+                    "deployment environments, and longer-duration production trials."
                 )
             return (
                 "This study is subject to several limitations that should be considered when interpreting its findings. "
@@ -7709,6 +8464,18 @@ def _fallback_subsection_body(
                     "2. Comparative cross-national research would test whether findings generalise across different regulatory and cultural environments.\n"
                     "3. Qualitative inquiry into lived experiences of practitioners would deepen understanding of the mechanisms and barriers identified here.\n"
                     "4. Studies incorporating objective performance metrics alongside perceptual data would strengthen construct validity."
+                )
+            if is_system_build:
+                return (
+                    "Several avenues merit further investigation beyond the scope of this study:\n\n"
+                    f"1. Extended trials evaluating {topic} under production-scale data volumes and user load would clarify the limits of "
+                    "reliable operation.\n"
+                    "2. Comparative studies against alternative architectures or technology stacks would test whether the findings generalise "
+                    "across different design approaches.\n"
+                    "3. Longer-duration deployment monitoring would deepen understanding of maintenance burden and failure modes not visible "
+                    "in short test cycles.\n"
+                    "4. Studies incorporating additional functional modules alongside the current feature set would strengthen the system's "
+                    "completeness and practical value."
                 )
             return (
                 "Several avenues merit further investigation beyond the scope of this study:\n\n"
@@ -7796,6 +8563,19 @@ def _fallback_subsection_body(
                 "[SPSS/R output tables from regression, correlation, and reliability analysis.]\n\n"
                 "Appendix E: Informed Consent Form\n"
                 "[Consent document provided to all research participants before data collection commenced.]"
+            )
+        if is_system_build:
+            return (
+                "Appendix A: System Design Specifications\n"
+                "[Detailed technical specifications, architecture diagrams, and database schema for the developed system.]\n\n"
+                "Appendix B: Source Code / Implementation Listing\n"
+                "[Key source code modules, configuration files, or build scripts used in the implementation.]\n\n"
+                "Appendix C: Test Plan and Test Cases\n"
+                "[Step-by-step test cases, expected versus actual results, and trial conditions used during evaluation.]\n\n"
+                "Appendix D: Raw Performance Data\n"
+                "[Raw measurement logs and statistical output from functional and performance testing.]\n\n"
+                "Appendix E: Sample User Interface Screenshots\n"
+                "[Representative screenshots of the developed system's key screens and workflows.]"
             )
         return (
             "Appendix A: System Design Specifications\n"
@@ -8564,7 +9344,11 @@ def _chapter_nodes_for_generation(
     if "chapter 4" in chapter_title.lower():
         return _plan_chapter4_structure([], research_design, objectives, topic, message)
 
-    nodes = [_normalize_subsection_node(s) for s in chapter_template.get("subsections", [])]
+    if chapter_number == 3 and _is_system_build_topic(topic, message, objectives):
+        subsections = _SYSTEM_BUILD_CHAPTER3_SUBSECTIONS
+    else:
+        subsections = chapter_template.get("subsections", [])
+    nodes = [_normalize_subsection_node(s) for s in subsections]
     return _inject_standard_visuals(nodes, chapter_number, research_design)
 
 
@@ -11744,6 +12528,7 @@ def _plan_and_write_document(
                     target_words=wc,
                     research_design=design,
                     sample_size=_infer_sample_size(document),
+                    document=document,
                 )
 
             _done(plan, plan_cursor)
