@@ -74,6 +74,7 @@ Choose ONE intent:
 - add_chart
 - add_image
 - check_academic_quality
+- export_bibtex
 - chat
 
 Guidance:
@@ -88,6 +89,7 @@ Guidance:
 - If user asks for a full/complete/entire project with multiple chapters -> write_dissertation.
 - If user asks to generate substantial new document content, do NOT return chat; use write_document.
 - If user asks about "academic quality", "writing quality", "check writing", "writing check" -> check_academic_quality.
+- If user asks for "the bibtex", "bib file", "references file", "export references/bibliography/citations", "what sources did you use/cite" -> export_bibtex.
 - IMPORTANT: "explain X", "what is X", "what are X", "describe X", "how does X work", "tell me about X", "define X" are ALL chat — do NOT classify these as any write intent.
 - IMPORTANT: Any message that ends with "?" is a question and should be classified as chat.
 - IMPORTANT: Only classify as write_* if the user is explicitly asking to ADD or CHANGE content IN the document.
@@ -173,6 +175,10 @@ def create_execution_plan(intent: str) -> list[str]:
             "Scanning document for academic writing quality",
             "Checking vocabulary, evidence, and argument strength",
             "Generating section-by-section quality report",
+        ],
+        "export_bibtex": [
+            "Reading the document's saved bibliography",
+            "Rendering BibTeX entries",
         ],
         "add_chart": [
             "Locating target section",

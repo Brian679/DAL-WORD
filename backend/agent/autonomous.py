@@ -3834,6 +3834,54 @@ def _format_reference_list(pool: list[Any], max_items: int = 15, style: str = "A
     return "\n\n".join(entries)
 
 
+def _cited_reference_list(citation_pool: list[Any], full_text: str, style: str) -> str | None:
+    """Build the References/Bibliography body from only the sources actually cited
+    in `full_text` — the scope a real reference manager (Mendeley/EndNote) uses,
+    rather than the full retrieved search pool. Pure function: no document side effects."""
+    if not citation_pool:
+        return None
+    from .research_layer import filter_cited_pool
+
+    cited_pool = filter_cited_pool(full_text, citation_pool, style=style)
+    return _format_reference_list(cited_pool, style=style)
+
+
+def _compute_bibliography(citation_pool: list[Any], sections: list[dict[str, Any]], style: str) -> tuple[list[Any], str]:
+    """Filter citation_pool down to only what's actually cited across `sections`
+    — excluding the References/Bibliography section itself, since that section is
+    the OUTPUT of this filtering, not an input to it (its own [n]-style markers
+    would otherwise look like extra in-text citations). Returns (cited_pool, bibtex_text)."""
+    from .research_layer import build_bibtex, filter_cited_pool
+
+    body_text = "\n\n".join(
+        s.get("content", "") or "" for s in sections
+        if "reference" not in (s.get("title") or "").lower()
+        and "bibliograph" not in (s.get("title") or "").lower()
+    )
+    cited_pool = filter_cited_pool(body_text, citation_pool, style=style)
+    return cited_pool, build_bibtex(cited_pool)
+
+
+def _ensure_references_section(sections_plan: list[dict[str, Any]], do_citations: bool) -> list[dict[str, Any]]:
+    """If a document needs citation grounding but its plan has no References/
+    Bibliography section, append one. The planning LLM (or the offline
+    fallback plan, which never includes one) may omit it, but the citation
+    pipeline always needs somewhere in the body to put the compiled,
+    cited-only list — without this, it would only ever be reachable by
+    asking for "the bibtex" conversationally, not as part of the document."""
+    if not do_citations:
+        return sections_plan
+    has_one = any(
+        "reference" in (s.get("title") or "").lower() or "bibliograph" in (s.get("title") or "").lower()
+        for s in sections_plan
+    )
+    if has_one:
+        return sections_plan
+    return sections_plan + [
+        {"title": "References", "word_count": 150, "notes": "List the sources cited in this document"}
+    ]
+
+
 def _execute_subsection_nodes(
     nodes: list[dict[str, Any]],
     document: Document,
@@ -4151,7 +4199,7 @@ def _execute_subsection_nodes(
             lowered_title = title.lower()
             real_references = (
                 ("reference" in lowered_title or "bibliograph" in lowered_title)
-                and _format_reference_list(citation_pool, style=citation_style)
+                and _cited_reference_list(citation_pool, current_document_context, citation_style)
             )
             if real_references:
                 # ── References/Bibliography: built directly from verified papers ──
@@ -4560,6 +4608,18 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     }
     if any(k in text for k in _quality_kw):
         return {"intent": "check_academic_quality", "target_section": None, "topic": None}
+
+    # ── Export BibTeX / reference library ────────────────────────────────────
+    _bibtex_kw = {
+        "bibtex", "bib file", ".bib", "bib text", "biblatex",
+        "give me the references", "give me the bibliography", "export references",
+        "export bibliography", "export citations", "download references",
+        "reference manager file", "endnote file", "mendeley file", "citation file",
+        "list of sources you used", "sources you cited", "what sources did you use",
+        "what did you cite",
+    }
+    if any(k in text for k in _bibtex_kw):
+        return {"intent": "export_bibtex", "target_section": None, "topic": None}
 
     # ── Rephrase / reword / formality ───────────────────────────────────────
     _rephrase_kw = {"rephrase", "reword", "restate", "paraphrase"}
@@ -8839,7 +8899,10 @@ def run_agent(
         target_section = None
 
     # Flexible fallback: for broad/out-of-pattern queries, answer from the document in chat mode.
-    if _is_document_grounded_chat_request(effective_message):
+    # Exempt export_bibtex — "can you give me the bibtex for this?" has the exact
+    # doc-ref + question shape this catch-all targets, but it's a confident, specific
+    # classification that must not be downgraded to generic chat.
+    if intent != "export_bibtex" and _is_document_grounded_chat_request(effective_message):
         intent = "chat"
         target_section = None
 
@@ -9055,6 +9118,8 @@ def run_agent(
             reply, updated = _reduce_plagiarism_similarity(document, topic or "", plan)
         elif intent == "check_academic_quality":
             reply, updated = _check_academic_quality(document, plan)
+        elif intent == "export_bibtex":
+            reply, updated = _export_bibtex(document, plan)
         else:
             try:
                 # Always ground unknown/vague prompts in the document rather than
@@ -9486,6 +9551,42 @@ def _check_academic_quality(document: Document, plan: list) -> tuple[str, bool]:
         "or ask 'enhance [section name]' to improve a specific section's clarity and argument."
     )
     return (header + "\n\n".join(section_reports) + guide_tip, False)
+
+
+def _export_bibtex(document: Document, plan: list) -> tuple[str, bool]:
+    """
+    Return the document's already-computed BibTeX library (only sources actually
+    cited in-text, Mendeley/EndNote-style) as a chat reply. Read-only — never
+    modifies the document; the library itself is computed once, at write time.
+    """
+    content = document.content or {}
+    bibtex_text = (content.get("bibliography_bibtex") or "").strip()
+    bibliography = content.get("bibliography") or []
+    _all_done(plan)
+
+    if "bibliography_bibtex" not in content:
+        return (
+            "This document doesn't have a citation library yet — it was either generated "
+            "without source research, or doesn't need citations. Ask me to write a document "
+            "with sources, evidence, or citations and I'll build one automatically.",
+            False,
+        )
+    if not bibtex_text:
+        sources_count = content.get("_research_sources_count")
+        if not sources_count:
+            return (
+                "No sources could be retrieved for this document (e.g. no network access "
+                "during generation), so there's nothing to export yet.",
+                False,
+            )
+        return (
+            "Sources were retrieved for this document, but none could be confidently matched to "
+            "an in-text citation, so there's nothing to export yet.",
+            False,
+        )
+
+    header = f"Here's the BibTeX library for this document — {len(bibliography)} cited source(s):\n\n"
+    return (f"{header}```bibtex\n{bibtex_text}\n```", False)
 
 
 def _enhance_document(document: Document, topic: str, plan: list) -> tuple[str, bool]:
@@ -10859,13 +10960,14 @@ def writing_plan_to_flat_steps(writing_plan: dict[str, Any]) -> list[dict[str, A
     needs_todo = writing_plan.get("needs_todo", True)
     do_citations = bool(needs_todo and writing_plan.get("needs_citations", True))
     do_review = bool(needs_todo)
+    sections_plan = _ensure_references_section(writing_plan.get("sections", []), do_citations)
 
     steps: list[dict[str, Any]] = [{"step": "Planning your document", "status": "done"}]
     if do_citations:
         steps.append({"step": "Researching sources", "status": "in_progress"})
 
     first = not do_citations
-    for section in writing_plan.get("sections", []):
+    for section in sections_plan:
         title = section.get("title", "Section")
         steps.append({
             "step": f"Writing {title}",
@@ -10942,6 +11044,7 @@ def _plan_and_write_document(
         }
     do_citations = bool(needs_todo and needs_citations)
     do_review = bool(needs_todo)
+    sections_plan = _ensure_references_section(sections_plan, do_citations)
 
     logger.info(
         "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s do_citations=%s sections=%d level=%s style=%s",
@@ -10980,6 +11083,13 @@ def _plan_and_write_document(
         }
         if do_citations:
             snapshot["_research_sources_count"] = len(citation_pool)
+            from dataclasses import asdict
+
+            cited_pool, bibtex_text = _compute_bibliography(
+                citation_pool, sections, user_guidelines["citation_style"],
+            )
+            snapshot["bibliography"] = [asdict(p) for p in cited_pool]
+            snapshot["bibliography_bibtex"] = bibtex_text
         return snapshot
 
     def _broadcast_activity(label: str) -> None:
@@ -11012,7 +11122,7 @@ def _plan_and_write_document(
         real_references = (
             do_citations
             and ("reference" in lowered_title or "bibliograph" in lowered_title)
-            and _format_reference_list(citation_pool, style=user_guidelines["citation_style"])
+            and _cited_reference_list(citation_pool, context_so_far, user_guidelines["citation_style"])
         )
 
         if real_references:
@@ -11108,13 +11218,24 @@ def _plan_and_write_document(
     todo_note = " A writing plan was created and each section written in sequence." if needs_todo else ""
     citation_note = ""
     if do_citations:
-        citation_note = (
-            f" Citations were grounded in {len(citation_pool)} real sources retrieved from Crossref, "
-            "arXiv, PubMed, and Semantic Scholar."
-            if citation_pool else
-            " No verified external sources could be retrieved (e.g. no network access) — "
-            "in-text citations should be checked manually before submission."
-        )
+        cited_count = len((document.content or {}).get("bibliography") or [])
+        if cited_count:
+            citation_note = (
+                f" {cited_count} of {len(citation_pool)} retrieved sources were actually cited in-text; "
+                "they were compiled into the References list and a BibTeX library "
+                '(ask for "the bibtex" to get it).'
+            )
+        elif citation_pool:
+            citation_note = (
+                f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
+                "Semantic Scholar, but none could be confidently matched to an in-text citation — "
+                "check citations manually before submission."
+            )
+        else:
+            citation_note = (
+                " No verified external sources could be retrieved (e.g. no network access) — "
+                "in-text citations should be checked manually before submission."
+            )
     review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
     reply = (
         f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words."
@@ -11414,11 +11535,18 @@ def _write_dissertation(
     # Preliminary Pages with real entries computed from what was actually
     # written, and insert page breaks between each preliminary-page item.
     _refresh_preliminary_pages(sections)
+    from dataclasses import asdict
+
+    cited_pool, bibtex_text = _compute_bibliography(
+        citation_pool, sections, user_guidelines["citation_style"],
+    )
     document.content = {
         "topic": topic,
         "research_design": design,
         "research_objectives": objectives,
         "sections": sections,
+        "bibliography": [asdict(p) for p in cited_pool],
+        "bibliography_bibtex": bibtex_text,
     }
     _save(document, "dissertation-step:table-of-contents")
 
@@ -11426,14 +11554,25 @@ def _write_dissertation(
     document.save(update_fields=["title", "updated_at"])
     _all_done(plan)
 
-    citation_note = (
-        f" Citations were grounded in {len(citation_pool)} real sources retrieved from Crossref, "
-        "arXiv, PubMed, and Semantic Scholar."
-        if citation_pool else
-        " No verified external sources could be retrieved (e.g. no network access) — "
-        "in-text citations and the References section use a consistent set of simulated sources that "
-        "must be replaced with verified literature before submission."
-    )
+    citation_note = ""
+    if cited_pool:
+        citation_note = (
+            f" {len(cited_pool)} of {len(citation_pool)} retrieved sources were actually cited in-text; "
+            "they were compiled into the References chapter and a BibTeX library "
+            '(ask for "the bibtex" to get it).'
+        )
+    elif citation_pool:
+        citation_note = (
+            f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
+            "Semantic Scholar, but none could be confidently matched to an in-text citation — "
+            "check citations manually before submission."
+        )
+    else:
+        citation_note = (
+            " No verified external sources could be retrieved (e.g. no network access) — "
+            "in-text citations and the References section use a consistent set of simulated sources that "
+            "must be replaced with verified literature before submission."
+        )
     review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
     reply = (
         f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "

@@ -570,6 +570,60 @@ def format_reference_entry(paper: PaperRecord, style: str = "APA", index: int = 
     return entry
 
 
+_BIBTEX_STOPWORDS = {"a", "an", "the", "of", "on", "in", "and", "for", "to", "with"}
+
+
+def _bibtex_key(paper: PaperRecord, used_keys: set[str]) -> str:
+    """Generate a unique Mendeley/EndNote-style cite key: SurnameYearFirstTitleWord."""
+    surname = re.sub(r"[^A-Za-z]", "", paper.authors[0].split()[-1]) if paper.authors else ""
+    surname = surname or "Unknown"
+    year = str(paper.year) if paper.year else "nd"
+    title_word = ""
+    for word in re.findall(r"[A-Za-z]+", paper.title or ""):
+        if word.lower() not in _BIBTEX_STOPWORDS:
+            title_word = word.capitalize()
+            break
+    base = f"{surname}{year}{title_word}"
+    key = base
+    suffix = 0
+    while key in used_keys:
+        suffix += 1
+        key = f"{base}{chr(ord('a') + suffix - 1)}"
+    used_keys.add(key)
+    return key
+
+
+def to_bibtex_entry(paper: PaperRecord, key: str) -> str:
+    """Render one verified PaperRecord as a BibTeX entry — the same shape a
+    reference manager like Mendeley or EndNote would export."""
+    entry_type = "article" if (paper.journal or paper.source in {"crossref", "pubmed", "semantic_scholar"}) else "misc"
+    authors_field = " and ".join(paper.authors) if paper.authors else "Unknown Author"
+    fields = [("author", authors_field), ("title", paper.title or "Untitled")]
+    if paper.journal:
+        fields.append(("journal", paper.journal))
+    if paper.year:
+        fields.append(("year", str(paper.year)))
+    if paper.doi:
+        fields.append(("doi", paper.doi))
+    if paper.url:
+        fields.append(("url", paper.url))
+    if not paper.journal and paper.source:
+        fields.append(("note", paper.source.replace("_", " ").title()))
+    body = ",\n".join(f"  {name} = {{{value}}}" for name, value in fields)
+    return f"@{entry_type}{{{key},\n{body}\n}}"
+
+
+def build_bibtex(papers: list[PaperRecord]) -> str:
+    """Render a full .bib file from verified papers, each keyed the way a
+    reference manager export would key it. Intended to be called on a
+    cited-only pool (see filter_cited_pool), not the raw search pool."""
+    if not papers:
+        return ""
+    used_keys: set[str] = set()
+    entries = [to_bibtex_entry(p, _bibtex_key(p, used_keys)) for p in papers]
+    return "\n\n".join(entries)
+
+
 def _title_similarity(a: str, b: str) -> float:
     """Return word-overlap Jaccard similarity between two titles."""
     ta = set(re.findall(r"[a-z0-9]+", (a or "").lower())) - {"the", "a", "an", "of", "in", "and", "for", "on"}
@@ -781,6 +835,66 @@ def extract_citation_candidates(text: str) -> list[dict[str, Any]]:
         seen.add(key)
         dedup.append(c)
     return dedup
+
+
+_BRACKET_CITE_RE = re.compile(r"\[(\d{1,3})\]")
+
+
+def filter_cited_pool(
+    text: str,
+    pool: list[PaperRecord],
+    style: str = "APA",
+    max_items: int = 12,
+) -> list[PaperRecord]:
+    """Return only the papers from `pool` actually cited in-text, in first-cited
+    order — the scope a real reference manager (Mendeley/EndNote) uses to build
+    a bibliography: cited works only, never the full search pool.
+
+    IEEE/Vancouver use the bracket index (e.g. "[2]") to look up pool[index-1]
+    directly, bounded to `max_items` since that's the window build_citation_context()
+    actually showed the writer. Author-date styles (APA, Harvard, MLA, Chicago) match
+    each in-text candidate from extract_citation_candidates() back to a pool entry by
+    DOI, title similarity, or author+year overlap.
+    """
+    if not text or not pool:
+        return []
+
+    style_key = (style or "APA").strip().upper()
+    cited: list[PaperRecord] = []
+    seen_idx: set[int] = set()
+
+    def _add(idx: int) -> None:
+        if idx not in seen_idx:
+            seen_idx.add(idx)
+            cited.append(pool[idx])
+
+    if style_key in {"IEEE", "VANCOUVER"}:
+        window = pool[:max_items]
+        for m in _BRACKET_CITE_RE.finditer(text):
+            n = int(m.group(1))
+            if 1 <= n <= len(window):
+                _add(n - 1)
+        return cited
+
+    for cand in extract_citation_candidates(text):
+        best_idx, best_score = None, 0.0
+        for idx, p in enumerate(pool):
+            if idx in seen_idx:
+                continue
+            score = 0.0
+            if cand.get("doi") and p.doi and cand["doi"].lower() == (p.doi or "").lower():
+                score = 1.0
+            elif cand.get("title") and p.title:
+                score = _title_similarity(cand["title"], p.title)
+            elif cand.get("authors") and cand.get("year") and p.year == cand["year"]:
+                if _author_overlap(p.authors or [], cand["authors"]):
+                    score = 0.6
+            if score > best_score:
+                best_score, best_idx = score, idx
+        if best_idx is not None and best_score >= 0.3:
+            _add(best_idx)
+
+    return cited
 
 
 def verify_generated_citations(text: str) -> list[CitationVerification]:
