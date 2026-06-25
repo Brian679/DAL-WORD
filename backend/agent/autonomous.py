@@ -2587,7 +2587,133 @@ def _extract_json_obj(raw: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# LLM-generated dissertation plan (the ONLY source of truth for chapter structure)
+# User-supplied dissertation outline detection
+# ---------------------------------------------------------------------------
+# A student/technical user can paste their own required chapter/section structure
+# straight into their instruction (e.g. copied from their institution's guidelines).
+# When that's recognizable, it takes priority over both the LLM-generated plan and the
+# offline fallback plan — the agent follows it verbatim instead of imposing its own idea
+# of how the dissertation should be organized. It is checked deterministically, before
+# any LLM call, so the user's exact structure is honoured even when no LLM is configured.
+
+_NUMBER_WORDS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_ROMAN_NUMERALS: dict[str, int] = {
+    "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5,
+    "vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10,
+}
+
+
+def _looks_like_chapter_line(line: str) -> tuple[int | None, str] | None:
+    """Match a line like "Chapter 1: Introduction", "Chapter One - Background", or
+    "CHAPTER II. LITERATURE REVIEW" and return (chapter_number, title_text)."""
+    line = line.strip()
+    m = re.match(r"^(?:[-*•]\s*)?chapter\s+([0-9]+|[a-z]+)\s*[:.\-–]\s*(.+)$", line, re.IGNORECASE)
+    if not m:
+        return None
+    token, title = m.group(1).lower(), m.group(2).strip(" .")
+    if not title:
+        return None
+    num = int(token) if token.isdigit() else (_NUMBER_WORDS.get(token) or _ROMAN_NUMERALS.get(token))
+    return num, title
+
+
+def _looks_like_backmatter_line(line: str) -> str | None:
+    """Match a standalone back/front-matter heading line (no "Chapter" prefix, no body
+    text on the same line) — e.g. "References", "Bibliography", "Appendices"."""
+    line = line.strip()
+    m = re.match(
+        r"^(?:[-*•]\s*)?(preliminary pages|front matter|references|bibliography|works cited|appendices)\s*[:.]?\s*$",
+        line, re.IGNORECASE,
+    )
+    if not m:
+        return None
+    canon = {"front matter": "Preliminary Pages", "bibliography": "References", "works cited": "References"}
+    label = m.group(1).lower()
+    return canon.get(label, label.title())
+
+
+def _looks_like_subsection_line(line: str) -> str | None:
+    """Return a cleaned subsection title if `line` looks like an outline entry under a
+    chapter (numbered "1.1 ...", lettered "i. ...", "Appendix A: ...", or a plain bullet
+    "- ..."), else None. Deliberately conservative — a plain prose sentence with no
+    leading bullet/number is never captured as a section, so an ordinary instruction that
+    merely mentions a number in passing doesn't get misread as a structural outline.
+    """
+    line = line.strip()
+    if not line or len(line) > 120:
+        return None
+    m = re.match(r"^(?:[-*•]\s*)?(\d+(?:\.\d+){1,3})\.?\s+(.+)$", line)
+    if m:
+        return f"{m.group(1)} {m.group(2).strip()}"
+    m = re.match(r"^(?:[-*•]\s*)?([ivxlcdm]{1,5})\.\s+(.+)$", line, re.IGNORECASE)
+    if m:
+        return f"{m.group(1).lower()}. {m.group(2).strip()}"
+    m = re.match(r"^(?:[-*•]\s*)?(appendix\s+[a-z])\s*[:.]?\s+(.+)$", line, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}: {m.group(2).strip()}"
+    m = re.match(r"^[-*•]\s+(.+)$", line)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _parse_user_supplied_outline(instruction: str) -> list[dict[str, Any]] | None:
+    """Detect and parse a dissertation chapter/section outline the user pasted into their
+    own instruction. Returns None when nothing recognizable is found (caller proceeds with
+    the normal LLM/fallback planning path), or a list of chapter dicts in the same
+    {"title", "sections"} shape _fallback_dissertation_chapters returns.
+    """
+    if not instruction:
+        return None
+
+    chapters: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    chapter_line_count = 0
+    subsection_line_count = 0
+
+    for raw_line in instruction.splitlines():
+        chap = _looks_like_chapter_line(raw_line)
+        if chap is not None:
+            num, title = chap
+            label = f"Chapter {num}: {title}" if num is not None else f"Chapter: {title}"
+            current = {"title": label, "sections": []}
+            chapters.append(current)
+            chapter_line_count += 1
+            continue
+
+        back = _looks_like_backmatter_line(raw_line)
+        if back is not None:
+            current = {"title": back, "sections": []}
+            chapters.append(current)
+            chapter_line_count += 1
+            continue
+
+        if current is not None:
+            sub = _looks_like_subsection_line(raw_line)
+            if sub is not None:
+                current["sections"].append({"title": sub, "sections": []})
+                subsection_line_count += 1
+
+    # Require enough structure to be confident this is a deliberately pasted outline, not
+    # a couple of incidental "chapter 1 covers..." mentions inside ordinary prose. A
+    # template that lists only chapter titles with no subsections is still accepted once
+    # there are enough chapter headings (>=4) that the pattern is clearly intentional —
+    # any chapter left without subsections gets filled in by _default_sections_for_chapter
+    # downstream (see llm_chapters_to_blueprints).
+    if chapter_line_count < 3:
+        return None
+    if subsection_line_count < 3 and chapter_line_count < 4:
+        return None
+
+    return chapters
+
+
+# ---------------------------------------------------------------------------
+# LLM-generated dissertation plan (falls back to the offline plan when the LLM is
+# unavailable, but a user-supplied outline above takes priority over both)
 # ---------------------------------------------------------------------------
 
 def generate_dissertation_plan_llm(
@@ -2602,8 +2728,19 @@ def generate_dissertation_plan_llm(
     Returns a list of chapter dicts:
         [{"title": "Chapter 1: ...", "sections": [{"title": "1.1 ...", "sections": [...]}, ...]}, ...]
 
-    Falls back to a minimal generic structure if the LLM call fails.
+    If the student's own instruction contains a recognizable chapter/section outline of
+    their own, that is used verbatim instead — no LLM call, no fallback plan — since the
+    point of a user-supplied template is to be followed exactly, not reinterpreted.
+    Otherwise falls back to a minimal generic structure if the LLM call fails.
     """
+    user_outline = _parse_user_supplied_outline(message)
+    if user_outline is not None:
+        logger.info(
+            "generate_dissertation_plan_llm: using user-supplied outline (%d chapters)",
+            len(user_outline),
+        )
+        return user_outline
+
     obj_block = ""
     if objectives:
         obj_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(objectives[:6]))
@@ -2769,16 +2906,51 @@ def _topic_concept_phrases(topic: str) -> list[str]:
     return [clean(trimmed)] if clean(trimmed) else []
 
 
-def _fallback_dissertation_chapters(
-    topic: str, message: str = "", objectives: list[str] | None = None
-) -> list[dict[str, Any]]:
-    """Minimal generic fallback when LLM plan generation fails.
+def _numbered_sections(chapter_number: int | None, labels: list[str]) -> list[dict[str, Any]]:
+    """Render a flat list of section labels as numbered "{chapter}.{i} {label}" dicts.
 
-    Chapter 2's Theoretical Framework section is only included when the topic actually maps
-    to a recognizable named theory (see _select_named_theory) — a topic with no natural
+    Used both by _fallback_dissertation_chapters (chapter_number always known) and by the
+    gap-filler in llm_chapters_to_blueprints (chapter_number taken from whatever a
+    user-supplied or LLM-proposed plan actually numbered that chapter).
+    """
+    if chapter_number is None:
+        return [{"title": label, "sections": []} for label in labels]
+    return [{"title": f"{chapter_number}.{i} {label}", "sections": []} for i, label in enumerate(labels, start=1)]
+
+
+# Default subsection labels for the three chapter "kinds" whose content is the same
+# regardless of topic (Introduction, Methodology, Conclusion). Chapter 2 (Literature
+# Review) and Chapter 4 (Results) are topic/objective-dependent and built separately —
+# see _default_chapter2_sections and _plan_chapter4_structure.
+_CHAPTER_KIND_DEFAULT_LABELS: dict[str, list[str]] = {
+    "introduction": [
+        "Background of the Study", "Statement of the Problem", "Research Objectives",
+        "Research Questions", "Significance of the Study", "Scope and Delimitations",
+        "Definition of Key Terms", "Chapter Summary",
+    ],
+    "methodology": [
+        "Introduction", "Research Design", "Target Population",
+        "Sampling Techniques and Sample Size", "Data Collection Methods",
+        "Data Analysis Techniques", "Reliability and Validity",
+        "Ethical Considerations", "Chapter Summary",
+    ],
+    "conclusion": [
+        "Summary of Findings", "Conclusions", "Recommendations",
+        "Limitations of the Study", "Areas for Further Research", "Chapter Summary",
+    ],
+}
+
+
+def _default_chapter2_sections(
+    chapter_number: int | None, topic: str, message: str = "", objectives: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Build the topic-aware Literature Review section list.
+
+    The Theoretical Framework section is only included when the topic actually maps to a
+    recognizable named theory (see _select_named_theory) — a topic with no natural
     theoretical anchor gets no such section, and therefore no theory diagram either, instead
     of the same generic framework being forced onto every dissertation regardless of subject.
-    Its Conceptual Framework / Empirical Review / Research Gap headings are likewise anchored
+    The Conceptual Framework / Empirical Review / Research Gap headings are likewise anchored
     to concept phrases pulled from the topic itself (see _topic_concept_phrases), so two
     dissertations on different subjects don't end up with an identical Chapter 2 outline.
     """
@@ -2787,23 +2959,67 @@ def _fallback_dissertation_chapters(
     c1 = concepts[0] if concepts else (topic or "the study").strip()
     c2 = concepts[1] if len(concepts) > 1 else c1
 
-    chapter2_sections = [{"title": "2.1 Introduction", "sections": []}]
-    next_num = 2
+    labels = ["Introduction"]
     if theory:
-        chapter2_sections.append(
-            {"title": f"2.{next_num} Theoretical Framework: {theory['name']}", "sections": []}
-        )
-        next_num += 1
+        labels.append(f"Theoretical Framework: {theory['name']}")
     gap_label = f"Research Gap in {c1} and {c2}" if c1 != c2 else f"Research Gap in {c1}"
-    for label in (
+    labels.extend([
         f"Conceptual Framework of {c1}",
         f"Empirical Review of {c2}",
         gap_label,
         "Chapter Summary",
-    ):
-        chapter2_sections.append({"title": f"2.{next_num} {label}", "sections": []})
-        next_num += 1
+    ])
+    return _numbered_sections(chapter_number, labels)
 
+
+def _infer_chapter_kind(title: str, chapter_number: int | None) -> str | None:
+    """Classify a chapter's purpose from its title, falling back to its conventional
+    position (1-5) only when the title gives no keyword signal. Title keywords take
+    priority over position because a user-supplied template may not number chapters in
+    the conventional Intro/Lit-review/Methods/Results/Conclusion order (e.g. it might
+    split methodology across two chapters, shifting everything after it by one).
+    """
+    t = (title or "").lower()
+    if "literature" in t or "related literature" in t or "review of literature" in t:
+        return "literature"
+    if "method" in t:
+        return "methodology"
+    if any(k in t for k in ("result", "finding", "analysis and discussion", "discussion of result")):
+        return "results"
+    if any(k in t for k in ("conclusion", "recommendation")):
+        return "conclusion"
+    if "introduction" in t:
+        return "introduction"
+    return {1: "introduction", 2: "literature", 3: "methodology", 4: "results", 5: "conclusion"}.get(chapter_number)
+
+
+def _default_sections_for_chapter(
+    chapter_number: int,
+    title: str,
+    topic: str,
+    message: str = "",
+    objectives: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Fill in default subsections for a numbered chapter that has none of its own —
+    e.g. a user-supplied or LLM-proposed plan that names a chapter but leaves its
+    sections empty. Chapter 4 (results) is handled separately by _plan_chapter4_structure
+    (it already builds itself from objectives even with no input), so this only covers
+    introduction/literature/methodology/conclusion-shaped chapters.
+    """
+    kind = _infer_chapter_kind(title, chapter_number)
+    if kind == "literature":
+        return _default_chapter2_sections(chapter_number, topic, message, objectives)
+    if kind in _CHAPTER_KIND_DEFAULT_LABELS:
+        return _numbered_sections(chapter_number, _CHAPTER_KIND_DEFAULT_LABELS[kind])
+    # Unrecognized chapter purpose (e.g. a custom extra chapter in a user template) —
+    # give it a minimal shell rather than leaving it fully empty.
+    return _numbered_sections(chapter_number, ["Introduction", "Chapter Summary"])
+
+
+def _fallback_dissertation_chapters(
+    topic: str, message: str = "", objectives: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Minimal generic fallback when LLM plan generation fails."""
     return [
         {"title": "Preliminary Pages", "sections": [
             {"title": "i. Abstract", "sections": []},
@@ -2814,42 +3030,20 @@ def _fallback_dissertation_chapters(
             {"title": "vi. List of Tables", "sections": []},
             {"title": "vii. List of Abbreviations and Acronyms", "sections": []},
         ]},
-        {"title": "Chapter 1: Introduction", "sections": [
-            {"title": "1.1 Background of the Study", "sections": []},
-            {"title": "1.2 Statement of the Problem", "sections": []},
-            {"title": "1.3 Research Objectives", "sections": []},
-            {"title": "1.4 Research Questions", "sections": []},
-            {"title": "1.5 Significance of the Study", "sections": []},
-            {"title": "1.6 Scope and Delimitations", "sections": []},
-            {"title": "1.7 Definition of Key Terms", "sections": []},
-            {"title": "1.8 Chapter Summary", "sections": []},
-        ]},
-        {"title": "Chapter 2: Literature Review", "sections": chapter2_sections},
-        {"title": "Chapter 3: Research Methodology", "sections": [
-            {"title": "3.1 Introduction", "sections": []},
-            {"title": "3.2 Research Design", "sections": []},
-            {"title": "3.3 Target Population", "sections": []},
-            {"title": "3.4 Sampling Techniques and Sample Size", "sections": []},
-            {"title": "3.5 Data Collection Methods", "sections": []},
-            {"title": "3.6 Data Analysis Techniques", "sections": []},
-            {"title": "3.7 Reliability and Validity", "sections": []},
-            {"title": "3.8 Ethical Considerations", "sections": []},
-            {"title": "3.9 Chapter Summary", "sections": []},
-        ]},
+        {"title": "Chapter 1: Introduction",
+         "sections": _numbered_sections(1, _CHAPTER_KIND_DEFAULT_LABELS["introduction"])},
+        {"title": "Chapter 2: Literature Review",
+         "sections": _default_chapter2_sections(2, topic, message, objectives)},
+        {"title": "Chapter 3: Research Methodology",
+         "sections": _numbered_sections(3, _CHAPTER_KIND_DEFAULT_LABELS["methodology"])},
         {"title": "Chapter 4: Results and Discussion", "sections": [
             {"title": "4.1 Introduction", "sections": []},
             {"title": "4.2 Presentation of Findings", "sections": []},
             {"title": "4.3 Discussion of Findings", "sections": []},
             {"title": "4.4 Chapter Summary", "sections": []},
         ]},
-        {"title": "Chapter 5: Conclusions and Recommendations", "sections": [
-            {"title": "5.1 Summary of Findings", "sections": []},
-            {"title": "5.2 Conclusions", "sections": []},
-            {"title": "5.3 Recommendations", "sections": []},
-            {"title": "5.4 Limitations of the Study", "sections": []},
-            {"title": "5.5 Areas for Further Research", "sections": []},
-            {"title": "5.6 Chapter Summary", "sections": []},
-        ]},
+        {"title": "Chapter 5: Conclusions and Recommendations",
+         "sections": _numbered_sections(5, _CHAPTER_KIND_DEFAULT_LABELS["conclusion"])},
         # Unnumbered back matter — stands on its own after the last numbered
         # chapter, never bundled into a numbered "Chapter 6".
         {"title": "References", "sections": [
@@ -2886,11 +3080,18 @@ def llm_chapters_to_blueprints(
 
         if chapter_number == 4:
             nodes = _plan_chapter4_structure(chapter.get("sections", []), research_design, objectives, topic, message)
-        elif chapter_number == 2:
-            nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
-            nodes = _ensure_framework_visual(nodes)
         elif chapter_number:
+            if not nodes:
+                # A user-supplied or LLM-proposed chapter that names a chapter but leaves
+                # its sections empty (e.g. a pasted outline listing only chapter titles)
+                # would otherwise generate zero content for that chapter — fill it from
+                # the matching default subsection set instead.
+                nodes = _sections_to_nodes(
+                    _default_sections_for_chapter(chapter_number, title, topic, message, objectives)
+                )
             nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
+            if _infer_chapter_kind(title, chapter_number) == "literature":
+                nodes = _ensure_framework_visual(nodes)
         elif not nodes:
             # Unnumbered back matter (References, Appendices) with no sections of its
             # own would otherwise generate zero content — give it one node so there's
@@ -4376,11 +4577,31 @@ def _execute_subsection_nodes(
     return "\n\n".join(chunks), local_context, blocks
 
 
+def _is_generic_topic_placeholder(topic: str) -> bool:
+    """True when `topic` is just a deictic reference to a subject the user assumes is
+    already established elsewhere (e.g. the document title/topic field) — "this topic",
+    "that topic", "the topic" — optionally trailed by filler words like "above" or
+    "I mentioned", rather than an actual subject. "the topic of climate change" or
+    "this topic: AI in healthcare" DO carry a real subject and are not placeholders.
+    """
+    t = topic.strip().rstrip(".!?").strip()
+    m = re.match(r"^(?:this|that|the|my|our|same)\s+(?:topic|subject|theme|title|idea|project)\b(.*)$", t, re.IGNORECASE)
+    if not m:
+        return False
+    remainder = m.group(1).strip(" :,-")
+    if not remainder:
+        return True
+    return not re.match(r"^(?:of|is|=)\b", remainder, re.IGNORECASE)
+
+
 def _extract_topic_phrase(text: str, lead_words: tuple[str, ...] = ("on", "about")) -> str | None:
     """Pull a topic phrase out of a free-form instruction like 'write a dissertation about X.
     Use a quantitative design.' Stops at the first sentence boundary and strips a trailing
     research-design clause so unpunctuated, voice-transcribed prompts (no period before
-    'use a ... design') don't bleed the whole rest of the message into the topic.
+    'use a ... design') don't bleed the whole rest of the message into the topic. Returns
+    None (instead of the literal phrase) when the matched text is just a generic reference
+    like "this topic" — the caller then falls back to the document's actual topic/title
+    rather than writing an entire document about the literal phrase "this topic".
     """
     pattern = r"\b(?:" + "|".join(lead_words) + r")\b\s+(.+?)(?:[.!?]|$)"
     match = re.search(pattern, text)
@@ -4388,9 +4609,11 @@ def _extract_topic_phrase(text: str, lead_words: tuple[str, ...] = ("on", "about
         return None
     topic = match.group(1).strip()
     topic = re.sub(
-        r"\s+(?:use|using)\s+a\s+\w+(?:\s+\w+){0,2}\s+(?:research\s+)?design\s*$", "", topic
+        r"\s+(?:use|using)\s+a\s+[\w-]+(?:\s+[\w-]+){0,2}\s+(?:research\s+)?design\s*$", "", topic
     ).strip()
-    return topic or None
+    if not topic or _is_generic_topic_placeholder(topic):
+        return None
+    return topic
 
 
 def _heuristic_intent(message: str) -> dict[str, Any]:
@@ -5428,6 +5651,20 @@ _BACKGROUND_VARIANTS_SURVEY: tuple[str, ...] = (
         "measurable outcomes — generating evidence that is transferable to policy discourse, practitioner decision-making, "
         "and ongoing scholarly debate."
     ),
+    (
+        "Stakeholders engaging with {topic} increasingly require evidence they can act on, yet much of what currently "
+        "circulates is descriptive rather than analytical — outlining what is happening without establishing why, or "
+        "under what conditions, particular outcomes follow. The background to this study begins from that practical "
+        "need rather than from a purely theoretical puzzle.\n\n"
+        "Reports from the field point to uneven progress: some institutions have visibly adapted their practices in "
+        "response to recent developments, while others have made comparatively little headway despite operating under "
+        "similar external pressures {cite1}. This unevenness is itself informative, suggesting that outcomes depend on "
+        "factors that existing work has not yet adequately isolated or measured.\n\n"
+        "The present study takes up that task, collecting primary data capable of distinguishing between competing "
+        "explanations for this unevenness. Its findings are intended to give institutional leaders, policymakers, and "
+        "the wider research community an evidentiary basis for decisions that, at present, are too often made on the "
+        "strength of impression rather than data."
+    ),
 )
 
 _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
@@ -5476,6 +5713,20 @@ _BACKGROUND_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "resulting evidence is intended to be transferable to further development, comparative benchmarking, and "
         "practical deployment decisions."
     ),
+    (
+        "Engineers and adopters evaluating {topic} increasingly need evidence they can act on, yet much of what is "
+        "published is descriptive rather than diagnostic — showing that a design worked without establishing why, or "
+        "under which operating conditions, its performance would hold. The background to this study begins from that "
+        "practical need rather than from a purely theoretical question.\n\n"
+        "Field reports point to uneven progress: some implementations have been refined through repeated testing and "
+        "documented iteration, while others rest on a single successful demonstration run, despite addressing "
+        "comparable engineering problems {cite1}. This unevenness suggests that performance depends on design and testing "
+        "choices that existing reports have not adequately isolated.\n\n"
+        "The present study takes up that task, building and testing an implementation capable of distinguishing "
+        "between competing explanations for this unevenness. Its findings are intended to give developers and "
+        "adopters an evidentiary basis for design decisions that, at present, are too often made on the strength of a "
+        "single demonstration rather than systematic data."
+    ),
 )
 
 _BACKGROUND_VARIANTS_DOCTRINAL: tuple[str, ...] = (
@@ -5519,6 +5770,20 @@ _BACKGROUND_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "genuine disagreement, and the considerations that bear on resolving them — producing an account that is "
         "transferable to practice, adjudication, and ongoing scholarly debate."
     ),
+    (
+        "Practitioners and adjudicators confronting {topic} increasingly need a clear, usable account of where the "
+        "law or doctrine actually stands, yet much of the available commentary is descriptive rather than analytical "
+        "— cataloguing positions without resolving which are best supported by the primary sources. The background "
+        "to this study begins from that practical need rather than from a purely abstract puzzle.\n\n"
+        "The record shows uneven treatment: some courts, regulators, or commentators have engaged closely with the "
+        "primary material, while others have repeated established secondary characterisations with little independent "
+        "scrutiny, despite addressing substantially the same question {cite1}. This unevenness suggests that the "
+        "existing literature has not adequately isolated where genuine disagreement lies.\n\n"
+        "The present study takes up that task, returning to the primary sources to distinguish genuine doctrinal "
+        "disagreement from merely repeated characterisation. Its findings are intended to give practitioners, "
+        "adjudicators, and scholars an evidentiary basis for positions that, at present, are too often taken on the "
+        "strength of received wisdom rather than direct engagement with the sources."
+    ),
 )
 
 # Statement of the Problem — varied framing (gap-led, cost-of-inaction-led, evidence-thinness-led).
@@ -5556,6 +5821,17 @@ _PROBLEM_VARIANTS_SURVEY: tuple[str, ...] = (
         "mark. This study addresses that gap directly, generating primary, context-specific evidence rather than relying "
         "on inference from settings that may not be comparable."
     ),
+    (
+        "However useful the existing literature on {topic} may be in general terms, it offers strikingly little that "
+        "speaks directly to the specific institutional and environmental conditions decision-makers in this context "
+        "actually face {cite1}. The available frameworks were, for the most part, developed and validated elsewhere, and "
+        "their applicability here has rarely been tested rather than assumed.\n\n"
+        "The cost of that assumption is not trivial: where the variables driving outcomes in this context differ even "
+        "modestly from the contexts the literature was built on, interventions designed on imported evidence risk "
+        "missing the conditions that actually matter here. This study is designed to remove that uncertainty, "
+        "generating primary, context-grounded evidence rather than continuing to extend frameworks built for "
+        "different settings."
+    ),
 )
 
 _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
@@ -5590,6 +5866,18 @@ _PROBLEM_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "researchers attempting to extend or compare designs are forced to re-derive baseline performance from scratch, "
         "slowing progress across the field. This study is designed to close that gap by subjecting a working "
         "implementation to systematic, clearly documented testing against defined performance criteria."
+    ),
+    (
+        "However promising the body of work on {topic} may appear, it offers strikingly little evidence specific to "
+        "the operating conditions, component tolerances, and resource constraints a given implementation would "
+        "actually face in practice {cite1}. Most published designs are validated under conditions chosen for "
+        "convenience rather than representativeness, and their behaviour outside those conditions is rarely tested "
+        "rather than assumed.\n\n"
+        "The cost of that assumption is not trivial: where real deployment conditions differ even modestly from the "
+        "conditions a design was demonstrated under, performance can degrade in ways the published record gives no "
+        "basis for anticipating. This study is designed to remove that uncertainty, generating primary, "
+        "condition-specific test evidence rather than extrapolating from demonstrations run under more convenient "
+        "circumstances."
     ),
 )
 
@@ -5626,6 +5914,17 @@ _PROBLEM_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "likelihood of inconsistent or poorly justified outcomes. This study addresses that gap directly, "
         "generating a systematic, source-grounded analysis rather than relying on selective or partial accounts."
     ),
+    (
+        "However extensive the commentary on {topic} may appear, it offers comparatively little that speaks directly "
+        "to the specific combination of sources, jurisdiction, or period most relevant to current practice {cite1}. Much "
+        "of what is available extrapolates from frequently cited authority without testing whether that authority "
+        "actually resolves the question at hand.\n\n"
+        "The cost of that gap is not merely academic: where practitioners and adjudicators lack a synthesis "
+        "grounded in the primary sources most relevant to their own context, they risk relying on a settled-sounding "
+        "position that the primary material does not, in fact, clearly support. This study is designed to remove "
+        "that uncertainty, returning to the primary sources rather than continuing to extend secondary "
+        "characterisations of them."
+    ),
 )
 
 # Discussion of Findings (Chapter 4) — varied closing framing while keeping the same
@@ -5649,6 +5948,15 @@ _DISCUSSION_VARIANTS_SURVEY: tuple[str, ...] = (
         "differences in how key constructs were measured relative to prior studies. These are differences of degree "
         "rather than of kind, and they do not undermine the overall pattern so much as refine it."
     ),
+    (
+        "Considered together, the results sit comfortably within the range of outcomes the literature on {topic} would "
+        "predict {cite1}, even though the analysis was not designed simply to reproduce earlier findings. Institutional "
+        "capacity, governance quality, and contextual readiness again emerge as the dimensions that best explain "
+        "variation in outcomes across the sample.\n\n"
+        "Where this study's findings depart from earlier work, the departure is more plausibly explained by differences "
+        "in sample composition or measurement timing than by any fundamental disagreement about the underlying "
+        "phenomenon. Read this way, the discrepancies sharpen the existing picture rather than contradict it."
+    ),
 )
 
 _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
@@ -5669,6 +5977,16 @@ _DISCUSSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "specific to this study's test setup: refinements introduced during iterative testing, or a more tightly "
         "controlled set of trial conditions than comparable prior work. These are differences of degree rather than of "
         "kind, and they do not undermine the overall pattern so much as refine it."
+    ),
+    (
+        "Considered together, the results sit comfortably within the range of outcomes the design literature on "
+        "{topic} would predict {cite1}, even though testing was not designed simply to reproduce earlier results. "
+        "Component selection, control strategy, and operating-condition range again emerge as the factors that best "
+        "explain variation in measured performance across trials.\n\n"
+        "Where this study's findings depart from earlier implementations, the departure is more plausibly explained "
+        "by differences in test rig configuration or measurement timing than by any fundamental disagreement about "
+        "the underlying engineering problem. Read this way, the discrepancies sharpen the existing picture rather "
+        "than contradict it."
     ),
 )
 
@@ -5692,6 +6010,16 @@ _DISCUSSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "given to the competing considerations at stake. These are differences of emphasis rather than of kind, and "
         "they do not undermine the overall pattern so much as refine it."
     ),
+    (
+        "Considered together, the themes traced through the corpus sit comfortably within the range of positions the "
+        "literature on {topic} would lead one to expect {cite1}, even though the analysis was not designed simply to "
+        "reproduce earlier commentary. Competing principles, institutional context, and source provenance again "
+        "emerge as the dimensions that best explain variation in how the relevant authorities are read.\n\n"
+        "Where this study's reading departs from earlier commentary, the departure is more plausibly explained by "
+        "differences in source selection or interpretive emphasis than by any fundamental disagreement about the "
+        "underlying doctrinal question. Read this way, the discrepancies sharpen the existing picture rather than "
+        "contradict it."
+    ),
 )
 
 # Conclusion (Chapter 5) — varied opening framing while preserving the evidentiary claim.
@@ -5713,6 +6041,16 @@ _CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
         "investment in institutional capacity and process design is a precondition for realising the full value available "
         "in this domain."
     ),
+    (
+        "In summary, the evidence assembled here points clearly to the conclusion that {topic} has a measurable and "
+        "identifiable bearing on the outcomes this study set out to examine. Stronger results consistently track "
+        "better-governed, better-resourced environments, while weaker results track implementation gaps and resource "
+        "constraints.\n\n"
+        "This conclusion is not an isolated reading of the present data; it converges with the broader literature "
+        "consulted throughout the dissertation {cite1}, reinforcing the case that deliberate investment in "
+        "institutional capacity and process design is what ultimately determines how much value is realised in this "
+        "domain."
+    ),
 )
 
 _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
@@ -5732,6 +6070,15 @@ _CONCLUSION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "This conclusion does not rest on the present data alone — it is consistent with, and reinforced by, comparable "
         "work reviewed earlier in the dissertation {cite1}. Together, they support the view that careful attention to design "
         "detail and systematic testing is a precondition for achieving reliable system performance."
+    ),
+    (
+        "In summary, the evidence assembled here points clearly to the conclusion that {topic} can be resolved "
+        "through a design capable of measurable, repeatable performance once the relevant variables are properly "
+        "controlled. Stronger, more consistent results consistently track careful component selection, calibration, "
+        "and control-strategy tuning, while weaker results track naive or untuned implementations.\n\n"
+        "This conclusion is not an isolated reading of the present test data; it converges with comparable work "
+        "consulted throughout the dissertation {cite1}, reinforcing the case that disciplined attention to design "
+        "detail and systematic testing is what ultimately determines reliable system performance."
     ),
 )
 
@@ -5753,6 +6100,15 @@ _CONCLUSION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "This conclusion does not rest on the present analysis alone — it is consistent with, and reinforced by, "
         "the wider body of literature reviewed earlier in the dissertation {cite1}. Together, they support the view "
         "that continued doctrinal attention to these questions is warranted."
+    ),
+    (
+        "In summary, the analysis assembled here points clearly to the conclusion that {topic} continues to generate "
+        "recurring tensions that the existing sources resolve with varying degrees of success. Positions that are "
+        "clearly reasoned and well grounded in established authority consistently command broader support than those "
+        "resting on weaker foundations.\n\n"
+        "This conclusion is not an isolated reading of the present corpus; it converges with the wider secondary "
+        "literature consulted throughout the dissertation {cite1}, reinforcing the case that further doctrinal "
+        "clarity on these questions would meaningfully advance both scholarship and practice."
     ),
 )
 
@@ -5777,6 +6133,18 @@ _RECOMMENDATION_VARIANTS_SURVEY: tuple[str, ...] = (
         "losing sight of systemic risk.\n"
         "4. Subsequent research should adopt longitudinal designs capable of tracking how these outcomes evolve over time "
         "and across differing institutional contexts."
+    ),
+    (
+        "In light of the findings, practitioners, policymakers, and future researchers are encouraged to act on the "
+        "following:\n\n"
+        "1. Organisations should formalise capacity-building efforts so that readiness for technology adoption is "
+        "built deliberately rather than left to chance.\n"
+        "2. Governance structures should be revisited periodically to keep strategic objectives and implementation "
+        "mechanisms aligned as conditions change.\n"
+        "3. Policymakers should continue refining the regulatory environment so that responsible innovation is "
+        "rewarded without losing sight of systemic risk.\n"
+        "4. Future researchers should pursue longitudinal designs that can track how these outcomes evolve over time "
+        "and across differing institutional settings."
     ),
 )
 
@@ -5804,6 +6172,18 @@ _RECOMMENDATION_VARIANTS_TECHNICAL: tuple[str, ...] = (
         "4. Future work should extend testing to a wider range of operating conditions and longer continuous-operation "
         "periods to establish long-term reliability."
     ),
+    (
+        "In light of the findings, developers, students, and future researchers are encouraged to act on the "
+        "following:\n\n"
+        "1. Future iterations should target higher-precision components or supplementary calibration in the areas "
+        "where performance variance was greatest.\n"
+        "2. The control strategy should be reassessed at regular intervals so that it stays matched to evolving "
+        "operating conditions.\n"
+        "3. Developers should keep detailed records of test protocols and raw performance data to support "
+        "reproducibility and fair comparison with later designs.\n"
+        "4. Future work should broaden testing to cover a wider range of operating conditions and longer "
+        "continuous-operation periods to establish long-term reliability."
+    ),
 )
 
 _RECOMMENDATION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
@@ -5826,6 +6206,18 @@ _RECOMMENDATION_VARIANTS_DOCTRINAL: tuple[str, ...] = (
         "3. Policymakers should consider clarifying provisions where this study reveals persistent ambiguity.\n"
         "4. Subsequent research should extend the corpus to additional jurisdictions, periods, or schools of thought "
         "to test how far the patterns identified here generalise."
+    ),
+    (
+        "In light of the analysis, scholars, practitioners, and policymakers are encouraged to act on the "
+        "following:\n\n"
+        "1. Scholars should pursue targeted doctrinal work on the specific points of disagreement this study's "
+        "corpus brings into focus.\n"
+        "2. Institutions and practitioners should revisit existing guidance or instruments in light of the more "
+        "persuasive line of argument identified here.\n"
+        "3. Policymakers should consider clarifying the provisions where this analysis reveals unresolved "
+        "ambiguity.\n"
+        "4. Future research should widen the corpus to additional jurisdictions, periods, or schools of thought to "
+        "test whether these patterns hold more broadly."
     ),
 )
 
@@ -7121,8 +7513,20 @@ def _fallback_subsection_body(
                     "These findings collectively support the study's central argument and align with the "
                     "theoretical positions advanced in the literature review."
                 )
+            if survey_based and is_qualitative:
+                return (
+                    f"The study set out to examine {topic}, guided by three primary research objectives. Thematic "
+                    "analysis of the interview data generated the following key findings: first, a small set of "
+                    "recurring themes accounted for most of what participants described, even though no two "
+                    "accounts were identical; second, contextual factors — particularly institutional readiness "
+                    "and governance quality — shaped how these themes were experienced and expressed across the "
+                    "sample; and third, the points of disagreement between participants were concentrated in a "
+                    "few specific, identifiable areas rather than spread diffusely across the data.\n\n"
+                    "These findings collectively support the study's central argument and align with the "
+                    "theoretical propositions advanced in the conceptual framework."
+                )
             if survey_based:
-                if not is_qualitative and len(objectives or []) >= 2:
+                if len(objectives or []) >= 2:
                     stats = _regression_model_stats(topic, objectives, research_design, sample_size or 120)
                     regression_clause = (
                         f"the regression model presented in Chapter 4 explained {stats['r_squared'] * 100:.0f}% of "
