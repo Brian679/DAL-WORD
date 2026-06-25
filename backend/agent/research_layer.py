@@ -1138,4 +1138,80 @@ def build_research_brief(result: RetrievalResult) -> str:
     return "\n".join(lines)
 
 
+def _source_brief_lines(papers: list[PaperRecord], max_items: int) -> str:
+    """One block per candidate source: its citation_string() PLUS a short excerpt
+    of its abstract — the actual content a human would skim before deciding
+    whether it really supports a given sentence, not just title/author/year."""
+    lines: list[str] = []
+    for i, p in enumerate(papers[:max_items], start=1):
+        lines.append(f"[{i}] {citation_string(p)}")
+        if p.abstract:
+            snippet = re.sub(r"\s+", " ", p.abstract).strip()[:300]
+            lines.append(f"    Key points: {snippet}")
+    return "\n".join(lines)
+
+
+def ground_section_text(
+    section_title: str,
+    section_text: str,
+    topic: str,
+    document_id: int | None = None,
+    style: str = "APA",
+    max_sources: int = 5,
+) -> tuple[str, list[PaperRecord]]:
+    """Ground an already-written, plain (uncited) section against real literature
+    found by reading the section itself — the reverse of the old approach, which
+    fetched one generic pool for the whole document before any section existed
+    and asked the writer to cite from it.
+
+    Here, retrieval is scoped to what THIS section actually discusses (topic +
+    section title), so search results match its specific content rather than the
+    document's overall subject. The model is then asked to insert an in-text
+    citation only where a candidate's own abstract genuinely supports a claim
+    already on the page — never to add or alter claims to fit a source. Returns
+    (possibly revised text, sources actually cited) so the caller can accumulate
+    real sources across sections into one document-wide bibliography."""
+    plain_text = section_text or ""
+    if not plain_text.strip():
+        return section_text, []
+
+    query = f"{topic} {section_title}".strip()
+    try:
+        result = retrieval_pipeline(topic=topic, query=query, document_id=document_id, top_k=max_sources)
+        candidates = result.top_papers
+    except Exception as exc:
+        logger.warning("ground_section_text: retrieval failed for '%s': %s", section_title, exc)
+        return section_text, []
+    if not candidates:
+        return section_text, []
+
+    prompt = (
+        f"{_source_brief_lines(candidates, max_sources)}\n\n"
+        "The passage below was already written and must not be rewritten — only annotated. "
+        f"Insert an in-text citation (style: {style}) at a claim ONLY where one of the sources "
+        "above genuinely supports that specific claim, based on its key points/abstract — match by "
+        "subject matter, not just shared keywords. Never invent a citation, never cite a source whose "
+        "key points don't actually support the adjacent sentence, and leave every other word of the "
+        "passage exactly as written. If none of the sources truly fit, return the passage completely "
+        "unchanged.\n\n"
+        f"PASSAGE:\n{plain_text}\n\n"
+        "Return ONLY the resulting passage — no preamble, no explanation, no markdown fencing."
+    )
+    try:
+        from .llm import generate_text
+
+        revised = (generate_text(prompt) or "").strip()
+    except Exception as exc:
+        logger.warning("ground_section_text: grounding LLM call failed for '%s': %s", section_title, exc)
+        return section_text, []
+
+    if not revised or abs(len(revised) - len(plain_text)) > 0.25 * max(len(plain_text), 1):
+        # Empty or drastically different length => treat as a failed/rejected
+        # rewrite rather than risk silently losing or corrupting the section.
+        return section_text, []
+
+    used = filter_cited_pool(revised, candidates, style=style, max_items=max_sources)
+    return (revised, used) if used else (section_text, [])
+
+
 

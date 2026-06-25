@@ -3912,15 +3912,12 @@ def _execute_subsection_nodes(
     specific_design = _specific_methodology(user_instruction, topic, document)
     document_brief = _extract_document_brief(document, topic, research_design, specific_design)
     has_hypotheses = _document_has_hypotheses(document)
+    # Sections are written plain here — no pre-fetched citation brief. Citation
+    # grounding now happens AFTER a section/chapter's text exists, scoped to what
+    # it actually discusses (see ground_section_text in research_layer.py). The
+    # citation_pool parameter is still threaded through purely so the
+    # References-chapter detection below can see the real, accumulated pool.
     citation_style = _parse_user_guidelines(user_instruction).get("citation_style", "APA")
-    if citation_pool:
-        from .research_layer import build_citation_context
-
-        document_brief = (
-            f"{document_brief}\n\n{build_citation_context(citation_pool, max_items=12, style=citation_style)}\n"
-            "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
-            "the verified sources listed above. Do not invent author names, years, or studies."
-        )
 
     for node in nodes:
         step_idx = plan_cursor[0]
@@ -10424,15 +10421,21 @@ def _write_section(
         table_counter = [_next_caption_number(document, "table")]
         word_count = _chapter_word_count_target(chapter_hint, instruction, nodes_to_write)
 
-        # Only fetch real sources when this section actually needs citations
-        # (Literature Review / References) — avoids needless network latency
-        # for purely structural sections like Objectives or Scope. References is
-        # unnumbered back matter now, so it's detected by title text, not chapter number.
-        citation_pool = (
-            _retrieve_citation_pool(topic, document.id)
-            if chapter_hint == 2 or "reference" in query_l
-            else []
-        )
+        # References is regenerated from sources this document already cited
+        # elsewhere (so the list stays consistent with existing in-text
+        # citations) rather than a fresh network fetch. Literature Review is
+        # written plain and then grounded against literature scoped to what
+        # THIS chapter actually discusses (see ground_section_text below).
+        is_lit_review = chapter_hint == 2
+        is_references = "reference" in query_l
+        citation_pool: list[Any] = []
+        if is_references:
+            try:
+                from .research_layer import PaperRecord
+
+                citation_pool = [PaperRecord(**p) for p in (document.content.get("bibliography") or [])]
+            except Exception as exc:
+                logger.warning("_write_section: failed to load existing bibliography: %s", exc)
 
         # Snapshot the chapter content BEFORE generation starts and locate the
         # target subsection's (start, end) range exactly once. Every progress
@@ -10485,13 +10488,17 @@ def _write_section(
             citation_pool=citation_pool,
         )
 
-        if citation_pool:
+        if is_lit_review:
             try:
-                from .research_layer import repair_citations
+                from .research_layer import ground_section_text
 
-                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
+                chapter_text, new_sources = ground_section_text(
+                    section_title, chapter_text, topic, document.id,
+                    style=_parse_user_guidelines(instruction).get("citation_style", "APA"),
+                )
+                citation_pool.extend(new_sources)
             except Exception as exc:
-                logger.warning("_write_section: citation repair failed: %s", exc)
+                logger.warning("_write_section: citation grounding failed: %s", exc)
 
         # chapter_text already starts with the subsection title from _execute_subsection_nodes
         chapter_payload["content"] = _splice_chapter_content(chapter_text)
@@ -10592,14 +10599,11 @@ def _rewrite_chapter_batch(
     figure_counter = [_next_caption_number(document, "figure")]
     table_counter = [_next_caption_number(document, "table")]
 
-    # Only fetch real sources when the Literature Review chapter is being
-    # rewritten — avoids needless network latency otherwise. References is
-    # unnumbered back matter now and isn't reachable through this numbered
-    # chapter-batch path.
-    citation_pool = (
-        _retrieve_citation_pool(topic, document.id)
-        if 2 in chapter_numbers else []
-    )
+    # Each chapter is written plain, then — if it's the Literature Review —
+    # grounded against literature scoped to what THAT chapter actually
+    # discusses (see ground_section_text below). References is unnumbered
+    # back matter now and isn't reachable through this numbered chapter-batch path.
+    citation_pool: list[Any] = []
 
     sections = document.content.setdefault("sections", [])
 
@@ -10649,13 +10653,17 @@ def _rewrite_chapter_batch(
             citation_pool=citation_pool,
         )
 
-        if citation_pool:
+        if chapter["number"] == 2:
             try:
-                from .research_layer import repair_citations
+                from .research_layer import ground_section_text
 
-                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
+                chapter_text, new_sources = ground_section_text(
+                    chapter_title, chapter_text, topic, document.id,
+                    style=_parse_user_guidelines(instruction).get("citation_style", "APA"),
+                )
+                citation_pool.extend(new_sources)
             except Exception as exc:
-                logger.warning("_rewrite_chapter_batch: citation repair failed: %s", exc)
+                logger.warning("_rewrite_chapter_batch: citation grounding failed: %s", exc)
 
         section_payload["content"] = chapter_text if chapter_text.strip() else ""
         if chapter_blocks:
@@ -10962,11 +10970,12 @@ def writing_plan_to_flat_steps(writing_plan: dict[str, Any]) -> list[dict[str, A
     do_review = bool(needs_todo)
     sections_plan = _ensure_references_section(writing_plan.get("sections", []), do_citations)
 
+    # No upfront "Researching sources" step — each section is written plain
+    # first, then grounded against literature scoped to what it discusses (see
+    # _plan_and_write_document), so the first real step is always "Writing X".
     steps: list[dict[str, Any]] = [{"step": "Planning your document", "status": "done"}]
-    if do_citations:
-        steps.append({"step": "Researching sources", "status": "in_progress"})
 
-    first = not do_citations
+    first = True
     for section in sections_plan:
         title = section.get("title", "Section")
         steps.append({
@@ -11053,8 +11062,6 @@ def _plan_and_write_document(
     )
 
     # Build the to-do list — always show section steps so the user sees progress
-    if do_citations:
-        plan.append({"step": "Researching sources", "status": "pending"})
     for item in sections_plan:
         plan.append({"step": f"Writing {item['title']}", "status": "pending"})
         if do_review:
@@ -11065,14 +11072,17 @@ def _plan_and_write_document(
     sections: list[dict[str, Any]] = []
     review_notes: list[str] = []
 
-    # ── Research grounding (mandatory for long, citation-needing documents) ──
+    # ── Citation accumulator ──────────────────────────────────────────────────
+    # Starts empty. Each section is written PLAIN (no pre-fetched pool, no
+    # pressure to cite from a fixed list), then — once its own text actually
+    # exists — grounded against literature retrieved specifically for what THAT
+    # section discusses (see ground_section_text in research_layer.py). Sources
+    # it actually ends up citing are added here, so by the time the loop reaches
+    # the References section, this holds the real, section-targeted bibliography
+    # for the whole document instead of one generic topic-level pool fetched
+    # before anything was written.
     citation_pool: list[Any] = []
-    if do_citations:
-        citation_pool = _retrieve_citation_pool(topic, document.id)
-        logger.info(
-            "_plan_and_write_document: retrieved %d candidate sources for citation grounding",
-            len(citation_pool),
-        )
+    _cited_keys: set[str] = set()
 
     def _content_snapshot() -> dict[str, Any]:
         snapshot: dict[str, Any] = {
@@ -11104,11 +11114,6 @@ def _plan_and_write_document(
             pass
 
     plan_cursor = 1
-    if do_citations:
-        document.content = _content_snapshot()
-        _save(document, "doc-step:research")
-        _done(plan, plan_cursor)
-        plan_cursor += 1
 
     # ── Step 2: Write (and, for long pieces, review) each section ────────────
     for item in sections_plan:
@@ -11142,16 +11147,6 @@ def _plan_and_write_document(
                 _done(plan, plan_cursor)
                 plan_cursor += 1
         else:
-            citation_brief = ""
-            if do_citations and citation_pool:
-                from .research_layer import build_citation_context
-
-                citation_brief = (
-                    f"\n\n{build_citation_context(citation_pool, max_items=12, style=user_guidelines['citation_style'])}\n"
-                    "When attributing claims to prior research (e.g. 'Smith (2020) found...'), cite ONLY "
-                    "the verified sources listed above. Do not invent author names, years, or studies."
-                )
-
             _broadcast_activity(f"Writing {title}")
             try:
                 text = generate_section_content(
@@ -11163,8 +11158,7 @@ def _plan_and_write_document(
                         f"Full user request: {instruction[:600]}\n"
                         f"Research design: {design}\n"
                         f"Writing note for this section: {notes}\n"
-                        f"GUIDELINES TO FOLLOW: {_style_note}"
-                        f"{citation_brief}\n\n"
+                        f"GUIDELINES TO FOLLOW: {_style_note}\n\n"
                         f"Document written so far:\n{context_so_far[-3500:]}"
                     ),
                     word_count=wc,
@@ -11180,14 +11174,6 @@ def _plan_and_write_document(
                     sample_size=_infer_sample_size(document),
                 )
 
-            if do_citations and citation_pool:
-                try:
-                    from .research_layer import repair_citations
-
-                    text = repair_citations(text, citation_pool, min_confidence=60).repaired_text
-                except Exception as exc:
-                    logger.warning("_plan_and_write_document: citation repair failed for '%s': %s", title, exc)
-
             _done(plan, plan_cursor)
             plan_cursor += 1
 
@@ -11199,6 +11185,27 @@ def _plan_and_write_document(
                 review_notes.extend(section_review_notes)
                 _done(plan, plan_cursor)
                 plan_cursor += 1
+
+            if do_citations:
+                # Now that this section's final text exists, read it and search
+                # specifically for what IT discusses — not the document's overall
+                # topic — and insert citations only where a real source actually
+                # backs a claim already on the page. Whatever gets cited here is
+                # accumulated into citation_pool for the document-wide bibliography.
+                _broadcast_activity(f"Finding sources for {title}")
+                try:
+                    from .research_layer import ground_section_text
+
+                    text, section_sources = ground_section_text(
+                        title, text, topic, document.id, style=user_guidelines["citation_style"],
+                    )
+                    for src in section_sources:
+                        key = (src.doi or src.title or "").lower()
+                        if key and key not in _cited_keys:
+                            _cited_keys.add(key)
+                            citation_pool.append(src)
+                except Exception as exc:
+                    logger.warning("_plan_and_write_document: citation grounding failed for '%s': %s", title, exc)
 
         sections.append({"title": title, "content": text})
         document.content = _content_snapshot()
@@ -11431,11 +11438,14 @@ def _write_dissertation(
     # Prepend to the raw instruction so ContentGenerator sees it
     enriched_instruction = f"{_style_note}\n\n{instruction}"
 
-    # ── Retrieve real literature ONCE for the whole dissertation ──────────
-    # Grounds in-text citations and the References section in verifiable papers
-    # from Crossref/arXiv/PubMed/SSRN/Semantic Scholar instead of LLM invention.
-    citation_pool = _retrieve_citation_pool(topic, document.id)
-    logger.info("_write_dissertation: retrieved %d candidate sources for citation grounding", len(citation_pool))
+    # ── Citation accumulator ──────────────────────────────────────────────────
+    # Starts empty — each chapter is drafted plain, then grounded against
+    # literature retrieved specifically for what THAT chapter discusses (not one
+    # generic topic-level pool fetched before anything was written). See the
+    # post-chapter grounding step in the loop below and ground_section_text() in
+    # research_layer.py.
+    citation_pool: list[Any] = []
+    _cited_keys: set[str] = set()
 
     # Apportion a whole-document length budget (50-100 flexible pages, or the user's
     # explicit request) across chapters by weight, rather than reapplying the same
@@ -11501,18 +11511,28 @@ def _write_dissertation(
             citation_pool=citation_pool,
         )
 
-        if citation_pool:
-            try:
-                from .research_layer import repair_citations
-
-                chapter_text = repair_citations(chapter_text, citation_pool, min_confidence=60).repaired_text
-            except Exception as exc:
-                logger.warning("_write_dissertation: citation repair failed for '%s': %s", chapter_title, exc)
-
         chapter_text, chapter_review_notes = _review_and_revise_chapter(
             chapter_title, chapter_text, chapter_blocks, topic, design, objectives,
         )
         review_notes.extend(chapter_review_notes)
+
+        # Chapter text now exists and has been reviewed — ground it against
+        # literature retrieved specifically for what THIS chapter discusses, and
+        # accumulate whatever it actually cites into the document-wide pool.
+        try:
+            from .research_layer import ground_section_text
+
+            chapter_text, chapter_sources = ground_section_text(
+                chapter_title, chapter_text, topic, document.id, style=user_guidelines["citation_style"],
+            )
+            for src in chapter_sources:
+                key = (src.doi or src.title or "").lower()
+                if key and key not in _cited_keys:
+                    _cited_keys.add(key)
+                    citation_pool.append(src)
+        except Exception as exc:
+            logger.warning("_write_dissertation: citation grounding failed for '%s': %s", chapter_title, exc)
+
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
 
