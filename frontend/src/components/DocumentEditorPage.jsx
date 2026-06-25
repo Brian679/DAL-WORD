@@ -74,7 +74,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx, API_ORIGIN } from '../api/client';
+import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx, exportDocumentBibtex, API_ORIGIN } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -1630,6 +1630,28 @@ export default function DocumentEditorPage({
     }
   }, [currentDocument?.id, draftSections]);
 
+  const hasBibliography = Boolean((currentDocument?.content?.bibliography_bibtex || '').trim());
+
+  const [isDownloadingBibtex, setIsDownloadingBibtex] = useState(false);
+
+  const downloadBibtex = useCallback(async () => {
+    const docId = currentDocument?.id;
+    if (!docId) return;
+    setIsDownloadingBibtex(true);
+    try {
+      const { blob, filename } = await exportDocumentBibtex(docId);
+      const a = window.document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      window.alert(err?.message || 'Failed to export references');
+    } finally {
+      setIsDownloadingBibtex(false);
+    }
+  }, [currentDocument?.id]);
+
   function chatNameFromMessage(text) {
     const trimmed = text.trim();
     if (!trimmed) return 'New Chat';
@@ -2583,6 +2605,9 @@ export default function DocumentEditorPage({
                 <button className="doc-qa-file" onClick={onBackHome} title="Back to Home">File</button>
                 <button className="doc-qa-btn" title="Save (Ctrl+S)" onClick={() => triggerSave()}><Save size={14} /></button>
                 <button className="doc-qa-btn" title="Download as Word (.docx)" disabled={isDownloading} onClick={downloadDocx}><Download size={14} /></button>
+                {hasBibliography && (
+                  <button className="doc-qa-btn" title="Download references (.bib)" disabled={isDownloadingBibtex} onClick={downloadBibtex}><BookOpen size={14} /></button>
+                )}
                 <button className="doc-qa-btn" title="Print (Ctrl+P)" onClick={() => window.print()}><Printer size={14} /></button>
                 <button className="doc-qa-btn" title="Undo (Ctrl+Z)" onClick={() => { richEditorRef.current?.focus(); document.execCommand('undo'); }}><RotateCcw size={14} /></button>
                 <div className="doc-improve-menu-wrap" ref={qaMoreBtnRef}>
@@ -3520,6 +3545,9 @@ export default function DocumentEditorPage({
                   <div className="doc-tool-group-rows">
                     <div className="doc-tool-group-row">
                       <button className="doc-tool-btn doc-tool-btn--labeled" title="Download document as Word (.docx)" disabled={isDownloading} onClick={downloadDocx}><Download size={13}/><span>Export DOCX</span></button>
+                      {hasBibliography && (
+                        <button className="doc-tool-btn doc-tool-btn--labeled" title="Download cited sources as a .bib file (Mendeley/EndNote/Zotero-compatible)" disabled={isDownloadingBibtex} onClick={downloadBibtex}><BookOpen size={13}/><span>Export .bib</span></button>
+                      )}
                       <button className="doc-tool-btn doc-tool-btn--labeled" title="Download document as text" onClick={() => {
                         const text = richEditorRef.current?.textContent || '';
                         const blob = new Blob([text], { type: 'text/plain' });

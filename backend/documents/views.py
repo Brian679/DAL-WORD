@@ -1,6 +1,6 @@
 import re
 
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -49,10 +49,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
         # renderer doesn't exist for the given value (there's no "docx" renderer).
         document = self.get_object()
         fmt = (request.query_params.get("as_format") or "docx").lower()
+        safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", document.title or "document").strip() or "document"
+        if fmt == "bib":
+            bibtex_text = ((document.content or {}).get("bibliography_bibtex") or "").strip()
+            if not bibtex_text:
+                return Response({"error": "this document has no citation library to export"}, status=404)
+            response = HttpResponse(bibtex_text, content_type="application/x-bibtex")
+            response["Content-Disposition"] = f'attachment; filename="{safe_title}.bib"'
+            return response
         if fmt != "docx":
             return Response({"error": f"unsupported export format: {fmt}"}, status=400)
         buffer = build_docx(document)
-        safe_title = re.sub(r"[^A-Za-z0-9 _-]+", "", document.title or "document").strip() or "document"
         return FileResponse(
             buffer,
             as_attachment=True,

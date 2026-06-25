@@ -185,6 +185,19 @@ export async function exportDocumentDocx(id) {
     return { blob, filename };
 }
 
+// Downloads the document's cited-only source library as a real .bib file
+// (Mendeley/EndNote/Zotero-compatible) — the same library the agent already
+// grounds in-text citations against and that "give me the bibtex" returns in chat.
+export async function exportDocumentBibtex(id) {
+    const res = await apiFetch(`${API_BASE}/documents/${id}/export/?as_format=bib`);
+    if (!res.ok) throw new Error(await readApiError(res, 'Failed to export references'));
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : 'references.bib';
+    return { blob, filename };
+}
+
 export async function extractFileText(file) {
     const formData = new FormData();
     formData.append('file', file);
