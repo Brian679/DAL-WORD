@@ -472,8 +472,8 @@ def generate_chart(
         bars = ax.bar(
             x_positions,
             values,
-            color="#c26d2c",
-            edgecolor="#7a3e14",
+            color="#2f73b0",
+            edgecolor="#0f4e6e",
             linewidth=1.0,
             width=0.62,
             zorder=3,
@@ -487,7 +487,7 @@ def generate_chart(
                 ha="center",
                 va="bottom" if value >= 0 else "top",
                 fontsize=9,
-                color="#5b2d0c",
+                color="#0f3e57",
                 zorder=5,
             )
 
