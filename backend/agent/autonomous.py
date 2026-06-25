@@ -5803,9 +5803,19 @@ def _expand_fallback_text(
     # order — a contributor to the document reading as templated/repetitive. crc32 (rather
     # than a plain ordinal sum, which collides easily mod a small pool size) keeps adjacent
     # subsection names like "ii. Dedication" / "iii. Acknowledgements" from landing on the
-    # same rotation and thus opening with an identical paragraph.
-    offset = zlib.crc32(subsection.encode()) % len(pool)
-    rotated = pool[offset:] + pool[:offset]
+    # same rotation and thus opening with an identical paragraph. A plain contiguous shift
+    # still collides across *other* subsection pairs within the same chapter, since the pool
+    # is small relative to the number of padding slots a chapter needs — so the walk also
+    # applies a per-subsection stride (kept coprime with the pool size so every entry is
+    # still reachable) to permute the order rather than just shift it.
+    pool_size = len(pool)
+    offset = zlib.crc32(subsection.encode()) % pool_size
+    stride = 1
+    if pool_size > 1:
+        stride = 1 + (zlib.crc32(f"{subsection}|stride".encode()) % (pool_size - 1))
+        while math.gcd(stride, pool_size) != 1:
+            stride += 1
+    rotated = tuple(pool[(offset + i * stride) % pool_size] for i in range(pool_size))
     max_paragraphs = 3
     parts = [body]
     added_words = 0
