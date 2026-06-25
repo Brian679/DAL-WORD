@@ -10,6 +10,7 @@ import json
 import math
 import random
 import re
+import zlib
 from typing import Any
 
 from documents.models import Document, DocumentVersion
@@ -5799,8 +5800,11 @@ def _expand_fallback_text(
         return body
     # Rotate the pool's starting point per subsection so consecutive subsections (which all
     # draw from the same small pool) don't render the exact same paragraphs in the same
-    # order — a contributor to the document reading as templated/repetitive.
-    offset = sum(ord(c) for c in subsection) % len(pool)
+    # order — a contributor to the document reading as templated/repetitive. crc32 (rather
+    # than a plain ordinal sum, which collides easily mod a small pool size) keeps adjacent
+    # subsection names like "ii. Dedication" / "iii. Acknowledgements" from landing on the
+    # same rotation and thus opening with an identical paragraph.
+    offset = zlib.crc32(subsection.encode()) % len(pool)
     rotated = pool[offset:] + pool[:offset]
     max_paragraphs = 3
     parts = [body]
