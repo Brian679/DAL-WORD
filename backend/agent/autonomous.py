@@ -2483,11 +2483,57 @@ def _fallback_chart_labels(label_style: str, effective_n: int) -> list[str]:
     return [f"Category {i + 1}" for i in range(effective_n)]
 
 
+def _seeded_curve(seed: int, n: int) -> list[float]:
+    """Pick one of several visually distinct normalized (0..1) shapes for n points, keyed by
+    `seed`, instead of a single fixed monotonic ramp — so fallback charts for different
+    topics/objectives/sections don't all render as the same ascending staircase. The shapes
+    read naturally for both ordinal Likert distributions (rising = agreement-leaning, falling
+    = disagreement-leaning, bell = neutral-heavy consensus, u_shaped = polarized, quick-rise/
+    quick-fall = mixed-then-settled) and time-ordered trial data (improving/declining/peaking/
+    dipping/early-gains-then-steady).
+    """
+    if n <= 1:
+        return [0.5] * max(n, 1)
+    span = n - 1
+    shapes = [
+        lambda i: i / span,                          # rising
+        lambda i: 1 - i / span,                       # falling
+        lambda i: math.sin(math.pi * i / span),       # bell (peak mid)
+        lambda i: abs(2 * i / span - 1),              # u-shaped (dip mid)
+        lambda i: 1 - math.exp(-3 * i / span),        # quick rise then plateau
+        lambda i: math.exp(-3 * i / span),            # quick fall then plateau
+    ]
+    shape = shapes[seed % len(shapes)]
+    jittered = []
+    for i in range(n):
+        noise = (((seed * 7 + i * 31) % 21) - 10) / 10 * 0.12
+        jittered.append(max(0.0, min(1.0, shape(i) + noise)))
+    return jittered
+
+
+def _distribute_to_total(curve: list[float], total: float) -> list[float]:
+    """Scale a normalized 0..1 curve into counts that sum exactly to `total` (e.g. survey
+    respondents spread across Likert categories) — the same exact-sum guarantee the
+    demographics table fallback already gives its frequency columns.
+    """
+    if not curve:
+        return []
+    s = sum(curve)
+    base = [total / len(curve)] * len(curve) if s <= 0 else [v / s * total for v in curve]
+    rounded = [round(v) for v in base]
+    diff = int(round(total)) - sum(rounded)
+    if diff:
+        idx = max(range(len(rounded)), key=lambda i: rounded[i])
+        rounded[idx] += diff
+    return [float(max(0, v)) for v in rounded]
+
+
 def _ai_chart_series(
     context: str,
     n_points: int = 8,
     category_labels: list[str] | None = None,
     label_style: str = "generic",
+    sample_size: int | None = None,
 ) -> dict[str, Any]:
     """Ask the LLM to produce realistic numeric data for a chart.
 
@@ -2501,12 +2547,27 @@ def _ai_chart_series(
     demographic chart), pass category_labels so both the LLM prompt and the fallback use
     those exact labels instead of inventing generic ones. Otherwise label_style picks a
     domain-appropriate fallback label set ("likert" for respondent-based studies, "trial"
-    for experimental/engineering studies).
+    for experimental/engineering studies). Pass sample_size (the study's actual respondent/
+    participant count, e.g. from _infer_sample_size) so Likert-style fallback data reads as
+    real counts of respondents rather than an arbitrary unscaled range.
     """
-    # Pie charts look cluttered with many slices; cap at 6 for pie-likely topics.
+    # Pie charts look cluttered with many slices; cap at 6 for pie-likely topics. A 5-point
+    # Likert scale only has 5 standard response categories, so cap to that too — otherwise the
+    # default Likert labels (Strongly Disagree..Strongly Agree) would have to repeat to fill
+    # more slots than the scale actually has.
     pie_keywords = {"distribution", "composition", "proportion", "breakdown", "demographic", "share", "pie"}
     likely_pie = any(kw in context.lower() for kw in pie_keywords)
-    effective_n = len(category_labels) if category_labels else (min(n_points, 6) if likely_pie else n_points)
+    if category_labels:
+        effective_n = len(category_labels)
+    elif label_style == "likert":
+        # Takes precedence over the generic pie cap below: a respondent-based chart titled
+        # e.g. "Distribution of Responses on X" trips the "distribution" pie keyword, but its
+        # real cap is the 5-point Likert scale, not the generic 6-slice pie cap.
+        effective_n = min(n_points, len(_LIKERT_LABELS))
+    elif likely_pie:
+        effective_n = min(n_points, 6)
+    else:
+        effective_n = n_points
 
     label_instruction = (
         f"3. x_labels: use EXACTLY these {effective_n} category labels, in this order: "
@@ -2515,9 +2576,15 @@ def _ai_chart_series(
         f"3. x_labels: provide EXACTLY {effective_n} short labels (1-4 words each) describing each data point "
         "(e.g. years like '2019', '2020'; categories like 'Urban', 'Rural'; groups like 'Group A').\n"
     )
+    sample_size_clause = (
+        f"This study's actual sample size is approximately {sample_size} respondents/participants — for "
+        "Likert/survey-frequency charts, values should sum to approximately that number (counts), not 100.\n"
+        if sample_size else ""
+    )
     prompt = (
         "You are an academic data analyst generating chart data for a dissertation figure.\n"
-        f"Chart topic / section title: \"{context}\"\n\n"
+        f"Chart topic / section title: \"{context}\"\n"
+        f"{sample_size_clause}\n"
         "Instructions:\n"
         f"1. Generate EXACTLY {effective_n} data points that are academically plausible for this topic.\n"
         "2. Choose the BEST chart_type: 'bar' for comparisons/categories, 'line' for trends over time, "
@@ -2525,8 +2592,10 @@ def _ai_chart_series(
         f"{label_instruction}"
         "4. unit: the y-axis measurement unit as a short string, e.g. '%', 'score (1-5)', 'count', "
         "'USD millions', 'years', 'kg/ha'. Use '%' for percentages, not 'percent' or '%%'.\n"
-        "5. Values must show meaningful variation — NOT all the same. Be realistic and grounded.\n"
-        "6. For demographic/proportion charts, values should sum to approximately 100 (percentages).\n"
+        "5. Values must show meaningful variation — NOT all the same, and NOT a simple straight-line ramp. "
+        "Be realistic and grounded: real data has peaks, dips, and plateaus.\n"
+        "6. For demographic/proportion charts (no sample size given above), values should sum to "
+        "approximately 100 (percentages).\n"
         "7. For Likert/survey-score charts, values should be between 1.0 and 5.0.\n\n"
         "Return ONLY a JSON object — no markdown, no explanation:\n"
         '{"series":[v1,v2,...],"chart_type":"bar","x_labels":["lbl1","lbl2",...],"unit":"%"}'
@@ -2563,13 +2632,31 @@ def _ai_chart_series(
     except Exception as exc:
         logger.warning("_ai_chart_series fallback (%s): %s", context[:60], exc)
         seed = sum(ord(c) for c in context)
-        base = 10.0 + (seed % 30)
-        return {
-            "series": [round(base + i * 3.5 + (seed + i) % 7, 1) for i in range(effective_n)],
-            "chart_type": "bar",
-            "x_labels": list(category_labels) if category_labels else _fallback_chart_labels(label_style, effective_n),
-            "unit": "",
-        }
+        curve = _seeded_curve(seed, effective_n)
+        x_labels = list(category_labels) if category_labels else _fallback_chart_labels(label_style, effective_n)
+
+        if label_style == "likert" and not category_labels:
+            # Distribution of respondents across the 5 standard Likert categories, scaled to
+            # the study's real sample size (or 100, treated as a percentage, when unknown)
+            # instead of an arbitrary unscaled range — and shaped per-topic via _seeded_curve
+            # rather than always trending the same way.
+            counts = _distribute_to_total(curve, sample_size or 100)
+            return {
+                "series": counts,
+                "chart_type": "bar",
+                "x_labels": x_labels,
+                "unit": "respondents" if sample_size else "%",
+            }
+        if label_style == "trial":
+            base = 55.0 + (seed % 25)
+            amplitude = 12.0 + (seed % 18)
+            series = [round(base + (v - 0.5) * 2 * amplitude, 1) for v in curve]
+            return {"series": series, "chart_type": "line", "x_labels": x_labels, "unit": "score"}
+
+        base = 8.0 + (seed % 22)
+        amplitude = 18.0 + (seed % 30)
+        series = [round(base + v * amplitude, 1) for v in curve]
+        return {"series": series, "chart_type": "bar", "x_labels": x_labels, "unit": ""}
 
 
 def _extract_json_obj(raw: str) -> dict[str, Any]:
@@ -3823,16 +3910,25 @@ def _objective_findings_preview(table_dataset: dict[str, Any] | None, research_d
     return ""
 
 
-def _chart_discussion_text(series: list[float], objective: str | None = None, node_title: str | None = None) -> str:
+def _chart_discussion_text(
+    series: list[float],
+    objective: str | None = None,
+    node_title: str | None = None,
+    is_user_provided: bool = False,
+) -> str:
     avg = round(sum(series) / len(series), 2) if series else 0.0
     high = max(series) if series else 0.0
     low = min(series) if series else 0.0
     trend = "upward" if len(series) > 1 and series[-1] >= series[0] else "mixed"
     objective_label = _truncate_label(objective or node_title or "the subsection", 70)
+    note = (
+        "\nNote: this figure is plotted directly from the data you supplied."
+        if is_user_provided else _SYNTHETIC_DATA_NOTE
+    )
     return (
         f"Interpretation: Figure trend is {trend}, with values ranging from {low:.2f} to {high:.2f} and an average of {avg:.2f}.\n"
         f"Discussion: For {objective_label}, the visual pattern reinforces the numerical evidence and clarifies priority areas for action."
-        f"{_SYNTHETIC_DATA_NOTE}"
+        f"{note}"
     )
 
 
@@ -4346,6 +4442,7 @@ def _execute_subsection_nodes(
                         n_points=8,
                         category_labels=category_labels,
                         label_style=label_style,
+                        sample_size=sample_size,
                     )
                     if is_demographics_chart:
                         raw_vals = [max(0.0, float(v)) for v in ai_data.get("series", [])]
@@ -9581,7 +9678,7 @@ def run_agent(
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "add_chart":
-            reply, updated = _add_chart(document, target_section, plan)
+            reply, updated = _add_chart(document, target_section, plan, generation_message)
         elif intent == "add_image":
             reply, updated = _add_image(document, target_section, generation_message, plan)
         elif intent == "humanise_ai_sections":
@@ -12095,6 +12192,43 @@ def _create_outline(document: Document, topic: str, plan: list) -> tuple[str, bo
     return f"Created outline with {len(sections)} chapters:\n{titles}", True
 
 
+_CHART_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _extract_user_chart_data(text: str) -> dict[str, Any] | None:
+    """Detect literal numeric data the user pasted directly into their chat message (e.g.
+    their own real questionnaire tallies or experimental readings), so the agent can plot
+    those real numbers instead of generating simulated ones. Returns None when no explicit
+    dataset is found — a bare phrase like "8 respondents took part" or "in 2024" must not be
+    misread as a dataset.
+    """
+    if not text:
+        return None
+
+    # Most explicit form: one or more "Label: number" / "Label = number" pairs, e.g.
+    # "Strongly Agree: 42, Agree: 35, Neutral: 10" or one pair per line.
+    pair_matches = re.findall(r"([A-Za-z][A-Za-z0-9 _\-/]{0,30}?)\s*[:=]\s*(-?\d+(?:\.\d+)?)\s*%?", text)
+    if len(pair_matches) >= 2:
+        labels = [lbl.strip() for lbl, _ in pair_matches]
+        values = [float(v) for _, v in pair_matches]
+        if len(set(labels)) >= 2:
+            return {"series": values, "x_labels": labels}
+
+    # Bare comma/space-separated number list, but only when introduced by an explicit
+    # lead-in phrase — otherwise any sentence containing a couple of numbers (e.g. a year and
+    # a page count) would be misread as a chart dataset.
+    lead = re.search(
+        r"(?:my|this|the|use|following|these)\s+(?:data|values|numbers|figures|results|readings|scores)"
+        r"\b[^\d\n]{0,20}((?:-?\d+(?:\.\d+)?[\s,;]+){1,}-?\d+(?:\.\d+)?)",
+        text, flags=re.IGNORECASE,
+    )
+    if lead:
+        values = [float(v) for v in _CHART_NUM_RE.findall(lead.group(1))]
+        if len(values) >= 2:
+            return {"series": values, "x_labels": None}
+    return None
+
+
 def _write_structured_document(
     document: Document,
     topic: str,
@@ -12107,7 +12241,7 @@ def _write_structured_document(
     return _plan_and_write_document(document, topic, effective, plan)
 
 
-def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str, bool]:
+def _add_chart(document: Document, target: str | None, plan: list, instruction: str = "") -> tuple[str, bool]:
     _done(plan, 0)
     sections = (document.content or {}).get("sections", [])
     if not sections:
@@ -12121,15 +12255,30 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
     _done(plan, 1)
 
     _section_title = section.get("title", "Data")
-    _ai = _ai_chart_series(_section_title, n_points=8)
+    user_data = _extract_user_chart_data(instruction)
+    if user_data:
+        series = user_data["series"]
+        x_labels = user_data.get("x_labels")
+        chart_type = "bar"
+        unit = ""
+        is_user_provided = True
+    else:
+        sample_size = _infer_sample_size(document)
+        _ai = _ai_chart_series(_section_title, n_points=8, sample_size=sample_size)
+        series = _ai["series"]
+        x_labels = _ai.get("x_labels")
+        chart_type = _ai["chart_type"]
+        unit = _ai.get("unit") or ""
+        is_user_provided = False
+
     figure_no = _next_caption_number(document, "figure")
     figure_caption = f"Figure {figure_no}: {_section_title}"
     chart_path = generate_chart(
-        series=_ai["series"],
-        chart_type=_ai["chart_type"],
+        series=series,
+        chart_type=chart_type,
         title=_section_title,
-        x_labels=_ai.get("x_labels") or None,
-        unit=_ai.get("unit") or None,
+        x_labels=x_labels or None,
+        unit=unit or None,
     )
     blocks = section.setdefault("blocks", [])
     block_id = f"fig-{figure_no}-{len(blocks) + 1}"
@@ -12138,7 +12287,7 @@ def _add_chart(document: Document, target: str | None, plan: list) -> tuple[str,
     )
     addition = (
         f"\n\n{figure_caption}\n[[BLOCK:{block_id}]]\n"
-        f"{_chart_discussion_text(_ai['series'], None, _section_title)}"
+        f"{_chart_discussion_text(series, None, _section_title, is_user_provided=is_user_provided)}"
     )
     section["content"] = (section.get("content", "") or "").rstrip() + addition
     _save(document, f"chart:{target or 'section'}")
