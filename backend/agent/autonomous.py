@@ -16,7 +16,6 @@ from typing import Any
 from documents.models import Document, DocumentVersion
 
 from .llm import (
-    humanise_text,
     chat_with_document,
     classify_intent,
     create_execution_plan,
@@ -11101,9 +11100,10 @@ def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
     BEFORE citation grounding ever sees the text — so in-text citation markers land in
     the final wording instead of being shuffled or dropped by a later humanising rewrite.
 
-    Tries the LLM rewrite first; falls back to rule-based phrase substitution if it's
-    unavailable. Returns the text unchanged (used_llm=False) if nothing reads as
-    AI-flagged, or if both rewrite attempts fail/degenerate. Returns (text, used_llm).
+    Always rewrites with the rule-based phrase/structure substitution engine — no LLM
+    call is made here, so behaviour is deterministic and has no network dependency.
+    Returns the text unchanged (second element always False, kept for call-site
+    compatibility) if nothing reads as AI-flagged, or if the rewrite degenerates.
     """
     from .ai_detector import detect_ai_content, rule_based_humanise
 
@@ -11121,24 +11121,11 @@ def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
     if not flagged:
         return text, False
 
-    ai_phrase_snippets = [s["text"][:80] for s in flagged if s.get("ai_probability", 0) >= 0.45]
-
-    new_text = None
-    used_llm = False
-    try:
-        candidate = humanise_text(plain, topic, ai_phrase_snippets)
-        if candidate and len(candidate.strip()) > 50:
-            new_text = candidate
-            used_llm = True
-    except Exception as exc:
-        logger.info("_auto_humanise_text: LLM humanise unavailable (%s), using rule-based fallback.", exc)
-
-    if not new_text:
-        new_text = rule_based_humanise(plain)
+    new_text = rule_based_humanise(plain)
 
     new_text = (new_text or "").strip()
     if new_text and new_text != plain:
-        return new_text, used_llm
+        return new_text, False
     return text, False
 
 

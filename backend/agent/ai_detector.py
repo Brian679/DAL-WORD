@@ -266,19 +266,37 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), "highlights the importance"),
     (re.compile(r"\b(plays?) (?:a )?(?:crucial|pivotal|significant|vital|key|important) role\b", re.I),
      lambda m: "matters" if m.group(1).lower() == "plays" else "matter"),
-    (re.compile(r"\bsignificantly impacts?\b", re.I), "affects"),
+    (re.compile(r"\bsignificantly (impacts?)\b", re.I),
+     lambda m: "affects" if m.group(1).lower().endswith("s") else "affect"),
     (re.compile(r"\bpotential (?:benefits?|implications?|challenges?)\b", re.I), lambda m: m.group().split()[-1]),
     # Connective filler
     (re.compile(r"\bFurthermore,?\s+", re.I), "Also, "),
     (re.compile(r"\bMoreover,?\s+", re.I), "And "),
     (re.compile(r"\bConsequently,?\s+", re.I), "So "),
     (re.compile(r"\bAdditionally,?\s+", re.I), "Also, "),
-    (re.compile(r"\bNotably,?\s+", re.I), ""),
-    (re.compile(r"\bImportantly,?\s+", re.I), ""),
-    (re.compile(r"\bEssentially,?\s+", re.I), ""),
-    (re.compile(r"\bFundamentally,?\s+", re.I), ""),
+    # Sentence-initial-only removal (anchored on start-of-text/line or a prior
+    # sentence terminator) so the word right after the dropped filler can be
+    # re-capitalized — a bare "" replacement would leave it lowercase mid-sentence.
+    (re.compile(r"(?:^|(?<=[.!?]\s))(?:Notably|Importantly|Essentially|Fundamentally|In essence),?\s+(\w)",
+                re.IGNORECASE | re.MULTILINE),
+     lambda m: m.group(1).upper()),
     (re.compile(r"\bUltimately,?\s+", re.I), "In the end, "),
     (re.compile(r"\bthe importance of (.{3,40}) cannot be (?:overstated|understated|emphasised|emphasized)\b", re.I), lambda m: f"{m.group(1)} matters a great deal"),
+    # More filler/cliché openers
+    (re.compile(r"\bwhen it comes to\b", re.I), lambda m: _match_case(m.group(), "regarding")),
+    (re.compile(r"\bat the end of the day,?\s*", re.I), lambda m: _match_case(m.group(), "ultimately, ")),
+    (re.compile(r"\bfirst and foremost,?\s*", re.I), lambda m: _match_case(m.group(), "first, ")),
+    (re.compile(r"\blast but not least,?\s*", re.I), lambda m: _match_case(m.group(), "finally, ")),
+    (re.compile(r"\b(?:with )?that being said,?\s*", re.I), lambda m: _match_case(m.group(), "still, ")),
+    (re.compile(r"\bit is no secret that\b", re.I), "Clearly,"),
+    (re.compile(r"\bas previously mentioned,?\s*", re.I), lambda m: _match_case(m.group(), "as noted earlier, ")),
+    (re.compile(r"\b(?:to put it simply|simply put),?\s*", re.I), lambda m: _match_case(m.group(), "in short, ")),
+    (re.compile(r"\ball things considered,?\s*", re.I), lambda m: _match_case(m.group(), "overall, ")),
+    (re.compile(r"\bmoving forward,?\s*", re.I), lambda m: _match_case(m.group(), "next, ")),
+    (re.compile(r"\bit should be noted that\b", re.I), "Note that"),
+    (re.compile(r"\bbegs the question\b", re.I), "raises the question"),
+    (re.compile(r"\bmake no mistake,?\s*", re.I), lambda m: _match_case(m.group(), "to be clear, ")),
+    (re.compile(r"\bat its core,?\s*", re.I), lambda m: _match_case(m.group(), "basically, ")),
     # Passive constructions (common AI pattern)
     (re.compile(r"\bIt (?:has|have) been (?:noted|observed|suggested|argued) that\b", re.I), "Research suggests that"),
     (re.compile(r"\bit is (?:widely )?(?:recognised|recognized|acknowledged|accepted) that\b", re.I), "Most researchers agree that"),
@@ -294,6 +312,28 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
 # narrower than a generic syntactic transform: with no dependency parser
 # available, each template targets one well-defined pattern rather than
 # guessing at sentence structure.
+
+# "the NOUN of" -> bare gerund (e.g. "the implementation of" -> "implementing").
+# Domain-agnostic, unlike the templates above, so it generalises nominalisation
+# flattening beyond the academic/FDI examples those were reverse-engineered from.
+_NOMINALISATION_TO_GERUND: dict[str, str] = {
+    "implementation": "implementing", "utilization": "utilizing", "utilisation": "utilising",
+    "development": "developing", "creation": "creating", "transformation": "transforming",
+    "integration": "integrating", "application": "applying", "adoption": "adopting",
+    "evaluation": "evaluating", "assessment": "assessing", "establishment": "establishing",
+    "investigation": "investigating", "examination": "examining", "collection": "collecting",
+    "interpretation": "interpreting", "construction": "constructing", "production": "producing",
+    "consideration": "considering", "introduction": "introducing", "expansion": "expanding",
+    "improvement": "improving", "enhancement": "enhancing", "reduction": "reducing",
+    "elimination": "eliminating", "promotion": "promoting", "prevention": "preventing",
+    "protection": "protecting", "management": "managing", "deployment": "deploying",
+    "identification": "identifying", "formulation": "formulating", "exploration": "exploring",
+    "incorporation": "incorporating",
+}
+_NOMINALISATION_RE = re.compile(
+    r"\bthe (" + "|".join(_NOMINALISATION_TO_GERUND) + r") of\b", re.IGNORECASE,
+)
+
 
 def _restructure_clauses(text: str, rng: random.Random) -> str:
     # "The findings/results revealed/showed/indicated that X" -> "It was found that X"
@@ -386,16 +426,29 @@ def _restructure_clauses(text: str, rng: random.Random) -> str:
     )
 
     # Connector substitution — preserves clause structure, swaps the linking word.
+    # "X; however, Y" -> "X; but Y" (semicolon already separates the clauses).
+    text = re.sub(r";\s+however,\s+", "; but ", text, flags=re.IGNORECASE)
     # "X, however, Y" -> "X, but Y" (mid-clause insertion, drop the trailing comma "but" doesn't take)
     text = re.sub(r",\s+however,\s+", ", but ", text, flags=re.IGNORECASE)
-    # Sentence-initial "However, X" -> "But X"
+    # Sentence-initial "However, X" -> "But X" — anchored to start-of-text/line or
+    # right after a sentence terminator, so a mid-sentence "however," that slips
+    # past the two rules above (e.g. no leading comma/semicolon) isn't wrongly
+    # capitalized into "But" in the middle of a clause.
     text = re.sub(
-        r"\bHowever,\s+",
-        lambda m: _match_case("However", "But") + " ",
-        text, flags=re.IGNORECASE,
+        r"(?:^|(?<=[.!?]\s))However,\s+", "But ",
+        text, flags=re.IGNORECASE | re.MULTILINE,
     )
     # Any remaining bare "however" -> "but"
     text = re.sub(r"\bHowever\b", lambda m: _match_case(m.group(), "but"), text, flags=re.IGNORECASE)
+
+    # "the implementation/development/... of X" -> "implementing/developing/... X"
+    # Generic because a gerund phrase is itself an NP, so it drops into the same
+    # subject/object/prepositional-complement slot the original "the NOUN of"
+    # phrase occupied — safe regardless of what governs it in the sentence.
+    text = _NOMINALISATION_RE.sub(
+        lambda m: _match_case(m.group(0), _NOMINALISATION_TO_GERUND[m.group(1).lower()]),
+        text,
+    )
 
     # ", while Y verbed" -> ", and Y verbed" — only when "while" is followed by
     # what looks like a fresh clause subject (not "still"/an -ing participle),
@@ -473,6 +526,12 @@ _SYNONYM_MAP: dict[str, list[str]] = {
     "technique": ["method", "approach"], "techniques": ["methods", "approaches"],
     "increasing": ["growing", "rising"],
     "competition": ["rivalry"],
+    # General high-frequency AI-overused vocabulary (not academic-specific, since
+    # this fallback now runs on every document type, not just dissertations).
+    # Each option keeps the same leading vowel/consonant sound as its key so an
+    # "a"/"an" earlier in the sentence stays grammatical after the swap.
+    "innovative": ["original", "inventive"], "crucial": ["vital", "key"],
+    "essential": ["important", "integral"], "vital": ["crucial", "key"],
 }
 _SYNONYM_RES = sorted(_SYNONYM_MAP.keys(), key=len, reverse=True)
 
@@ -486,10 +545,17 @@ def _match_case(src: str, repl: str) -> str:
 
 
 def _lexical_substitute(text: str, rng: random.Random) -> str:
-    """Swap predictable high-frequency words for lower-frequency synonyms."""
+    """Swap predictable high-frequency words for lower-frequency synonyms.
+
+    Skips a match immediately followed by "(ACRONYM)" — academic/report prose
+    constantly defines an abbreviation right after its full term (e.g. "Foreign
+    Direct Investment (FDI)", "Small and Medium Enterprises (SMEs)"), and
+    swapping the term there would break the term-acronym correspondence for
+    every later use of the abbreviation in the document.
+    """
     for key in _SYNONYM_RES:
         options = _SYNONYM_MAP[key]
-        pattern = re.compile(r"\b" + re.escape(key) + r"\b", re.IGNORECASE)
+        pattern = re.compile(r"\b" + re.escape(key) + r"\b(?!\s*\([A-Z]{2,}s?\))", re.IGNORECASE)
 
         def _sub(m: re.Match, options: list[str] = options) -> str:
             choice = rng.choice(options)
@@ -500,7 +566,12 @@ def _lexical_substitute(text: str, rng: random.Random) -> str:
 
 
 # ── Pass 3: sentence-length restructuring (burstiness) ─────────────────────
-_CLAUSE_SPLIT_RE = re.compile(r",\s+(and|but|which|so|because)\s+", re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(
+    r",\s+(and|but|which|so|because|although|though|since|yet)\s+", re.IGNORECASE,
+)
+_CLAUSE_LEAD_STRIP_RE = re.compile(
+    r"^,\s*(?:(?:and|but|so|which|while|although|though|since|yet)\s+)?", re.IGNORECASE,
+)
 
 
 def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
@@ -521,9 +592,20 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
         while i < len(sentences):
             sent = sentences[i]
             words = sent.split()
-            # Split long/medium sentences (> 20 words) at a clause boundary,
-            # falling back to the first comma if no conjunction is present.
+            # Split long/medium sentences (> 20 words). A semicolon already marks
+            # an independent-clause boundary, so prefer it over guessing at a
+            # comma/conjunction split; otherwise fall back to a clause boundary,
+            # then to the first comma if no conjunction is present either.
             if len(words) > 20:
+                semi = sent.find(";")
+                if semi != -1 and 8 < semi < len(sent) - 8 and rng.random() < 0.85:
+                    first = sent[:semi].strip() + "."
+                    rest = sent[semi + 1:].strip()
+                    rest = rest[:1].upper() + rest[1:]
+                    rebuilt.append(first)
+                    rebuilt.append(rest)
+                    i += 1
+                    continue
                 m = _CLAUSE_SPLIT_RE.search(sent)
                 cut = m.start() if m else None
                 if cut is None:
@@ -533,7 +615,7 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
                 if cut is not None and rng.random() < 0.85:
                     first = sent[:cut].strip().rstrip(",") + "."
                     rest = sent[cut:].strip()
-                    rest = re.sub(r"^,\s*(?:(?:and|but|so|which|while)\s+)?", "", rest, flags=re.IGNORECASE)
+                    rest = _CLAUSE_LEAD_STRIP_RE.sub("", rest)
                     rest = rest[:1].upper() + rest[1:]
                     rebuilt.append(first)
                     rebuilt.append(rest)
@@ -566,7 +648,7 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
             if comma != -1:
                 first = longest[:comma].strip().rstrip(",") + "."
                 rest = longest[comma:].strip()
-                rest = re.sub(r"^,\s*(?:(?:and|but|so|which|while)\s+)?", "", rest, flags=re.IGNORECASE)
+                rest = _CLAUSE_LEAD_STRIP_RE.sub("", rest)
                 rest = rest[:1].upper() + rest[1:]
                 rebuilt[longest_i:longest_i + 1] = [first, rest]
 
