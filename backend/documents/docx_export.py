@@ -137,9 +137,12 @@ def _add_paragraph_chunk(doc: DocxDocument, text: str) -> None:
                 clean = _OL_RE.sub("", _UL_RE.sub("", ln.lstrip())).strip()
                 doc.add_paragraph(clean, style=style)
         else:
-            joined = " ".join(lines)
-            p = doc.add_paragraph(joined)
+            p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            for i, ln in enumerate(lines):
+                if i > 0:
+                    p.add_run().add_break()
+                p.add_run(ln)
 
 
 def _add_section_content(doc: DocxDocument, content: str, blocks: list[dict] | None) -> None:
