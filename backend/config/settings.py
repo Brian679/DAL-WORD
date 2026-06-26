@@ -15,7 +15,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 # Gemini AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest")
+GROK_MODEL = os.getenv("GROK_MODEL", "llama-3.3-70b-versatile")
 
 # Comma-separated, e.g. "yourusername.pythonanywhere.com". Defaults to "*" for local dev.
 _allowed_hosts = os.getenv("DJANGO_ALLOWED_HOSTS", "*")
