@@ -96,7 +96,7 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
 
 
 
-def _subsection_guidelines(title: str, topic: str = "") -> str:
+def _subsection_guidelines(title: str, topic: str = "", research_design: str = "") -> str:
     """Generate dynamic writing instructions for the given subsection title."""
     lowered = title.lower()
 
@@ -400,6 +400,96 @@ def _subsection_guidelines(title: str, topic: str = "") -> str:
             "informed consent forms) will be attached here. "
             "Provide a labelled outline: Appendix A: [Survey Questionnaire], "
             "Appendix B: [Interview Guide], Appendix C: [Data Tables], etc."
+        )
+
+    # ── System-build (SDLC) methodology subsections — Chapter 3 of a
+    # software/web/information-system build dissertation (see
+    # _is_system_build_topic / _SYSTEM_BUILD_CHAPTER3_LABELS). These titles never
+    # occur in a survey-based study, so the title alone is a safe signal.
+    if "research design" in lowered:
+        if research_design == "mixed":
+            design_clause = (
+                "State plainly that this is a MIXED-METHODS, design-and-build study: a quantitative "
+                "engineering strand (iterative prototyping, controlled performance testing, reproducible "
+                "metrics) combined with a qualitative strand (real or simulated end users engaged to "
+                "validate the system meets their actual needs). Do not describe it as purely engineering/"
+                "experimental — name both strands explicitly."
+            )
+        elif research_design == "qualitative":
+            design_clause = (
+                "State plainly that this is a QUALITATIVE, design-and-build study: emphasis is on engaging "
+                "real or simulated end users to evaluate usability and fitness for purpose, with feedback "
+                "analysed thematically, rather than on quantitative performance thresholds."
+            )
+        else:
+            design_clause = (
+                "Describe the design-and-build, experimental research approach (iterative prototyping, "
+                "controlled performance testing, reproducible quantifiable results) consistent with this "
+                "study's engineering stance."
+            )
+        return (
+            f"Write the Research Design for THIS specific system-build study. {design_clause} Describe the "
+            "phases the research proceeded through (requirements, design/implementation, integration, "
+            "testing) and why this approach fits the stated research objectives."
+        )
+    if "existing system" in lowered:
+        return (
+            "Critically review the existing approach to this specific topic (manual process, legacy "
+            "software, or competing tools) — name concrete limitations, not a generic 'manual records "
+            "are slow' claim — and end by linking each limitation to a requirement covered next."
+        )
+    if "system requirement" in lowered or "functional requirement" in lowered or lowered.strip() == "requirements":
+        return (
+            "Split into Functional Requirements (what the system must DO, specific to this topic's "
+            "actual use cases) and Non-Functional Requirements (quality attributes that matter for THIS "
+            "system — performance, security, usability, etc). Tie each requirement to a research objective."
+        )
+    if "system design" in lowered or "architecture" in lowered:
+        return (
+            "Describe the system's architecture (layers/components and how they interact), naming the "
+            "actual technologies used and why they fit this topic. Justify each design decision against "
+            "a requirement defined earlier rather than describing a generic architecture in the abstract."
+        )
+    if "database" in lowered and ("design" in lowered or "model" in lowered):
+        return (
+            "Describe the data model: entities specific to this topic, their attributes, and "
+            "relationships, plus key design decisions (keys, indexing, normalisation, or spatial data "
+            "structures if relevant) and why they fit this system's expected access patterns."
+        )
+    if "tools and technolog" in lowered:
+        return (
+            "Name and justify the actual front-end, back-end, database, and any specialised tools/"
+            "libraries used to build this specific system, explaining why each was chosen over "
+            "alternatives. Avoid a generic 'modern web technologies' description with no concrete "
+            "tool names."
+        )
+    if "testing strategy" in lowered or "system testing" in lowered:
+        if research_design == "mixed":
+            design_clause = (
+                "Because this study uses a MIXED-METHODS design, combine a quantitative strand (unit, "
+                "integration, and performance/load testing against measurable thresholds) WITH a "
+                "qualitative strand: user-acceptance testing where real or simulated end users exercise the "
+                "system and give feedback (interviews, think-aloud sessions, or open-ended questions) "
+                "analysed thematically. Report both strands and how they were triangulated — do not drop "
+                "the qualitative arm."
+            )
+        elif research_design == "qualitative":
+            design_clause = (
+                "Because this study uses a QUALITATIVE design, centre the testing strategy on "
+                "user-acceptance testing: real or simulated end users exercising the system, feedback "
+                "captured via interviews or open-ended questions and analysed thematically, rather than "
+                "statistical performance thresholds."
+            )
+        else:
+            design_clause = (
+                "Describe unit testing, integration testing, and system/user-acceptance testing against "
+                "the functional and non-functional requirements, with concrete test cases (including edge "
+                "cases) and measurable pass/fail criteria specific to this topic."
+            )
+        return (
+            f"Write the testing strategy for THIS specific system (name actual modules/features being "
+            f"tested, not a placeholder). {design_clause} End by stating which Chapter 4 sections report "
+            "the results of this testing."
         )
 
     return (
@@ -1297,23 +1387,40 @@ def _research_design(message: str, topic: str, document: Document) -> str:
 # both signals (e.g. "user acceptance of a new robotic system") — so respondent hints are
 # checked first and win on conflict, since a human-facing study still needs a respondent
 # profile even when it also discusses a technical artifact.
-_RESPONDENT_HINTS = (
+# Split into "strong" hints — phrases that only make sense if the study is actually
+# collecting responses from people (a survey methodology) — and "weak" hints — nouns that
+# just name WHO a system is built for ("student management system", "patient record
+# system") without implying the study itself surveys them. This split matters because a
+# system-build topic is routinely *named* after its user base ("Hospital Management
+# System" serves patients; "Student Result Management System" serves students), so a
+# naive substring check on the weak nouns alone would misclassify nearly every
+# "X management/booking/tracking system" topic as a human-respondent survey study. Strong
+# hints still take priority over a system-build/technical hint (e.g. "a survey of hotel
+# guests' satisfaction with a booking platform" is correctly still a survey study).
+_STRONG_RESPONDENT_HINTS = (
     "survey", "questionnaire", "respondent", "interview", "participant", "perception",
-    "awareness", "opinion", "attitude towards", "attitude of", "employee", "customer",
-    "consumer", "student", "teacher", "patient", "citizen", "manager", "user experience",
-    "stakeholder", "satisfaction", "smes", "small and medium enterpr",
+    "awareness", "opinion", "attitude towards", "attitude of", "satisfaction",
+    "user experience",
 )
+_WEAK_RESPONDENT_HINTS = (
+    "employee", "customer", "consumer", "student", "teacher", "patient", "citizen",
+    "manager", "stakeholder", "smes", "small and medium enterpr",
+)
+_RESPONDENT_HINTS = _STRONG_RESPONDENT_HINTS + _WEAK_RESPONDENT_HINTS
 # Split into two groups so callers can tell *which kind* of no-respondent study this is —
 # a software/web/information-system build (SDLC-shaped: requirements, design, database,
 # testing) versus a hardware/algorithmic engineering build (trial-shaped: test scenarios,
 # performance measurements). Both groups still combine into one for _uses_human_respondents.
 _NO_RESPONDENT_HINTS_SYSTEM_BUILD = (
     "web app", "web application", "website", "web portal", "web-based system",
-    "web-based platform", "mobile app", "mobile application", "information system",
+    "web-based platform", "web platform", "mobile app", "mobile application", "information system",
     "management information system", "geographic information system",
     "gis-based", "gis based", "geospatial", "database system", "decision support system",
     "recommender system", "content management system", "e-commerce system", "expert system",
-    "software application",
+    "software application", "platform", "management system", "booking system",
+    "booking platform", "reservation system", "tracking system", "scheduling system",
+    "ordering system", "monitoring system", "inventory system", "online system",
+    "online platform", "digital platform", "automated system",
 )
 _NO_RESPONDENT_HINTS_TECHNICAL = (
     "robot", "robotic", "drone", "uav", "embedded system", "firmware", "microcontroller",
@@ -1334,10 +1441,12 @@ def _uses_human_respondents(topic: str, message: str, objectives: list[str] | No
     technical/engineering build-and-test study with no human survey component.
     """
     text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
-    if any(hint in text for hint in _RESPONDENT_HINTS):
+    if any(hint in text for hint in _STRONG_RESPONDENT_HINTS):
         return True
     if any(hint in text for hint in _NO_RESPONDENT_HINTS):
         return False
+    if any(hint in text for hint in _WEAK_RESPONDENT_HINTS):
+        return True
     return True
 
 
@@ -1346,9 +1455,14 @@ def _is_system_build_topic(topic: str, message: str = "", objectives: list[str] 
     system build studies, so Chapter 3 can use an SDLC-shaped skeleton (requirements, system
     design, database design, tools and technologies, testing strategy) instead of the
     trial-and-measurement skeleton that fits a hardware/algorithmic engineering build.
+
+    Only the STRONG respondent hints veto a system-build classification here — a weak hint
+    (e.g. "student", "patient") is routinely just the system's user base ("Student Result
+    Management System", "Patient Records Management System") rather than evidence the study
+    surveys them, so it must not block the SDLC skeleton from being selected.
     """
     text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
-    if any(hint in text for hint in _RESPONDENT_HINTS):
+    if any(hint in text for hint in _STRONG_RESPONDENT_HINTS):
         return False
     return any(hint in text for hint in _NO_RESPONDENT_HINTS_SYSTEM_BUILD)
 
@@ -1375,7 +1489,7 @@ def _is_doctrinal_topic(topic: str, message: str, objectives: list[str] | None =
     since a human-facing study about a legal/policy topic is still survey-based.
     """
     text = " ".join([topic or "", message or "", " ".join(objectives or [])]).lower()
-    if any(hint in text for hint in _RESPONDENT_HINTS):
+    if any(hint in text for hint in _STRONG_RESPONDENT_HINTS):
         return False
     return any(hint in text for hint in _DOCTRINAL_HINTS)
 
@@ -4735,7 +4849,7 @@ def _execute_subsection_nodes(
             from .pipeline import Pipeline
             from .planner import PlannerAgent, TaskSpec as PipelineTaskSpec, IntentSpec
 
-            guidelines = _subsection_guidelines(title, topic)
+            guidelines = _subsection_guidelines(title, topic, research_design)
             is_pointform = any(
                 k in lowered_title
                 for k in ["research objective", "objectives", "research question", "hypothes",
@@ -8184,6 +8298,12 @@ def _fallback_subsection_body(
                 "appropriate, replicated."
             )
         if is_system_build and "existing system" in sub_lower:
+            gap_clause = (
+                "Feedback gathered informally from people who currently work with the existing approach further "
+                "confirmed these weaknesses qualitatively, alongside the limitations observed directly from "
+                "inspecting the existing records and tools.\n\n"
+                if is_mixed else ""
+            )
             return (
                 f"Prior to designing the proposed system, the existing approach to {topic} was reviewed in order "
                 "to identify its key limitations and the specific gap the new system is intended to close. This "
@@ -8192,14 +8312,22 @@ def _fallback_subsection_body(
                 "up-to-date, and easily searchable information.\n\n"
                 "Key weaknesses identified in the existing approach include limited accessibility, the absence of "
                 "a unified spatial or relational view of the data, slow retrieval of records, and a high risk of "
-                "data duplication or loss. These weaknesses directly motivate the functional and non-functional "
-                "requirements defined in the next section."
+                f"data duplication or loss.\n\n{gap_clause}"
+                "These weaknesses directly motivate the functional and non-functional requirements defined in "
+                "the next section."
             )
         if is_system_build and "requirement" in sub_lower:
+            source_clause = (
+                "derived both from the research objectives set out in Chapter 1 and from prospective users' own "
+                "stated needs, gathered qualitatively alongside the limitations of the existing approach identified "
+                "above"
+                if is_mixed else
+                "derived from the research objectives set out in Chapter 1 and from the limitations of the "
+                "existing approach identified above"
+            )
             return (
-                "Functional and non-functional requirements for the system were derived from the research "
-                "objectives set out in Chapter 1 and from the limitations of the existing approach identified "
-                "above. Functional requirements specify what the system must do — for example, allowing users "
+                f"Functional and non-functional requirements for the system were {source_clause}. Functional "
+                "requirements specify what the system must do — for example, allowing users "
                 "to create, search, update, and remove records, and to view relevant information through an "
                 "appropriate interface — while non-functional requirements specify the quality attributes the "
                 "system must exhibit, such as usability, response time, security, and reliability under expected "
@@ -8247,22 +8375,70 @@ def _fallback_subsection_body(
                 "decisions made over the course of the project."
             )
         if is_system_build and ("testing strategy" in sub_lower or "system testing" in sub_lower):
+            if is_mixed:
+                strategy_clause = (
+                    "Because this study follows a mixed-methods design, the testing strategy itself combines two "
+                    "strands. The quantitative strand comprised unit testing of individual components, "
+                    "integration testing of the interactions between components, and performance/load testing "
+                    "against measurable thresholds derived from the non-functional requirements. The qualitative "
+                    "strand consisted of user-acceptance testing in which a purposively selected group of "
+                    "prospective users exercised the system and gave feedback — via structured debrief interviews "
+                    "or open-ended questions — that was analysed thematically to surface usability issues the "
+                    "quantitative metrics alone would not reveal.\n\n"
+                    "The two strands were triangulated: a feature was only considered fully validated once it "
+                    "passed its quantitative test cases AND attracted no unresolved usability concerns from the "
+                    "qualitative feedback."
+                )
+            elif is_qualitative:
+                strategy_clause = (
+                    "Because this study follows a qualitative design, the testing strategy centred on "
+                    "user-acceptance testing rather than statistical performance thresholds: a purposively "
+                    "selected group of prospective users exercised the system, and their feedback — gathered "
+                    "through structured debrief interviews, think-aloud sessions, or open-ended questions — was "
+                    "analysed thematically to identify usability issues and confirm the system meets users' "
+                    "actual needs. Functional correctness was still verified through unit and integration "
+                    "testing, but acceptance was judged primarily on the qualitative feedback rather than a "
+                    "quantitative score."
+                )
+            else:
+                strategy_clause = (
+                    "The developed system was evaluated using a structured testing strategy comprising unit "
+                    "testing of individual components, integration testing of the interactions between "
+                    "components, and system or user-acceptance testing against the functional and non-functional "
+                    "requirements defined in this chapter."
+                )
             return (
-                "The developed system was evaluated using a structured testing strategy comprising unit testing "
-                "of individual components, integration testing of the interactions between components, and "
-                "system or user-acceptance testing against the functional and non-functional requirements "
-                "defined in this chapter. Test cases were derived directly from the requirements, with both "
+                f"{strategy_clause} Test cases were derived directly from the requirements, with both "
                 "typical and edge-case scenarios included to assess robustness.\n\n"
                 "Results of this testing process, including the extent to which the system met its defined "
                 "performance and usability targets, are presented and discussed in Chapter 4 in relation to the "
                 "research objectives set out in Chapter 1."
             )
         if "research design" in sub_lower or sub_lower.strip().endswith("design"):
+            if is_mixed:
+                approach_clause = (
+                    "A mixed-methods, design-and-build research approach was adopted: a quantitative, "
+                    "engineering strand — iterative prototyping, controlled performance testing, and the "
+                    "generation of reproducible, quantifiable results — was combined with a qualitative strand "
+                    "in which real or simulated end users were engaged to validate that the system actually "
+                    "meets their needs, not merely that it passes mechanical test cases."
+                )
+            elif is_qualitative:
+                approach_clause = (
+                    "A qualitative, design-and-build research approach was adopted. Rather than judging the "
+                    "system primarily against quantitative performance thresholds, this approach places emphasis "
+                    "on engaging real or simulated end users to evaluate the system's usability and fitness for "
+                    "purpose, with their feedback analysed thematically alongside the engineering build process."
+                )
+            else:
+                approach_clause = (
+                    "A design-and-build, experimental research approach was adopted, consistent with the "
+                    "engineering epistemological stance that underpins the study. This approach is well suited "
+                    "to the research objectives because it enables iterative prototyping, controlled performance "
+                    "testing, and the generation of reproducible, quantifiable results."
+                )
             return (
-                "A design-and-build, experimental research approach was adopted, consistent with the engineering "
-                "epistemological stance that underpins the study. This approach is well suited to the research "
-                "objectives because it enables iterative prototyping, controlled performance testing, and the "
-                "generation of reproducible, quantifiable results.\n\n"
+                f"{approach_clause}\n\n"
                 "The research proceeded through distinct phases — requirements definition, design and "
                 "implementation, integration, and performance testing — with each phase informing refinements to "
                 "the next. This iterative structure allowed design decisions to be evaluated empirically rather "
@@ -12640,7 +12816,7 @@ def _plan_and_write_document(
         title = item["title"]
         wc = item["word_count"]
         notes = item.get("notes", "")
-        section_guide = _subsection_guidelines(title, topic)
+        section_guide = _subsection_guidelines(title, topic, design)
         context_so_far = _full_context_for_generation(document)
 
         lowered_title = title.lower()

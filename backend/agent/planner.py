@@ -243,7 +243,7 @@ class PlannerAgent:
         Enrich a TaskSpec with section-specific guidelines and context snippet.
         Returns a new (enriched) TaskSpec.
         """
-        guidelines = self._build_guidelines(task.title, intent_spec.topic)
+        guidelines = self._build_guidelines(task.title, intent_spec.topic, task.research_design)
         is_pointform = any(k in task.title.lower() for k in _POINTFORM_KEYWORDS)
         wc = 120 if is_pointform else task.word_count
 
@@ -320,7 +320,7 @@ class PlannerAgent:
         return 99
 
     @staticmethod
-    def _build_guidelines(section_title: str, topic: str) -> str:
+    def _build_guidelines(section_title: str, topic: str, research_design: str = "") -> str:
         """
         Return section-specific writing instructions.
         Mirrors the logic in autonomous._subsection_guidelines but kept
@@ -388,6 +388,85 @@ class PlannerAgent:
             )
         if "appendix" in lowered or "appendices" in lowered:
             return "Appendix: label each item (Appendix A, B …), title, and brief description."
+
+        # ── System-build (SDLC) methodology subsections — Chapter 3 of a
+        # software/web/information-system build dissertation. These titles never
+        # occur in a survey-based study, so the title alone is a safe signal.
+        if "research design" in lowered:
+            if research_design == "mixed":
+                design_clause = (
+                    "State plainly that this is a MIXED-METHODS, design-and-build study: a quantitative "
+                    "engineering strand (iterative prototyping, controlled performance testing, reproducible "
+                    "metrics) combined with a qualitative strand (real or simulated end users engaged to "
+                    "validate the system meets their actual needs). Do not describe it as purely engineering/"
+                    "experimental — name both strands explicitly."
+                )
+            elif research_design == "qualitative":
+                design_clause = (
+                    "State plainly that this is a QUALITATIVE, design-and-build study: emphasis is on engaging "
+                    "real or simulated end users to evaluate usability and fitness for purpose, with feedback "
+                    "analysed thematically, rather than on quantitative performance thresholds."
+                )
+            else:
+                design_clause = (
+                    "Describe the design-and-build, experimental research approach (iterative prototyping, "
+                    "controlled performance testing, reproducible quantifiable results) consistent with this "
+                    "study's engineering stance."
+                )
+            return (
+                f"Write the Research Design for THIS specific system-build study. {design_clause} Describe the "
+                "phases the research proceeded through (requirements, design/implementation, integration, "
+                "testing) and why this approach fits the stated research objectives."
+            )
+        if "existing system" in lowered:
+            return ("Critically review the existing approach to this specific topic (manual process, legacy "
+                    "software, or competing tools) — name concrete limitations, not a generic 'manual records "
+                    "are slow' claim — and end by linking each limitation to a requirement covered next.")
+        if "system requirement" in lowered or "functional requirement" in lowered or lowered.strip() == "requirements":
+            return ("Split into Functional Requirements (what the system must DO, specific to this topic's "
+                    "actual use cases) and Non-Functional Requirements (quality attributes that matter for THIS "
+                    "system — performance, security, usability, etc). Tie each requirement to a research "
+                    "objective.")
+        if "system design" in lowered or "architecture" in lowered:
+            return ("Describe the system's architecture (layers/components and how they interact), naming the "
+                    "actual technologies used and why they fit this topic. Justify each design decision against "
+                    "a requirement defined earlier rather than describing a generic architecture in the "
+                    "abstract.")
+        if "database" in lowered and ("design" in lowered or "model" in lowered):
+            return ("Describe the data model: entities specific to this topic, their attributes, and "
+                    "relationships, plus key design decisions (keys, indexing, normalisation, or spatial data "
+                    "structures if relevant) and why they fit this system's expected access patterns.")
+        if "tools and technolog" in lowered:
+            return ("Name and justify the actual front-end, back-end, database, and any specialised tools/"
+                    "libraries used to build this specific system, explaining why each was chosen over "
+                    "alternatives. Avoid a generic 'modern web technologies' description with no concrete "
+                    "tool names.")
+        if "testing strategy" in lowered or "system testing" in lowered:
+            if research_design == "mixed":
+                design_clause = (
+                    "Because this study uses a MIXED-METHODS design, combine a quantitative strand (unit, "
+                    "integration, and performance/load testing against measurable thresholds) WITH a "
+                    "qualitative strand: user-acceptance testing where real or simulated end users exercise the "
+                    "system and give feedback (interviews, think-aloud sessions, or open-ended questions) "
+                    "analysed thematically. Report both strands and how they were triangulated — do not drop "
+                    "the qualitative arm."
+                )
+            elif research_design == "qualitative":
+                design_clause = (
+                    "Because this study uses a QUALITATIVE design, centre the testing strategy on "
+                    "user-acceptance testing: real or simulated end users exercising the system, feedback "
+                    "captured via interviews or open-ended questions and analysed thematically, rather than "
+                    "statistical performance thresholds."
+                )
+            else:
+                design_clause = (
+                    "Describe unit testing, integration testing, and system/user-acceptance testing against "
+                    "the functional and non-functional requirements, with concrete test cases (including edge "
+                    "cases) and measurable pass/fail criteria specific to this topic."
+                )
+            return (f"Write the testing strategy for THIS specific system (name actual modules/features being "
+                    f"tested, not a placeholder). {design_clause} End by stating which Chapter 4 sections "
+                    "report the results of this testing.")
 
         # Generic fallback
         return (f"Write the '{section_title}' section using formal academic prose. "
