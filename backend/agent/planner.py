@@ -243,7 +243,7 @@ class PlannerAgent:
         Enrich a TaskSpec with section-specific guidelines and context snippet.
         Returns a new (enriched) TaskSpec.
         """
-        guidelines = self._build_guidelines(task.title, intent_spec.topic, task.research_design)
+        guidelines = task.guidelines or self._build_guidelines(task.title, intent_spec.topic, task.research_design)
         is_pointform = any(k in task.title.lower() for k in _POINTFORM_KEYWORDS)
         wc = 120 if is_pointform else task.word_count
 

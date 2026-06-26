@@ -2995,6 +2995,51 @@ def _parse_user_supplied_outline(instruction: str) -> list[dict[str, Any]] | Non
 # unavailable, but a user-supplied outline above takes priority over both)
 # ---------------------------------------------------------------------------
 
+def _augment_outline_with_guidance(
+    outline: list[dict[str, Any]],
+    topic: str,
+    message: str,
+    research_design: str,
+) -> list[dict[str, Any]] | None:
+    """Ask the LLM to add topic-specific 'guidance' to a user-supplied outline without
+    altering its structure. Returns None (caller keeps the verbatim outline) if the call
+    fails or the result doesn't faithfully preserve the chapter titles/order — the
+    student's own structure must never be silently rewritten.
+    """
+    prompt = (
+        "A student pasted this exact dissertation outline. Reproduce it EXACTLY — same "
+        "chapter titles, same section titles, same order, same nesting — do not add, "
+        "remove, rename, or reorder anything. Your only job is to add a 'guidance' field "
+        "to every leaf section (one with no sub-sections): 2-4 sentences of concrete, "
+        f"TOPIC-SPECIFIC writing direction for this topic ({topic or message[:200]}), naming "
+        "the actual concepts, technologies, theories, datasets, or stakeholders relevant to "
+        f"this study. Research design: {research_design}. Never generic boilerplate.\n\n"
+        "Outline (JSON):\n" + json.dumps(outline, indent=2) + "\n\n"
+        "Return ONLY the same JSON shape with 'guidance' added to leaf sections. "
+        "No markdown fences, no explanation."
+    )
+    raw = ""
+    try:
+        raw = generate_text(prompt)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned).rstrip("`").strip()
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        augmented = json.loads(cleaned[start : end + 1])
+        if (
+            isinstance(augmented, list)
+            and len(augmented) == len(outline)
+            and [c.get("title") for c in augmented] == [c.get("title") for c in outline]
+        ):
+            return augmented
+    except Exception as exc:
+        logger.warning("_augment_outline_with_guidance failed: %s | raw=%s", exc, raw[:300])
+    return None
+
+
 def generate_dissertation_plan_llm(
     topic: str,
     message: str,
@@ -3005,12 +3050,14 @@ def generate_dissertation_plan_llm(
     """Ask the LLM to produce the complete dissertation chapter and section plan.
 
     Returns a list of chapter dicts:
-        [{"title": "Chapter 1: ...", "sections": [{"title": "1.1 ...", "sections": [...]}, ...]}, ...]
+        [{"title": "Chapter 1: ...", "sections": [{"title": "1.1 ...", "guidance": "...", "sections": [...]}, ...]}, ...]
 
     If the student's own instruction contains a recognizable chapter/section outline of
-    their own, that is used verbatim instead — no LLM call, no fallback plan — since the
-    point of a user-supplied template is to be followed exactly, not reinterpreted.
-    Otherwise falls back to a minimal generic structure if the LLM call fails.
+    their own, its structure is kept exactly as given — but it's still passed through an
+    LLM call (_augment_outline_with_guidance) to attach topic-specific writing guidance to
+    each leaf section, falling back to the verbatim outline (no guidance) if that call
+    fails or doesn't faithfully preserve the structure. Otherwise falls back to a minimal
+    generic structure if the main LLM call fails.
     """
     user_outline = _parse_user_supplied_outline(message)
     if user_outline is not None:
@@ -3018,7 +3065,8 @@ def generate_dissertation_plan_llm(
             "generate_dissertation_plan_llm: using user-supplied outline (%d chapters)",
             len(user_outline),
         )
-        return user_outline
+        augmented = _augment_outline_with_guidance(user_outline, topic, message, research_design)
+        return augmented if augmented is not None else user_outline
 
     obj_block = ""
     if objectives:
@@ -3057,12 +3105,19 @@ def generate_dissertation_plan_llm(
         "  {\n"
         '    "title": "Chapter 1: Introduction",\n'
         '    "sections": [\n'
-        '      {"title": "1.1 Background of the Study", "sections": []},\n'
-        '      {"title": "1.2 Statement of the Problem", "sections": []}\n'
+        '      {"title": "1.1 Background of the Study", "guidance": "...", "sections": []},\n'
+        '      {"title": "1.2 Statement of the Problem", "guidance": "...", "sections": []}\n'
         "    ]\n"
         "  }\n"
         "]\n\n"
         "Rules:\n"
+        "- Every leaf section (one whose 'sections' list is empty) must include a 'guidance' field: "
+        "2-4 sentences of concrete, TOPIC-SPECIFIC writing direction for exactly that section — name the "
+        "actual concepts, technologies, theories, datasets, or stakeholders relevant to this study. Never "
+        "write generic boilerplate like 'discuss the background of the study'; a different topic must "
+        "produce visibly different guidance for a same-titled section. Non-leaf sections (those with a "
+        "non-empty 'sections' list) may omit 'guidance' or leave it empty, since their children carry the "
+        "real instructions.\n"
         "- If the student guidelines above specify their own chapter structure, numbering, naming, "
         "or required sections, follow those exactly instead of the default structure described below — "
         "the rules below are only the default to use when the student has not specified otherwise.\n"
@@ -3437,7 +3492,8 @@ def _sections_to_nodes(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for sec in sections:
         title = sec.get("title", "Untitled")
         children = _sections_to_nodes(sec.get("sections", []))
-        result.append({"title": title, "children": children, "kind": "text"})
+        guidance = (sec.get("guidance") or "").strip()
+        result.append({"title": title, "children": children, "kind": "text", "guidance": guidance})
     return result
 
 
@@ -4849,7 +4905,8 @@ def _execute_subsection_nodes(
             from .pipeline import Pipeline
             from .planner import PlannerAgent, TaskSpec as PipelineTaskSpec, IntentSpec
 
-            guidelines = _subsection_guidelines(title, topic, research_design)
+            ai_guidance = (node.get("guidance") or "").strip()
+            guidelines = ai_guidance or _subsection_guidelines(title, topic, research_design)
             is_pointform = any(
                 k in lowered_title
                 for k in ["research objective", "objectives", "research question", "hypothes",
