@@ -21,6 +21,50 @@ _OL_RE = re.compile(r"^\d+[.):]\s+")
 _PAGE_BREAK_MARKER = "[[PAGEBREAK]]"
 _CONTENT_MARKER_RE = re.compile(r"\[\[(?:BLOCK:([^\]]+)|PAGEBREAK)\]\]")
 
+# Mirrors the paper sizes offered by the Page Layout control in
+# DocumentEditorPage.jsx (PAPER_SIZES), in inches instead of px@96dpi.
+_PAPER_SIZES_IN = {
+    "Letter": (8.5, 11.0),
+    "A4": (8.27, 11.69),
+    "Legal": (8.5, 14.0),
+}
+# Matches the editor's own default margins (DocumentEditorPage.jsx pageMarginsInch).
+_DEFAULT_MARGINS_IN = {"top": 1.0, "bottom": 1.0, "left": 1.25, "right": 1.25}
+
+
+def _apply_page_setup(doc: DocxDocument, page_setup: dict) -> float:
+    """Apply the page size/margins the user configured in the Page Layout
+    control (persisted as document.content['pageSetup']) to the exported
+    section, and return the resulting printable width in inches so embedded
+    figures can be sized to actually fit inside the margins."""
+    width_in, height_in = _PAPER_SIZES_IN.get(
+        (page_setup or {}).get("paperSize"), _PAPER_SIZES_IN["Letter"]
+    )
+    margins = (page_setup or {}).get("margins") or {}
+
+    def _margin(key: str) -> float:
+        try:
+            value = float(margins.get(key, _DEFAULT_MARGINS_IN[key]))
+        except (TypeError, ValueError):
+            value = _DEFAULT_MARGINS_IN[key]
+        return max(0.0, value)
+
+    top_in, bottom_in, left_in, right_in = _margin("top"), _margin("bottom"), _margin("left"), _margin("right")
+
+    section = doc.sections[0]
+    section.page_width = Inches(width_in)
+    section.page_height = Inches(height_in)
+    section.top_margin = Inches(top_in)
+    section.bottom_margin = Inches(bottom_in)
+    section.left_margin = Inches(left_in)
+    section.right_margin = Inches(right_in)
+
+    printable_width_in = width_in - left_in - right_in
+    if printable_width_in <= 0:
+        logger.warning("docx export: margins leave no printable width, falling back to 1in")
+        printable_width_in = 1.0
+    return printable_width_in
+
 
 def _is_list_line(line: str) -> bool:
     return bool(_UL_RE.match(line) or _OL_RE.match(line))
@@ -77,12 +121,12 @@ def _add_table_block(doc: DocxDocument, block: dict) -> None:
     doc.add_paragraph()
 
 
-def _add_image_block(doc: DocxDocument, block: dict) -> None:
+def _add_image_block(doc: DocxDocument, block: dict, printable_width_in: float) -> None:
     path = _resolve_media_path(block.get("src") or "")
     image_added = False
     if path:
         try:
-            doc.add_picture(str(path), width=Inches(5.5))
+            doc.add_picture(str(path), width=Inches(min(5.5, printable_width_in)))
             doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
             image_added = True
         except Exception:
@@ -106,13 +150,13 @@ def _add_image_block(doc: DocxDocument, block: dict) -> None:
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def _add_block(doc: DocxDocument, block: dict | None) -> None:
+def _add_block(doc: DocxDocument, block: dict | None, printable_width_in: float) -> None:
     if not block:
         return
     if block.get("type") == "table":
         _add_table_block(doc, block)
     else:
-        _add_image_block(doc, block)
+        _add_image_block(doc, block, printable_width_in)
 
 
 def _add_paragraph_chunk(doc: DocxDocument, text: str) -> None:
@@ -145,7 +189,9 @@ def _add_paragraph_chunk(doc: DocxDocument, text: str) -> None:
                 p.add_run(ln)
 
 
-def _add_section_content(doc: DocxDocument, content: str, blocks: list[dict] | None) -> None:
+def _add_section_content(
+    doc: DocxDocument, content: str, blocks: list[dict] | None, printable_width_in: float
+) -> None:
     blocks = blocks or []
     blocks_by_id = {b.get("block_id"): b for b in blocks if b.get("block_id")}
     normalized = re.sub(r"<br\s*/?>", "\n", content or "", flags=re.IGNORECASE)
@@ -163,13 +209,13 @@ def _add_section_content(doc: DocxDocument, content: str, blocks: list[dict] | N
             block = blocks_by_id.get(block_id)
             if block:
                 placed.add(block_id)
-                _add_block(doc, block)
+                _add_block(doc, block, printable_width_in)
         last = m.end()
     _add_paragraph_chunk(doc, normalized[last:])
     for b in blocks:
         block_id = (b.get("block_id") or "").strip()
         if block_id and block_id not in placed:
-            _add_block(doc, b)
+            _add_block(doc, b, printable_width_in)
 
 
 def build_docx(document) -> BytesIO:
@@ -181,14 +227,16 @@ def build_docx(document) -> BytesIO:
     normal.font.name = "Times New Roman"
     normal.font.size = Pt(12)
 
+    content = document.content or {}
+    printable_width_in = _apply_page_setup(doc, content.get("pageSetup") or {})
+
     doc.add_heading(document.title or "Untitled Document", level=0)
 
-    content = document.content or {}
     for section in content.get("sections") or []:
         title = section.get("title")
         if title:
             doc.add_heading(title, level=_heading_level(title))
-        _add_section_content(doc, section.get("content", ""), section.get("blocks"))
+        _add_section_content(doc, section.get("content", ""), section.get("blocks"), printable_width_in)
 
     buffer = BytesIO()
     doc.save(buffer)

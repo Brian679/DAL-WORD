@@ -85,6 +85,13 @@ const INITIAL_CHAT_ID = 'chat-initial';
 const INITIAL_CHATS = [{ id: INITIAL_CHAT_ID, name: 'New Chat', messages: INITIAL_MESSAGES }];
 const MIN_EDITOR_HEIGHT = 900;
 const PAGE_CYCLE_PX = 1120;
+// Mirrors backend/documents/docx_export.py _PAPER_SIZES_IN — px dims at 96dpi.
+const PAPER_SIZES = [
+  { name: 'Letter', w: 816, h: 1056 },
+  { name: 'A4', w: 794, h: 1123 },
+  { name: 'Legal', w: 816, h: 1344 },
+];
+const DEFAULT_PAGE_MARGINS_IN = { top: '1', bottom: '1', left: '1.25', right: '1.25' };
 const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
 // Assignments, essays, reports, articles, etc. — anything else worth asking
 // the agent "does this need a todo list?" before writing. Dissertations are
@@ -995,12 +1002,7 @@ export default function DocumentEditorPage({
   const [paperSize, setPaperSize] = useState('Letter');
   const [isFullscreenView, setIsFullscreenView] = useState(false);
   const [ribbonCollapsed, setRibbonCollapsed] = useState(false);
-  const [pageMarginsInch, setPageMarginsInch] = useState({
-    top: '1',
-    bottom: '1',
-    left: '1.25',
-    right: '1.25',
-  });
+  const [pageMarginsInch, setPageMarginsInch] = useState(DEFAULT_PAGE_MARGINS_IN);
   const imageInputRef = useRef(null);
   const [fontFamily, setFontFamily] = useState('Times New Roman');
   const [fontSize, setFontSize] = useState('12');
@@ -1248,24 +1250,39 @@ export default function DocumentEditorPage({
     if (el && el !== editor) el.style.lineHeight = value;
   }
 
-  function applyPageMargins(top, right, bottom, left) {
-    const paper = richEditorRef.current?.closest('.doc-page-body-zone');
-    if (!paper) return;
-    paper.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
-  }
-
-  function applyPageMarginsInches(next) {
-    setPageMarginsInch(next);
+  // Applies paper size + margins to the live editor's DOM (page width/height
+  // and the cosmetic page-break stripe pattern), without persisting anything.
+  // Used both when the user changes a setting and when a saved document is
+  // first loaded, so the visual always matches document.content.pageSetup.
+  function applyPageLayoutDom(paperSizeName, marginsInch) {
+    const size = PAPER_SIZES.find((s) => s.name === paperSizeName) || PAPER_SIZES[0];
     const toPx = (v, fallback) => {
       const num = parseFloat(v);
       return Number.isFinite(num) ? Math.max(0, num) * 96 : fallback;
     };
-    applyPageMargins(
-      toPx(next.top, 96),
-      toPx(next.right, 120),
-      toPx(next.bottom, 96),
-      toPx(next.left, 120)
-    );
+    const topPx = toPx(marginsInch?.top, 96);
+    const rightPx = toPx(marginsInch?.right, 120);
+    const bottomPx = toPx(marginsInch?.bottom, 96);
+    const leftPx = toPx(marginsInch?.left, 120);
+
+    const paper = richEditorRef.current?.closest('.doc-page-body-zone');
+    if (paper) {
+      paper.style.padding = `${topPx}px ${rightPx}px ${bottomPx}px ${leftPx}px`;
+    }
+    const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
+    if (scroll) {
+      scroll.style.width = size.w + 'px';
+      scroll.style.minHeight = size.h + 'px';
+      const gap = Math.max(24, topPx + bottomPx);
+      const pitch = size.h + gap;
+      scroll.style.backgroundImage = `repeating-linear-gradient(to bottom, #ffffff 0px, #ffffff ${size.h}px, #c8c8c8 ${size.h}px, #c8c8c8 ${pitch}px)`;
+    }
+  }
+
+  function applyPageMarginsInches(next) {
+    setPageMarginsInch(next);
+    applyPageLayoutDom(paperSize, next);
+    triggerSave(undefined, { paperSize, margins: next });
   }
 
   function applyColumnLayout(cols) {
@@ -1364,18 +1381,10 @@ export default function DocumentEditorPage({
   }
 
   function cyclePaperSize() {
-    const sizes = [
-      { name: 'Letter', w: 816, h: 1056 },
-      { name: 'A4', w: 794, h: 1123 },
-      { name: 'Legal', w: 816, h: 1344 },
-    ];
-    const next = sizes[(sizes.findIndex((s) => s.name === paperSize) + 1) % sizes.length];
+    const next = PAPER_SIZES[(PAPER_SIZES.findIndex((s) => s.name === paperSize) + 1) % PAPER_SIZES.length];
     setPaperSize(next.name);
-    const scroll = richEditorRef.current?.closest('.doc-paper-scroll');
-    if (scroll) {
-      scroll.style.width = next.w + 'px';
-      scroll.style.minHeight = next.h + 'px';
-    }
+    applyPageLayoutDom(next.name, pageMarginsInch);
+    triggerSave(undefined, { paperSize: next.name, margins: pageMarginsInch });
   }
 
   function jumpToSection(index) {
@@ -1563,6 +1572,15 @@ export default function DocumentEditorPage({
     setIsDirty(false);
     setAutoSaved(false);
     setManualError('');
+
+    const savedPageSetup = currentDocument?.content?.pageSetup;
+    const restoredPaperSize = PAPER_SIZES.some((s) => s.name === savedPageSetup?.paperSize)
+      ? savedPageSetup.paperSize
+      : 'Letter';
+    const restoredMargins = savedPageSetup?.margins || DEFAULT_PAGE_MARGINS_IN;
+    setPaperSize(restoredPaperSize);
+    setPageMarginsInch(restoredMargins);
+    applyPageLayoutDom(restoredPaperSize, restoredMargins);
   }, [currentDocument?.id, currentDocument?.updated_at]);
 
   // Reset chat only when switching to a different document, not on every save/update.
@@ -1604,10 +1622,10 @@ export default function DocumentEditorPage({
     setIsDirty(true);
   }
 
-  const triggerSave = useCallback(async (sections) => {
+  const triggerSave = useCallback(async (sections, pageSetupOverride) => {
     const target = sections || draftSections;
-    await persistSectionsNow(target);
-  }, [draftSections, onManualSave, onDocumentChanged]);
+    await persistSectionsNow(target, undefined, pageSetupOverride);
+  }, [draftSections, onManualSave, onDocumentChanged, paperSize, pageMarginsInch]);
 
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -1681,7 +1699,7 @@ export default function DocumentEditorPage({
     );
   }
 
-  async function persistSectionsNow(sections, onSuccess) {
+  async function persistSectionsNow(sections, onSuccess, pageSetupOverride) {
     if (!onManualSave) return;
     setIsSavingManual(true);
     setManualError('');
@@ -1694,7 +1712,8 @@ export default function DocumentEditorPage({
         }))
         .filter((s) => s.title || s.content);
 
-      await onManualSave(cleaned);
+      const pageSetup = pageSetupOverride || { paperSize, margins: pageMarginsInch };
+      await onManualSave(cleaned, { pageSetup });
       setIsDirty(false);
       setAutoSaved(true);
       onDocumentChanged?.();

@@ -242,11 +242,12 @@ export default function App() {
             title: `${query} trend overview`,
           })}
           onGenerateDissertation={(topic) => runAction('generate_dissertation', { topic })}
-          onManualSave={async (sections) => {
+          onManualSave={async (sections, extra) => {
             if (!currentDoc) return;
             const nextContent = {
               ...(currentDoc.content || {}),
               sections,
+              ...(extra || {}),
             };
             await updateDocument(currentDoc.id, { content: nextContent });
             await refreshDocuments();
