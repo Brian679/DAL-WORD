@@ -1428,7 +1428,14 @@ def _extract_objectives(document: Document, topic: str) -> list[str]:
 def _objective_section_title(objective: str) -> str:
     """Derive a short readable section title from a full objective statement."""
     text = re.sub(
+        # Compound infinitive pairs ("to design and develop", "to test and evaluate") must be
+        # listed before their individual single-verb alternatives below — at a given starting
+        # position, regex alternation matches whichever alternative is tried first that
+        # succeeds, not the longest, so a single-verb alternative would otherwise consume only
+        # the first verb and leave a dangling "and <verb2> ..." at the front of the title.
         r"^(the\s+study\s+aims?\s+to\s+|this\s+study\s+(aims?\s+to|seeks?\s+to|will)\s+|"
+        r"to\s+design\s+and\s+develop\s+|to\s+test\s+and\s+evaluate\s+|"
+        r"to\s+review\s+and\s+evaluate\s+|to\s+plan\s+and\s+implement\s+|"
         r"to\s+examine\s+|to\s+determine\s+|to\s+assess\s+|to\s+evaluate\s+|"
         r"to\s+investigate\s+|to\s+analyse\s+|to\s+analyze\s+|to\s+propose\s+|"
         r"to\s+recommend\s+|to\s+design\s+|to\s+develop\s+|to\s+explore\s+|"
@@ -3017,7 +3024,7 @@ def generate_dissertation_plan_llm(
 
     # Fallback: minimal generic plan
     logger.info("generate_dissertation_plan_llm using fallback plan for topic=%s", topic[:80] if topic else "")
-    return _fallback_dissertation_chapters(topic or "the study", message, objectives)
+    return _fallback_dissertation_chapters(topic or "the study", message, objectives, research_design)
 
 
 def _topic_concept_phrases(topic: str) -> list[str]:
@@ -3076,16 +3083,12 @@ def _numbered_sections(chapter_number: int | None, labels: list[str]) -> list[di
     return [{"title": f"{chapter_number}.{i} {label}", "sections": []} for i, label in enumerate(labels, start=1)]
 
 
-# Default subsection labels for the three chapter "kinds" whose content is the same
-# regardless of topic (Introduction, Methodology, Conclusion). Chapter 2 (Literature
-# Review) and Chapter 4 (Results) are topic/objective-dependent and built separately —
-# see _default_chapter2_sections and _plan_chapter4_structure.
+# Default subsection labels for chapter "kinds" whose content is largely the same
+# regardless of topic. Chapter 1 (Introduction) gets a conditional Hypotheses subsection
+# (see _chapter1_default_labels) and Chapter 2 (Literature Review) and Chapter 4 (Results)
+# are topic/objective-dependent and built separately — see _default_chapter2_sections and
+# _plan_chapter4_structure.
 _CHAPTER_KIND_DEFAULT_LABELS: dict[str, list[str]] = {
-    "introduction": [
-        "Background of the Study", "Statement of the Problem", "Research Objectives",
-        "Research Questions", "Significance of the Study", "Scope and Delimitations",
-        "Definition of Key Terms", "Chapter Summary",
-    ],
     "methodology": [
         "Introduction", "Research Design", "Target Population",
         "Sampling Techniques and Sample Size", "Data Collection Methods",
@@ -3097,6 +3100,29 @@ _CHAPTER_KIND_DEFAULT_LABELS: dict[str, list[str]] = {
         "Limitations of the Study", "Areas for Further Research", "Chapter Summary",
     ],
 }
+
+
+def _chapter1_default_labels(
+    topic: str,
+    message: str = "",
+    objectives: list[str] | None = None,
+    research_design: str = "",
+) -> list[str]:
+    """Chapter 1 (Introduction) label set. Adds a "Hypotheses" subsection only for studies
+    that are both quantitative/mixed in design AND genuinely test a relationship between
+    constructs (see _objectives_are_relational) — a study that only describes the level or
+    status of a single construct (e.g. most system-build or doctrinal topics) has no
+    hypotheses to state, so forcing the subsection on every dissertation regardless of
+    topic would itself be exactly the kind of fixed templating this is meant to avoid.
+    """
+    labels = ["Background of the Study", "Statement of the Problem", "Research Objectives", "Research Questions"]
+    if research_design in {"quantitative", "mixed"} and _objectives_are_relational(objectives or []):
+        labels.append("Hypotheses")
+    labels.extend([
+        "Significance of the Study", "Scope and Delimitations",
+        "Definition of Key Terms", "Chapter Summary",
+    ])
+    return labels
 
 
 def _chapter3_default_labels(
@@ -3122,9 +3148,12 @@ def _default_chapter2_sections(
     recognizable named theory (see _select_named_theory) — a topic with no natural
     theoretical anchor gets no such section, and therefore no theory diagram either, instead
     of the same generic framework being forced onto every dissertation regardless of subject.
-    The Conceptual Framework / Empirical Review / Research Gap headings are likewise anchored
-    to concept phrases pulled from the topic itself (see _topic_concept_phrases), so two
-    dissertations on different subjects don't end up with an identical Chapter 2 outline.
+    The Conceptual Framework / Research Gap headings are likewise anchored to concept phrases
+    pulled from the topic itself (see _topic_concept_phrases), so two dissertations on
+    different subjects don't end up with an identical Chapter 2 outline. The Empirical Review
+    gets one subsection per research objective (mirroring Chapter 4's per-objective findings
+    structure), falling back to a single topic-anchored subsection only when there are no
+    objectives to anchor it to.
     """
     theory = _select_named_theory(topic, message, objectives)
     concepts = _topic_concept_phrases(topic)
@@ -3134,13 +3163,15 @@ def _default_chapter2_sections(
     labels = ["Introduction"]
     if theory:
         labels.append(f"Theoretical Framework: {theory['name']}")
+    labels.append(f"Conceptual Framework of {c1}")
+    objs = [o for o in (objectives or []) if o and o.strip()]
+    if objs:
+        labels.extend(f"Empirical Review on {_objective_section_title(o)}" for o in objs)
+    else:
+        labels.append(f"Empirical Review of {c2}")
     gap_label = f"Research Gap in {c1} and {c2}" if c1 != c2 else f"Research Gap in {c1}"
-    labels.extend([
-        f"Conceptual Framework of {c1}",
-        f"Empirical Review of {c2}",
-        gap_label,
-        "Chapter Summary",
-    ])
+    labels.append(gap_label)
+    labels.append("Chapter Summary")
     return _numbered_sections(chapter_number, labels)
 
 
@@ -3171,6 +3202,7 @@ def _default_sections_for_chapter(
     topic: str,
     message: str = "",
     objectives: list[str] | None = None,
+    research_design: str = "",
 ) -> list[dict[str, Any]]:
     """Fill in default subsections for a numbered chapter that has none of its own —
     e.g. a user-supplied or LLM-proposed plan that names a chapter but leaves its
@@ -3179,6 +3211,10 @@ def _default_sections_for_chapter(
     introduction/literature/methodology/conclusion-shaped chapters.
     """
     kind = _infer_chapter_kind(title, chapter_number)
+    if kind == "introduction":
+        return _numbered_sections(
+            chapter_number, _chapter1_default_labels(topic, message, objectives, research_design)
+        )
     if kind == "literature":
         return _default_chapter2_sections(chapter_number, topic, message, objectives)
     if kind == "methodology":
@@ -3191,7 +3227,10 @@ def _default_sections_for_chapter(
 
 
 def _fallback_dissertation_chapters(
-    topic: str, message: str = "", objectives: list[str] | None = None
+    topic: str,
+    message: str = "",
+    objectives: list[str] | None = None,
+    research_design: str = "quantitative",
 ) -> list[dict[str, Any]]:
     """Minimal generic fallback when LLM plan generation fails."""
     return [
@@ -3205,7 +3244,7 @@ def _fallback_dissertation_chapters(
             {"title": "vii. List of Abbreviations and Acronyms", "sections": []},
         ]},
         {"title": "Chapter 1: Introduction",
-         "sections": _numbered_sections(1, _CHAPTER_KIND_DEFAULT_LABELS["introduction"])},
+         "sections": _numbered_sections(1, _chapter1_default_labels(topic, message, objectives, research_design))},
         {"title": "Chapter 2: Literature Review",
          "sections": _default_chapter2_sections(2, topic, message, objectives)},
         {"title": "Chapter 3: Research Methodology",
@@ -3261,7 +3300,9 @@ def llm_chapters_to_blueprints(
                 # would otherwise generate zero content for that chapter — fill it from
                 # the matching default subsection set instead.
                 nodes = _sections_to_nodes(
-                    _default_sections_for_chapter(chapter_number, title, topic, message, objectives)
+                    _default_sections_for_chapter(
+                        chapter_number, title, topic, message, objectives, research_design
+                    )
                 )
             nodes = _inject_standard_visuals(nodes, chapter_number, research_design)
             if _infer_chapter_kind(title, chapter_number) == "literature":
@@ -6640,6 +6681,121 @@ _OBJECTIVE_FINDINGS_VARIANTS_TECHNICAL: tuple[str, ...] = (
     ),
 )
 
+# Per-objective Chapter 2 "Empirical Review on <objective>" paragraph — one subsection per
+# research objective (mirroring the Chapter 4 pattern above), reached for every such
+# subsection within one chapter, so (like _OBJECTIVE_FINDINGS_VARIANTS_* above) it must vary
+# by `subsection`, not just by genre, or every objective renders the exact same paragraph.
+_EMPIRICAL_REVIEW_VARIANTS_DOCTRINAL: tuple[str, ...] = (
+    (
+        "Existing scholarship bearing on this objective is dominated by commentary that converges on a broadly "
+        "settled position, alongside a smaller body of sources that depart from it in identifiable ways {cite1}. "
+        "The points of departure are informative in their own right, often tracing back to differences in "
+        "jurisdiction, period, or interpretive tradition rather than to any error in either line of authority.\n\n"
+        "Read together, this body of commentary establishes the doctrinal baseline against which the present "
+        "study's own analysis of {topic} is positioned, while also exposing the specific gap this study "
+        "addresses for this objective."
+    ),
+    (
+        "The sources most directly relevant to this objective report a consistent core position, with a minority "
+        "taking a divergent view that warrants separate treatment rather than being absorbed into a single "
+        "narrative summary {cite1}. The divergence is best explained by the particular combination of sources "
+        "consulted, or by a different weighting of the competing considerations at stake.\n\n"
+        "This pattern of agreement and disagreement frames how the present study's treatment of {topic} builds on, "
+        "and departs from, the existing commentary for this specific objective."
+    ),
+    (
+        "Reviewing the scholarship that speaks to this objective reveals a recurring set of positions, tempered by "
+        "genuine disagreement on points that a single summary would obscure {cite1}. Some sources rely on settled "
+        "doctrine, while others advance a more contested reading that has not yet achieved consensus.\n\n"
+        "This review situates the present study's analysis of {topic} within that contested space, clarifying "
+        "exactly where this objective's findings are expected to confirm, extend, or challenge the existing "
+        "commentary."
+    ),
+)
+
+_EMPIRICAL_REVIEW_VARIANTS_SURVEY: tuple[str, ...] = (
+    (
+        "Empirical studies bearing on this objective report a broadly consistent direction of effect, although the "
+        "magnitude of the relationship varies across organisational and institutional contexts {cite1}. Differences "
+        "in sample composition, measurement instrument, and analytical technique account for much of the variation "
+        "reported across these studies.\n\n"
+        "Taken together, this body of evidence establishes a strong prima facie basis for examining {topic} in the "
+        "present study's own context, while also indicating where the existing evidence base remains thin for this "
+        "specific objective."
+    ),
+    (
+        "The studies most directly relevant to this objective converge on a consistent core finding, with a "
+        "smaller set of studies reporting weaker or null effects that warrant separate comment rather than being "
+        "averaged away {cite1}. The divergence is most plausibly explained by differences in context, sample, or "
+        "method rather than by chance alone.\n\n"
+        "This pattern of convergence and divergence frames the specific contribution the present study aims to "
+        "make to the evidence base on {topic} for this objective."
+    ),
+    (
+        "Reviewing the literature relevant to this objective shows a recurring association across diverse "
+        "settings, tempered by a handful of studies reporting markedly different results {cite1}. Methodological "
+        "differences — sampling frame, instrument validity, and analytical approach — explain much of this "
+        "variation.\n\n"
+        "This review situates the present study's investigation of {topic} within that evidence base, clarifying "
+        "where this objective's findings are expected to confirm, extend, or challenge prior work."
+    ),
+)
+
+_EMPIRICAL_REVIEW_VARIANTS_SYSTEM_BUILD: tuple[str, ...] = (
+    (
+        "Prior implementations relevant to this objective report broadly similar design choices, although "
+        "reported performance and maintainability vary depending on architecture, scale, and the specific "
+        "technologies used {cite1}. These differences help explain why otherwise similar systems achieve "
+        "noticeably different outcomes in practice.\n\n"
+        "Taken together, this body of prior work establishes the baseline against which the system developed in "
+        "this study is positioned, while also indicating the specific gap this objective's design and "
+        "implementation work addresses."
+    ),
+    (
+        "Systems most directly comparable to this objective converge on a common architectural approach, with a "
+        "smaller set adopting a markedly different design that warrants separate discussion {cite1}. The "
+        "divergence is best explained by differences in scale, deployment context, or technology choice rather "
+        "than by any flaw in either approach.\n\n"
+        "This comparison frames how the system built for this study extends, or departs from, prior "
+        "implementations for this specific objective."
+    ),
+    (
+        "Reviewing prior systems relevant to this objective reveals a recurring set of design patterns, tempered "
+        "by genuine differences in how individual implementations handle scale, reliability, or integration "
+        "{cite1}. Some systems rely on well-established patterns, while others adopt more experimental approaches "
+        "that have not yet seen wide adoption.\n\n"
+        "This review situates the present system's design for this objective within that landscape, clarifying "
+        "where it is expected to follow, adapt, or improve on existing implementations."
+    ),
+)
+
+_EMPIRICAL_REVIEW_VARIANTS_TECHNICAL: tuple[str, ...] = (
+    (
+        "Prior studies and designs relevant to this objective report broadly similar performance characteristics, "
+        "although reported results vary with component selection, test conditions, and design maturity {cite1}. "
+        "These differences help explain why nominally similar designs achieve noticeably different outcomes under "
+        "test.\n\n"
+        "Taken together, this body of prior work establishes the performance baseline against which the design "
+        "developed in this study is positioned, while also indicating the specific gap this objective addresses."
+    ),
+    (
+        "Designs most directly comparable to this objective converge on a common technical approach, with a "
+        "smaller set adopting a markedly different configuration that warrants separate discussion {cite1}. The "
+        "divergence is best explained by differences in component selection or test conditions rather than by any "
+        "flaw in either approach.\n\n"
+        "This comparison frames how the design developed for this study extends, or departs from, prior work for "
+        "this specific objective."
+    ),
+    (
+        "Reviewing prior designs relevant to this objective reveals a recurring set of technical approaches, "
+        "tempered by genuine differences in how individual designs handle the relevant performance trade-offs "
+        "{cite1}. Some designs rely on well-established techniques, while others adopt more experimental "
+        "approaches that have not yet seen wide adoption.\n\n"
+        "This review situates the present design's treatment of this objective within that landscape, clarifying "
+        "where it is expected to follow, adapt, or improve on existing work."
+    ),
+)
+
 # Conclusion (Chapter 5) — varied opening framing while preserving the evidentiary claim.
 _CONCLUSION_VARIANTS_SURVEY: tuple[str, ...] = (
     (
@@ -7659,6 +7815,14 @@ def _fallback_subsection_body(
                 "of data sources as priorities for closing the gaps identified, directly motivating the design "
                 "adopted in the present study."
             )
+        if "empirical review" in sub_lower or "empirical literature" in sub_lower:
+            pool = _EMPIRICAL_REVIEW_VARIANTS_DOCTRINAL if is_doctrinal else (
+                _EMPIRICAL_REVIEW_VARIANTS_SURVEY if survey_based else (
+                    _EMPIRICAL_REVIEW_VARIANTS_SYSTEM_BUILD if is_system_build else _EMPIRICAL_REVIEW_VARIANTS_TECHNICAL
+                )
+            )
+            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|{subsection}", k=1)[0])
+            return _seeded_pick(subsection, pool).format(topic=topic, cite1=cite1)
         if "research gap" in sub_lower or "gap" in sub_lower:
             c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|gap", k=1)[0])
             if is_doctrinal:
