@@ -30,8 +30,10 @@ from .llm import (
 from .tools import (
     find_section,
     generate_chart,
+    generate_dalle_image,
     generate_image,
     save_dataset_json,
+    search_wikimedia_image,
     update_section,
 )
 
@@ -53,6 +55,8 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "create_outline",
     "add_chart",
     "add_image",
+    "search_image",
+    "generate_ai_image",
     # Legacy aliases kept so old LLM classifications still route correctly
     "write_report",
     "write_assignment",
@@ -76,6 +80,8 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "create_outline":   f"Generate a structured outline for **{tp or 'the document'}**",
         "add_chart":  f"Generate and insert a chart{' into **' + t + '**' if t else ''}",
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
+        "search_image": f"Find a real photo on Wikimedia Commons{' for **' + t + '**' if t else ''}",
+        "generate_ai_image": f"Generate an AI illustrative image{' for **' + t + '**' if t else ''}",
         "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
         "reduce_plagiarism_similarity": "Detect passages that overlap with other workspace documents and rewrite them to reduce textual similarity",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
@@ -5224,6 +5230,27 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
     if _whole_word_in(text, ["chart", "charts", "graph", "graphs"]):
         return {"intent": "add_chart", "target_section": target, "topic": None}
 
+    # ── Real photo (web search) vs. AI-generated photo ─────────────────────────
+    # Checked before the generic "image"/"figure" catch-all below, since these two
+    # need different backends (Wikimedia Commons search vs. OpenAI image generation)
+    # rather than the matplotlib diagram path generate_image() always takes.
+    _photo_search_phrases = [
+        "real photo", "real image", "real picture", "actual photo", "actual photograph",
+        "find a photo", "find an image", "find a picture", "search for a photo",
+        "search for an image", "search the web for", "search the internet for",
+        "from wikimedia", "wikimedia commons", "stock photo", "stock image",
+    ]
+    if any(p in text for p in _photo_search_phrases):
+        return {"intent": "search_image", "target_section": target, "topic": None}
+
+    _ai_photo_phrases = [
+        "ai-generated image", "ai generated image", "ai image", "ai photo", "ai-generated photo",
+        "generate a realistic image", "generate a photorealistic", "create a realistic image",
+        "photorealistic image", "realistic photo", "realistic-looking image", "dall-e", "dall e",
+    ]
+    if any(p in text for p in _ai_photo_phrases):
+        return {"intent": "generate_ai_image", "target_section": target, "topic": None}
+
     if _whole_word_in(text, ["image", "images", "figure", "figures", "diagram", "diagrams"]):
         return {"intent": "add_image", "target_section": target, "topic": None}
 
@@ -9950,6 +9977,8 @@ def _needs_todo_workflow(intent: str, message: str) -> bool:
         "enhance_document",
         "add_chart",
         "add_image",
+        "search_image",
+        "generate_ai_image",
     }:
         return any(
             k in text
@@ -10726,7 +10755,7 @@ def run_agent(
     # chapter-number-only pattern, so target_section is still None here. Fall back to the
     # named-section phrase so add_image/add_chart resolve the same section a write/enhance
     # request would, instead of silently defaulting to the document's last section.
-    if intent in {"add_image", "add_chart"} and not target_section:
+    if intent in {"add_image", "add_chart", "search_image", "generate_ai_image"} and not target_section:
         visual_target = explicit_target or derived_target
         if visual_target and not _is_generic_section_query(visual_target):
             target_section = visual_target
@@ -10862,6 +10891,10 @@ def run_agent(
             reply, updated = _add_chart(document, target_section, plan, generation_message)
         elif intent == "add_image":
             reply, updated = _add_image(document, target_section, generation_message, plan)
+        elif intent == "search_image":
+            reply, updated = _search_wikimedia_image(document, target_section, generation_message, plan)
+        elif intent == "generate_ai_image":
+            reply, updated = _generate_ai_image(document, target_section, generation_message, plan)
         elif intent == "humanise_ai_sections":
             reply, updated = _humanise_ai_sections(document, topic or "", plan)
         elif intent == "reduce_plagiarism_similarity":
@@ -13572,3 +13605,85 @@ def _add_image(
     _all_done(plan)
     section_name = sections[idx].get("title", "the section") if sections else "the section"
     return f"Added an image to '{section_name}'. {description}", True
+
+
+def _extract_photo_query(prompt: str) -> str:
+    """Strip instruction phrasing ("find a real photo of", "generate an AI image of") off
+    a chat request, leaving just the subject to search/generate — mirrors the keyword
+    extraction generate_image() does for diagrams, but for a single clean query string.
+    """
+    text = (prompt or "").split("\n\n")[0].strip()
+    text = re.sub(
+        r"^(please\s+)?(find|search( for)?|add|insert|include|attach|get|generate|create|make)\s+"
+        r"(an?|the)?\s*(real|actual|ai[- ]generated|ai|photorealistic|realistic)?\s*"
+        r"(photo|photograph|image|picture)\s*(of|for|showing|depicting)?\s*",
+        "", text, flags=re.IGNORECASE,
+    )
+    return text.strip() or prompt.strip()
+
+
+def _search_wikimedia_image(document: Document, target: str | None, prompt: str, plan: list) -> tuple[str, bool]:
+    _done(plan, 0)
+    sections = (document.content or {}).get("sections", [])
+    idx = _framework_target_index(document, target, prompt)
+    if idx is None:
+        _all_done(plan)
+        return "No sections available. Create an outline first.", False
+
+    query = _extract_photo_query(prompt)
+    try:
+        result = search_wikimedia_image(query)
+    except Exception as exc:
+        _all_done(plan)
+        logger.warning("_search_wikimedia_image failed: %s", exc)
+        return f"Image search failed: {exc}", False
+    _done(plan, 1)
+
+    if not result:
+        _all_done(plan)
+        return f"No Wikimedia Commons photo found for '{query}'. Try a different description.", False
+
+    section = sections[idx]
+    blocks = section.setdefault("blocks", [])
+    block_id = f"photo-{idx + 1}-{len(blocks) + 1}"
+    caption = f"{result['title']}. Source: Wikimedia Commons ({result['license']}), {result['author']}."
+    blocks.append(
+        {"type": "image", "src": result["path"], "caption": caption[:200], "block_id": block_id}
+    )
+    section["content"] = _insert_block_marker(section.get("content", ""), block_id, prompt)
+    _save(document, f"search_image:{target or 'section'}")
+    _all_done(plan)
+    section_name = section.get("title", "the section")
+    return f"Found a real photo on Wikimedia Commons and added it to '{section_name}'. {caption}", True
+
+
+def _generate_ai_image(document: Document, target: str | None, prompt: str, plan: list) -> tuple[str, bool]:
+    _done(plan, 0)
+    sections = (document.content or {}).get("sections", [])
+    idx = _framework_target_index(document, target, prompt)
+    if idx is None:
+        _all_done(plan)
+        return "No sections available. Create an outline first.", False
+
+    section = sections[idx]
+    query = _extract_photo_query(prompt) or str(section.get("title") or "")
+
+    try:
+        image_path = generate_dalle_image(query)
+    except Exception as exc:
+        _all_done(plan)
+        logger.warning("_generate_ai_image failed: %s", exc)
+        return f"AI image generation failed: {exc}", False
+    _done(plan, 1)
+
+    blocks = section.setdefault("blocks", [])
+    block_id = f"ai-photo-{idx + 1}-{len(blocks) + 1}"
+    caption = f"AI-generated illustrative image of {query[:100]} (DALL-E 3). Not an authentic photograph."
+    blocks.append(
+        {"type": "image", "src": image_path, "caption": caption[:200], "block_id": block_id}
+    )
+    section["content"] = _insert_block_marker(section.get("content", ""), block_id, prompt)
+    _save(document, f"generate_ai_image:{target or 'section'}")
+    _all_done(plan)
+    section_name = section.get("title", "the section")
+    return f"Generated an AI image and added it to '{section_name}'. {caption}", True

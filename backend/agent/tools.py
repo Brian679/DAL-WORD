@@ -1,4 +1,5 @@
 from pathlib import Path
+import base64
 import json
 import re
 from statistics import mean
@@ -10,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
+import requests
 from django.conf import settings
 
 
@@ -401,6 +403,108 @@ def generate_image(prompt: str, framework_spec: dict[str, Any] | None = None) ->
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
+    return f"/media/images/{file_name}"
+
+
+_COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+_COMMONS_HEADERS = {"User-Agent": "DAL-WORD-DissertationAgent/1.0 (educational research tool)"}
+
+
+def search_wikimedia_image(query: str) -> dict[str, Any] | None:
+    """Search Wikimedia Commons for a real, freely-licensed photo matching ``query`` and
+    download the first usable hit locally. Returns None if nothing suitable is found —
+    callers should not fall back to a fabricated diagram in that case, just report it.
+    """
+    search_resp = requests.get(
+        _COMMONS_API,
+        params={
+            "action": "query", "format": "json", "list": "search",
+            "srnamespace": 6, "srlimit": 8, "srsearch": query,
+        },
+        headers=_COMMONS_HEADERS, timeout=15,
+    )
+    search_resp.raise_for_status()
+    hits = search_resp.json().get("query", {}).get("search", [])
+    titles = [h["title"] for h in hits if h.get("title", "").lower().endswith((".jpg", ".jpeg", ".png"))]
+    if not titles:
+        return None
+
+    info_resp = requests.get(
+        _COMMONS_API,
+        params={
+            "action": "query", "format": "json", "titles": "|".join(titles),
+            "prop": "imageinfo", "iiprop": "url|extmetadata", "iiurlwidth": 1024,
+        },
+        headers=_COMMONS_HEADERS, timeout=15,
+    )
+    info_resp.raise_for_status()
+    pages = info_resp.json().get("query", {}).get("pages", {})
+
+    for page in pages.values():
+        infos = page.get("imageinfo") or []
+        if not infos:
+            continue
+        info = infos[0]
+        image_url = info.get("thumburl") or info.get("url")
+        if not image_url:
+            continue
+
+        img_resp = requests.get(image_url, headers=_COMMONS_HEADERS, timeout=20)
+        img_resp.raise_for_status()
+
+        images_dir = Path(settings.MEDIA_ROOT) / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        ext = ".jpg" if image_url.lower().endswith((".jpg", ".jpeg")) else ".png"
+        file_name = f"commons-{uuid4().hex[:10]}{ext}"
+        (images_dir / file_name).write_bytes(img_resp.content)
+
+        meta = info.get("extmetadata", {})
+        author = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "")).strip() or "Unknown author"
+        license_name = meta.get("LicenseShortName", {}).get("value") or "Wikimedia Commons"
+        title = (page.get("title") or "").removeprefix("File:")
+        return {
+            "path": f"/media/images/{file_name}",
+            "title": title,
+            "author": author,
+            "license": license_name,
+        }
+    return None
+
+
+def generate_dalle_image(prompt: str) -> str:
+    """Generate an illustrative photorealistic image via OpenAI's DALL-E 3 and save it
+    locally. Raises RuntimeError if no API key is configured or the request fails —
+    callers should catch this and report it rather than silently falling back.
+    """
+    api_key = getattr(settings, "OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+
+    response = requests.post(
+        "https://api.openai.com/v1/images/generations",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": "dall-e-3",
+            "prompt": prompt[:1000],
+            "n": 1,
+            "size": "1024x1024",
+            "response_format": "b64_json",
+        },
+        timeout=60,
+    )
+    if response.status_code != 200:
+        try:
+            detail = response.json().get("error", {}).get("message", response.text)
+        except ValueError:
+            detail = response.text
+        raise RuntimeError(f"DALL-E request failed ({response.status_code}): {detail[:200]}")
+
+    b64_data = response.json()["data"][0]["b64_json"]
+
+    images_dir = Path(settings.MEDIA_ROOT) / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    file_name = f"ai-{uuid4().hex[:10]}.png"
+    (images_dir / file_name).write_bytes(base64.b64decode(b64_data))
     return f"/media/images/{file_name}"
 
 

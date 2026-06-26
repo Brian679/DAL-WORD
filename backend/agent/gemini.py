@@ -73,11 +73,15 @@ Choose ONE intent:
 - create_outline
 - add_chart
 - add_image
+- search_image
+- generate_ai_image
 - check_academic_quality
 - export_bibtex
 - chat
 
 Guidance:
+- If user asks to find/search for a REAL photo/image/picture ("real photo of X", "find an image of X", "search the web/internet for a photo of X", a Wikimedia/Commons/stock photo) -> search_image.
+- If user asks to GENERATE/CREATE an AI/photorealistic/DALL-E image (not a diagram/chart) -> generate_ai_image.
 - If user says "humanise", "humanize", "make it sound human", "remove AI", "bypass AI detection", "make less AI", "sound more natural", "rewrite AI passages", "human-like" -> humanise_ai_sections.
 - If user says "reduce similarity", "reduce plagiarism", "fix plagiarism", "remove plagiarism", "lower the plagiarism", "make this original", "rewrite the plagiarised content", "de-plagiarise" -> reduce_plagiarism_similarity. Note this is different from just asking to "check" or "scan for" plagiarism, which is a read-only request and should be classified as chat.
 - If user says "correct", "fix", "improve" for a specific part -> enhance_section.
@@ -189,6 +193,18 @@ def create_execution_plan(intent: str) -> list[str]:
         "add_image": [
             "Locating target section",
             "Generating image",
+            "Inserting image into section",
+            "Saving document",
+        ],
+        "search_image": [
+            "Locating target section",
+            "Searching Wikimedia Commons for a matching photo",
+            "Inserting photo into section",
+            "Saving document",
+        ],
+        "generate_ai_image": [
+            "Locating target section",
+            "Generating AI image (DALL-E 3)",
             "Inserting image into section",
             "Saving document",
         ],

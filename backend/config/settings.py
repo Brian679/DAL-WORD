@@ -17,6 +17,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
 GROK_MODEL = os.getenv("GROK_MODEL", "llama-3.3-70b-versatile")
 
+# OpenAI (DALL-E image generation only — text generation still uses Gemini/Grok above)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
 # Comma-separated, e.g. "yourusername.pythonanywhere.com". Defaults to "*" for local dev.
 _allowed_hosts = os.getenv("DJANGO_ALLOWED_HOSTS", "*")
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(",") if h.strip()]
