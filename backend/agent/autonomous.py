@@ -11095,10 +11095,55 @@ def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, 
     return "Could not generate revisions for the found comments. Please try again.", False
 
 
-def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect AI-generated sentences per section and rewrite them to sound human-written."""
+def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
+    """Detect AI-sounding sentences in freshly generated prose and rewrite them to read
+    human-written. Used as the first pass on every section/chapter the agent writes,
+    BEFORE citation grounding ever sees the text — so in-text citation markers land in
+    the final wording instead of being shuffled or dropped by a later humanising rewrite.
+
+    Tries the LLM rewrite first; falls back to rule-based phrase substitution if it's
+    unavailable. Returns the text unchanged (used_llm=False) if nothing reads as
+    AI-flagged, or if both rewrite attempts fail/degenerate. Returns (text, used_llm).
+    """
     from .ai_detector import detect_ai_content, rule_based_humanise
 
+    plain = (text or "").strip()
+    if not plain:
+        return text, False
+
+    try:
+        detection = detect_ai_content(plain)
+    except Exception as exc:
+        logger.info("_auto_humanise_text: detection failed (%s), leaving text untouched.", exc)
+        return text, False
+
+    flagged = [s for s in detection.get("sentences", []) if s.get("label") != "likely_human"]
+    if not flagged:
+        return text, False
+
+    ai_phrase_snippets = [s["text"][:80] for s in flagged if s.get("ai_probability", 0) >= 0.45]
+
+    new_text = None
+    used_llm = False
+    try:
+        candidate = humanise_text(plain, topic, ai_phrase_snippets)
+        if candidate and len(candidate.strip()) > 50:
+            new_text = candidate
+            used_llm = True
+    except Exception as exc:
+        logger.info("_auto_humanise_text: LLM humanise unavailable (%s), using rule-based fallback.", exc)
+
+    if not new_text:
+        new_text = rule_based_humanise(plain)
+
+    new_text = (new_text or "").strip()
+    if new_text and new_text != plain:
+        return new_text, used_llm
+    return text, False
+
+
+def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Detect AI-generated sentences per section and rewrite them to sound human-written."""
     sections = (document.content or {}).get("sections", [])
     if not sections:
         _all_done(plan)
@@ -11113,32 +11158,14 @@ def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[s
         if not content:
             continue
 
-        detection = detect_ai_content(content)
-        flagged = [s for s in detection.get("sentences", []) if s.get("label") != "likely_human"]
-        if not flagged:
-            continue
-
         _done(plan, 1)  # Identifying AI passages
 
-        # Extract the specific AI phrases found so the LLM can target them
-        ai_phrase_snippets = [s["text"][:80] for s in flagged if s.get("ai_probability", 0) >= 0.45]
+        new_content, used_llm = _auto_humanise_text(content, topic or document.title)
+        if used_llm:
+            llm_used = True
 
-        new_content = None
-        # Try LLM first; fall back to rule-based substitution if unavailable
-        try:
-            new_content = humanise_text(content, topic or document.title, ai_phrase_snippets)
-            if new_content and len(new_content.strip()) > 50:
-                llm_used = True
-            else:
-                new_content = None
-        except Exception as exc:
-            logger.info("LLM humanise unavailable (%s), using rule-based fallback.", exc)
-
-        if not new_content:
-            new_content = rule_based_humanise(content, seed=f"{document.id}:{i}")
-
-        if new_content and new_content.strip() != content:
-            sections[i]["content"] = new_content.strip()
+        if new_content != content:
+            sections[i]["content"] = new_content
             humanised += 1
 
         _done(plan, 2)  # Rewriting with human voice
@@ -12274,6 +12301,10 @@ def _write_section(
             citation_pool=citation_pool,
         )
 
+        # Humanise before any citation grounding so in-text citation markers land in
+        # the wording that actually ships, not in a draft a later rewrite will reshuffle.
+        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
+
         if is_lit_review:
             try:
                 from .research_layer import ground_section_text
@@ -12324,6 +12355,7 @@ def _write_section(
             sample_size=_infer_sample_size(document),
         )
     content = _sanitize_body(content)
+    content, _ = _auto_humanise_text(content, topic)
     _done(plan, 2)
 
     if idx is not None:
@@ -12438,6 +12470,8 @@ def _rewrite_chapter_batch(
             user_instruction=instruction or "",
             citation_pool=citation_pool,
         )
+
+        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         if chapter["number"] == 2:
             try:
@@ -12910,23 +12944,15 @@ def _plan_and_write_document(
         context_so_far = _full_context_for_generation(document)
 
         lowered_title = title.lower()
-        real_references = (
-            do_citations
-            and ("reference" in lowered_title or "bibliograph" in lowered_title)
-            and _cited_reference_list(citation_pool, context_so_far, user_guidelines["citation_style"])
-        )
+        is_reference_section = do_citations and ("reference" in lowered_title or "bibliograph" in lowered_title)
 
-        if real_references:
-            # ── References/Bibliography: built directly from verified papers ──
-            # retrieved from Crossref/arXiv/PubMed/Semantic Scholar — never asked
-            # of the LLM, so there is nothing here for it to hallucinate, and
-            # nothing for a review pass to usefully "tighten" either.
+        if is_reference_section:
+            # ── References/Bibliography: citation grounding only runs after
+            # every other section has been written and humanised (below), so
+            # citation_pool is still empty here. Leave a placeholder; it's
+            # overwritten with the real, verified list once grounding has run.
             _broadcast_activity(f"Writing {title}")
-            text = (
-                "The following references were retrieved from open scholarly databases "
-                "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
-                "to this study topic:\n\n" + real_references
-            )
+            text = "References will be compiled once the rest of the document has been written."
             _done(plan, plan_cursor)
             plan_cursor += 1
             if do_review:
@@ -12973,30 +12999,83 @@ def _plan_and_write_document(
                 _done(plan, plan_cursor)
                 plan_cursor += 1
 
-            if do_citations:
-                # Now that this section's final text exists, read it and search
-                # specifically for what IT discusses — not the document's overall
-                # topic — and insert citations only where a real source actually
-                # backs a claim already on the page. Whatever gets cited here is
-                # accumulated into citation_pool for the document-wide bibliography.
-                _broadcast_activity(f"Finding sources for {title}")
-                try:
-                    from .research_layer import ground_section_text
-
-                    text, section_sources = ground_section_text(
-                        title, text, topic, document.id, style=user_guidelines["citation_style"],
-                    )
-                    for src in section_sources:
-                        key = (src.doi or src.title or "").lower()
-                        if key and key not in _cited_keys:
-                            _cited_keys.add(key)
-                            citation_pool.append(src)
-                except Exception as exc:
-                    logger.warning("_plan_and_write_document: citation grounding failed for '%s': %s", title, exc)
+            # Humanise before any citation grounding ever sees this section —
+            # grounding is deferred to a pass after every section is written
+            # (below), so in-text citation markers land in the final wording
+            # instead of being shuffled or dropped by a later humanising rewrite.
+            text, _ = _auto_humanise_text(text, topic)
 
         sections.append({"title": title, "content": text})
         document.content = _content_snapshot()
         _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
+
+    # ── Citation grounding ────────────────────────────────────────────────────
+    # Now that every section has been written, reviewed, and humanised, ground
+    # each one (other than the References/Bibliography placeholder above)
+    # against literature retrieved specifically for what THAT section
+    # discusses, accumulating whatever it actually cites into the document-wide
+    # pool. Deferred until the whole document exists so the humanising pass
+    # above never gets a chance to reshuffle or drop an in-text citation marker.
+    if do_citations:
+        for section in sections:
+            lowered = (section.get("title") or "").lower()
+            if "reference" in lowered or "bibliograph" in lowered:
+                continue
+            section_text = (section.get("content") or "").strip()
+            if not section_text:
+                continue
+            _broadcast_activity(f"Finding sources for {section['title']}")
+            try:
+                from .research_layer import ground_section_text
+
+                grounded_text, section_sources = ground_section_text(
+                    section["title"], section_text, topic, document.id, style=user_guidelines["citation_style"],
+                )
+                section["content"] = grounded_text
+                for src in section_sources:
+                    key = (src.doi or src.title or "").lower()
+                    if key and key not in _cited_keys:
+                        _cited_keys.add(key)
+                        citation_pool.append(src)
+            except Exception as exc:
+                logger.warning("_plan_and_write_document: citation grounding failed for '%s': %s", section["title"], exc)
+
+        # ── References/Bibliography: now built directly from verified papers
+        # actually cited above — never asked of the LLM, so there is nothing
+        # here for it to hallucinate.
+        full_text_so_far = "\n\n".join(
+            s.get("content", "") or "" for s in sections
+            if "reference" not in (s.get("title") or "").lower()
+            and "bibliograph" not in (s.get("title") or "").lower()
+        )
+        for section in sections:
+            lowered = (section.get("title") or "").lower()
+            if "reference" not in lowered and "bibliograph" not in lowered:
+                continue
+            real_references = _cited_reference_list(citation_pool, full_text_so_far, user_guidelines["citation_style"])
+            if real_references:
+                section["content"] = (
+                    "The following references were retrieved from open scholarly databases "
+                    "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
+                    "to this study topic:\n\n" + real_references
+                )
+            elif citation_pool:
+                # Sources were retrieved but none matched an in-text citation closely
+                # enough — never leave the "will be compiled" placeholder in a
+                # finished document.
+                section["content"] = (
+                    "Sources were retrieved from open scholarly databases (Crossref, arXiv, "
+                    "PubMed, Semantic Scholar) but none could be confidently matched to an "
+                    "in-text citation in this document — add references manually before submission."
+                )
+            else:
+                section["content"] = (
+                    "No verified external sources could be retrieved (e.g. no network access) — "
+                    "add references manually before submission."
+                )
+
+        document.content = _content_snapshot()
+        _save(document, "doc-step:grounding-citations")
 
     document.content = _content_snapshot()
     document.title = doc_title
@@ -13303,22 +13382,11 @@ def _write_dissertation(
         )
         review_notes.extend(chapter_review_notes)
 
-        # Chapter text now exists and has been reviewed — ground it against
-        # literature retrieved specifically for what THIS chapter discusses, and
-        # accumulate whatever it actually cites into the document-wide pool.
-        try:
-            from .research_layer import ground_section_text
-
-            chapter_text, chapter_sources = ground_section_text(
-                chapter_title, chapter_text, topic, document.id, style=user_guidelines["citation_style"],
-            )
-            for src in chapter_sources:
-                key = (src.doi or src.title or "").lower()
-                if key and key not in _cited_keys:
-                    _cited_keys.add(key)
-                    citation_pool.append(src)
-        except Exception as exc:
-            logger.warning("_write_dissertation: citation grounding failed for '%s': %s", chapter_title, exc)
+        # Humanise before citation grounding ever sees this chapter — grounding is
+        # deferred to a pass after every chapter is written (below), so in-text
+        # citation markers land in the final wording instead of being shuffled or
+        # dropped by a later humanising rewrite.
+        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
@@ -13336,6 +13404,40 @@ def _write_dissertation(
             "sections": sections,
         }
         _save(document, f"dissertation-step:{chapter_title}")
+
+    # ── Citation grounding ────────────────────────────────────────────────────
+    # Now that every chapter has been written, reviewed, and humanised, ground
+    # each one against literature retrieved specifically for what THAT chapter
+    # discusses, accumulating whatever it actually cites into the document-wide
+    # pool. Deferred until the whole dissertation exists so the humanising pass
+    # above never gets a chance to reshuffle or drop an in-text citation marker.
+    for section_payload in sections:
+        ground_title = section_payload.get("title", "")
+        ground_text = section_payload.get("content", "")
+        if not ground_text.strip():
+            continue
+        try:
+            from .research_layer import ground_section_text
+
+            ground_text, chapter_sources = ground_section_text(
+                ground_title, ground_text, topic, document.id, style=user_guidelines["citation_style"],
+            )
+            section_payload["content"] = ground_text
+            for src in chapter_sources:
+                key = (src.doi or src.title or "").lower()
+                if key and key not in _cited_keys:
+                    _cited_keys.add(key)
+                    citation_pool.append(src)
+        except Exception as exc:
+            logger.warning("_write_dissertation: citation grounding failed for '%s': %s", ground_title, exc)
+
+    document.content = {
+        "topic": topic,
+        "research_design": design,
+        "research_objectives": objectives,
+        "sections": sections,
+    }
+    _save(document, "dissertation-step:grounding-citations")
 
     # Now that every chapter has its final content, replace the static
     # Table of Contents / List of Figures / List of Tables placeholders in
