@@ -12,10 +12,18 @@ with a burstiness inversion signal (45 %).
 
 The humaniser mirrors the three signals a detector scores, attacking each
 directly instead of doing a single phrase find/replace pass:
-  Pass 1 — cliché/fingerprint phrase substitution (lowers phrase score)
-  Pass 2 — lexical substitution of high-predictability words with lower-
+  Pass 1  — cliché/fingerprint phrase substitution (lowers phrase score)
+  Pass 1b — clause/nominalisation restructuring: a curated set of templates
+            that convert specific noun-phrase and passive-voice shapes
+            common in AI academic prose (e.g. "the impact of X on Y" ->
+            "how X affects Y", "Data were collected through X" -> fronted
+            source/instrument, connector swaps) into a differently-shaped
+            but grammatically equivalent phrase or clause. No dependency
+            parser is available in this environment, so each rule targets
+            one well-defined pattern rather than a generic transform.
+  Pass 2  — lexical substitution of high-predictability words with lower-
             frequency synonyms (raises perplexity / lowers predictability)
-  Pass 3 — sentence-length restructuring: split long uniform sentences and
+  Pass 3  — sentence-length restructuring: split long uniform sentences and
             merge short uniform ones so length variance increases (raises
             burstiness, since LLM output is unusually uniform in length)
 """
@@ -277,6 +285,132 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+# ── Pass 1b: clause / nominalisation restructuring ─────────────────────────
+# Curated, hand-written templates for specific noun-phrase and passive-voice
+# shapes that recur in AI-generated academic prose. Every rule here converts
+# the matched span into a *grammatically equivalent* replacement — NP -> NP,
+# full clause -> full clause, word -> word — so it stays safe to drop into
+# whatever sentence position the original phrase occupied. Deliberately
+# narrower than a generic syntactic transform: with no dependency parser
+# available, each template targets one well-defined pattern rather than
+# guessing at sentence structure.
+
+def _restructure_clauses(text: str, rng: random.Random) -> str:
+    # "The findings/results revealed/showed/indicated that X" -> "It was found that X"
+    text = re.sub(
+        r"\bThe (?:findings|results) (?:revealed|showed|indicated) that\b",
+        lambda m: _match_case(m.group(), "it was found that"),
+        text, flags=re.IGNORECASE,
+    )
+
+    # "the impact/effect/influence of X on Y" -> "how X affects/influences/shapes Y"
+    # Safe after the governing verbs this phrase typically follows in academic
+    # writing (determine/investigate/examine/assess/study/establish), which
+    # accept either a noun-phrase or a wh-clause complement interchangeably.
+    def _impact_to_clause(m: re.Match) -> str:
+        verb = rng.choice(["affects", "influences", "shapes"])
+        return f"how {m.group(1).strip()} {verb} {m.group(2).strip()}"
+    text = re.sub(
+        r"\bthe (?:impact|effect|influence) of ([^,.;:]+?) on ([^,.;:]+)",
+        _impact_to_clause, text, flags=re.IGNORECASE,
+    )
+
+    # "customer/revenue/job/market share loss" -> "the loss of customers/..."  (NP -> NP)
+    def _loss_phrase(m: re.Match) -> str:
+        noun = m.group(1).lower()
+        plural = {"customer": "customers", "job": "jobs"}.get(noun, noun)
+        return f"the loss of {plural}"
+    text = re.sub(
+        r"\b(customer|revenue|job|market share) loss\b",
+        _loss_phrase, text, flags=re.IGNORECASE,
+    )
+
+    # "technology/knowledge/skills transfer" -> "transfer of technology/..."  (NP -> NP)
+    def _transfer_phrase(m: re.Match) -> str:
+        result = f"transfer of {m.group(1).lower()}"
+        return result[:1].upper() + result[1:] if m.group(0)[:1].isupper() else result
+    text = re.sub(
+        r"\b(technology|knowledge|skills?) transfer\b",
+        _transfer_phrase, text, flags=re.IGNORECASE,
+    )
+
+    # "creates/create opportunities for X to Y" -> "gives/give X the chance to Y"
+    # Keeps the same subject + verb-phrase slot, just swaps the verb-phrase shape.
+    text = re.sub(
+        r"\bcreates opportunities for ([^,.;:]+?) to ([^,.;:]+)",
+        lambda m: f"gives {m.group(1).strip()} the chance to {m.group(2).strip()}",
+        text, flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bcreate opportunities for ([^,.;:]+?) to ([^,.;:]+)",
+        lambda m: f"give {m.group(1).strip()} the chance to {m.group(2).strip()}",
+        text, flags=re.IGNORECASE,
+    )
+
+    # "(Quantitative/Qualitative) data were/was collected through/using X (from Y)"
+    # -> front the source as subject, keeping any leading qualifier attached to
+    # "data" rather than letting it dangle in front of the new subject.
+    def _data_collected(m: re.Match) -> str:
+        starts_upper = m.group(0)[:1].isupper()
+        qualifier = (m.group(1) or "").strip()
+        instrument = m.group(2).strip()
+        source = m.group(3)
+        qualifier_text = f"{qualifier.lower()} " if qualifier else ""
+        if source:
+            result = f"{source.strip()} were used to gather {qualifier_text}data through {instrument}"
+        else:
+            # Crude plurality heuristic ("interviews"/"surveys" vs "a questionnaire")
+            # since no parser is available to check real number agreement.
+            last_word = instrument.rstrip(".").split()[-1].lower() if instrument else ""
+            verb = "were" if last_word.endswith("s") and not last_word.endswith("ss") else "was"
+            result = f"{instrument} {verb} used to gather {qualifier_text}data"
+        return result[:1].upper() + result[1:] if starts_upper else result
+    text = re.sub(
+        r"\b(?:(Quantitative|Qualitative)\s+)?[Dd]ata (?:were|was) collected (?:through|using) "
+        r"([^,.;:]+?)(?:\s+from\s+([^,.;:]+))?(?=[.,;:]|$)",
+        _data_collected, text, flags=re.IGNORECASE,
+    )
+
+    # "limited access/funding/resources/capacity" -> "a lack of access/..."  (NP -> NP)
+    text = re.sub(
+        r"\blimited (access|funding|resources|capacity)\b",
+        lambda m: f"a lack of {m.group(1)}",
+        text, flags=re.IGNORECASE,
+    )
+
+    # "increased competition" -> "more intense/heightened competition"  (NP -> NP)
+    text = re.sub(
+        r"\bincreased competition\b",
+        lambda m: _match_case(m.group(), rng.choice(["more intense competition", "heightened competition"])),
+        text, flags=re.IGNORECASE,
+    )
+
+    # Connector substitution — preserves clause structure, swaps the linking word.
+    # "X, however, Y" -> "X, but Y" (mid-clause insertion, drop the trailing comma "but" doesn't take)
+    text = re.sub(r",\s+however,\s+", ", but ", text, flags=re.IGNORECASE)
+    # Sentence-initial "However, X" -> "But X"
+    text = re.sub(
+        r"\bHowever,\s+",
+        lambda m: _match_case("However", "But") + " ",
+        text, flags=re.IGNORECASE,
+    )
+    # Any remaining bare "however" -> "but"
+    text = re.sub(r"\bHowever\b", lambda m: _match_case(m.group(), "but"), text, flags=re.IGNORECASE)
+
+    # ", while Y verbed" -> ", and Y verbed" — only when "while" is followed by
+    # what looks like a fresh clause subject (not "still"/an -ing participle),
+    # since "while trying to..."/"while still..." are reduced clauses with no
+    # subject of their own and "and" would leave a dangling fragment.
+    def _while_to_and(m: re.Match) -> str:
+        return m.group(0) if rng.random() >= 0.5 else ", and "
+    text = re.sub(
+        r",\s+while\s+(?!still\b|\w+ing\b)",
+        _while_to_and, text, flags=re.IGNORECASE,
+    )
+
+    return text
+
+
 # ── Pass 2: lexical substitution ───────────────────────────────────────────
 # Common high-frequency / high-predictability words that LLMs over-use,
 # mapped to lower-frequency synonyms. Word-boundary, case-preserving swap.
@@ -304,6 +438,41 @@ _SYNONYM_MAP: dict[str, list[str]] = {
     "embark on": ["begin", "start"], "navigate the complexities of": ["address", "work through"],
     "stands as a testament to": ["reflects", "confirms"],
     "serves as a": ["acts as a", "functions as a"],
+    # Academic/dissertation-prose vocabulary — same part-of-speech and same
+    # verb form/tense as the source word in every entry, so chained swaps
+    # (a value that is itself a key elsewhere) never change grammatical role.
+    "examine": ["discuss", "investigate", "look at"], "examines": ["discusses", "investigates", "looks at"],
+    "examined": ["discussed", "investigated", "looked at"], "examining": ["discussing", "investigating", "looking at"],
+    "analyse": ["examine", "investigate"], "analyses": ["examines", "investigates"],
+    "analysed": ["examined", "investigated"], "analysing": ["examining", "investigating"],
+    "analyze": ["examine", "investigate"], "analyzes": ["examines", "investigates"],
+    "analyzed": ["examined", "investigated"], "analyzing": ["examining", "investigating"],
+    "motivate": ["inspire", "drive"], "motivates": ["inspires", "drives"], "motivated": ["inspired", "driven"],
+    "understand": ["learn about", "grasp"], "understands": ["learns about", "grasps"],
+    "understood": ["learned about", "grasped"],
+    "seek": ["aim", "set out"], "seeks": ["aims", "sets out"], "sought": ["aimed", "set out"],
+    "adopt": ["use", "apply"], "adopts": ["uses", "applies"],
+    "adopted": ["used", "applied"], "adopting": ["using", "applying"],
+    "collect": ["gather", "compile"], "collects": ["gathers", "compiles"],
+    "collected": ["gathered", "compiled"], "collecting": ["gathering", "compiling"],
+    "reveal": ["find", "show"], "reveals": ["finds", "shows"],
+    "revealed": ["found", "showed"], "revealing": ["finding", "showing"],
+    "establish": ["determine", "find"], "establishes": ["determines", "finds"],
+    "established": ["determined", "found"],
+    "promote": ["facilitate", "support", "encourage"], "promotes": ["facilitates", "supports", "encourages"],
+    "promoted": ["facilitated", "supported", "encouraged"],
+    "identify": ["find", "note", "flag"], "identifies": ["finds", "notes", "flags"],
+    "identified": ["found", "noted", "flagged"],
+    "contributes to": ["plays a role in", "helps drive"], "contribute to": ["play a role in", "help drive"],
+    "impacts": ["affects", "influences"], "affects": ["influences", "shapes"],
+    "need for": ["necessity for", "requirement for"],
+    "enterprise": ["business", "firm"], "enterprises": ["businesses", "firms"],
+    "investment": ["capital", "funding"], "investments": ["capital", "funds"],
+    "inflow": ["influx"], "inflows": ["influxes"],
+    "extent": ["degree"],
+    "technique": ["method", "approach"], "techniques": ["methods", "approaches"],
+    "increasing": ["growing", "rising"],
+    "competition": ["rivalry"],
 }
 _SYNONYM_RES = sorted(_SYNONYM_MAP.keys(), key=len, reverse=True)
 
@@ -409,6 +578,7 @@ def rule_based_humanise(text: str, seed: str | None = None) -> str:
     """
     StealthWriter-style multi-pass rewrite, applied without any LLM:
       1. Replace known AI cliché phrases with plainer alternatives.
+      1b. Apply curated clause/nominalisation restructuring templates.
       2. Swap predictable high-frequency words for lower-frequency synonyms
          (raises perplexity).
       3. Restructure sentence lengths — split long uniform sentences, merge
@@ -434,6 +604,7 @@ def rule_based_humanise(text: str, seed: str | None = None) -> str:
     result = re.sub(r"\.\s+,\s+", ". ", result)
     result = re.sub(r"^\s*,\s*", "", result, flags=re.MULTILINE)
 
+    result = _restructure_clauses(result, rng)
     result = _lexical_substitute(result, rng)
     result = _restructure_for_burstiness(result, rng)
 
