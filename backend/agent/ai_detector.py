@@ -220,76 +220,122 @@ _ING_FORMS: dict[str, str] = {
     "change": "changing", "expand": "expanding", "improve": "improving",
 }
 
+# Common auxiliary/modal/copula verbs — a cheap, non-exhaustive signal that a
+# clause already has a verb of its own.
+_AUX_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being|has|have|had|do|does|did|"
+    r"will|would|can|could|shall|should|may|might|must)\b", re.IGNORECASE,
+)
+
+
+def _preceding_clause_has_verb(text: str, end: int) -> bool:
+    """Heuristic: does the clause ending at `text[:end]` (back to the nearest
+    sentence/clause boundary) already contain a verb of its own? Connectors
+    like "however"/"moreover"/"consequently" are conjunctive adverbs, not
+    coordinating conjunctions — substituting them with a true conjunction
+    ("but"/"and"/"so") is only grammatical once both sides are already
+    independent clauses. When the text before the connector is just a bare
+    subject with no verb yet, it's a mid-clause parenthetical interrupter
+    instead ("The results, however, supported..."), and a conjunction
+    substitution there strands a subject-only fragment.
+    """
+    boundary = max(
+        text.rfind(".", 0, end), text.rfind("!", 0, end),
+        text.rfind("?", 0, end), text.rfind(";", 0, end),
+    )
+    span = text[boundary + 1:end]
+    words = span.split()
+    if len(words) > 6:
+        return True
+    if _AUX_VERB_RE.search(span):
+        return True
+    return bool(re.search(r"\b\w+(?:ed|ing)\b", span))
+
+
 _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     # Hedge openers
-    (re.compile(r"\bIt is important to note that\b", re.I), "Note that"),
-    (re.compile(r"\bIt is worth noting that\b", re.I), "Worth noting:"),
+    (re.compile(r"\bIt is important to note that\b", re.I), lambda m: _match_case(m.group(), "note that")),
+    (re.compile(r"\bIt is worth noting that\b", re.I), lambda m: _match_case(m.group(), "worth noting:")),
     (re.compile(r"\bIt is (?:essential|vital|crucial) to (?:understand|recogni[sz]e) that\b", re.I),
      lambda m: _match_case(m.group(), "understand that")),
     (re.compile(r"\bIt is (?:crucial|essential|vital) to\b", re.I), lambda m: _match_case(m.group(), "to")),
-    (re.compile(r"\bIt is evident that\b", re.I), "Clearly,"),
-    (re.compile(r"\bIt (?:is|can be) (?:argued|said|noted|observed) that\b", re.I), "I would argue that"),
+    (re.compile(r"\bIt is evident that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
+    (re.compile(r"\bIt (?:is|can be) (?:argued|said|noted|observed) that\b", re.I), lambda m: _match_case(m.group(), "i would argue that")),
+    # Anchored like the Notably/Importantly/... removal below: a bare ""
+    # replacement would leave the next word lowercase when this filler opens
+    # a sentence, so capture and re-capitalize it instead of just deleting.
+    (re.compile(r"(?:^|(?<=[.!?]\s))Needless to say,?\s+(\w)", re.IGNORECASE | re.MULTILINE),
+     lambda m: m.group(1).upper()),
     (re.compile(r"\bNeedless to say,?\s*", re.I), ""),
-    (re.compile(r"\bIt goes without saying that\b", re.I), "Obviously,"),
-    (re.compile(r"\bHaving said that,?\s*", re.I), "That said, "),
-    (re.compile(r"\bWithout (?:a )?(?:doubt|question|reservation)\b", re.I), "Clearly"),
-    (re.compile(r"\bBy and large\b", re.I), "Overall"),
-    (re.compile(r"\bBy no means\b", re.I), "Not"),
+    (re.compile(r"\bIt goes without saying that\b", re.I), lambda m: _match_case(m.group(), "obviously,")),
+    (re.compile(r"\bHaving said that,?\s*", re.I), lambda m: _match_case(m.group(), "that said, ")),
+    (re.compile(r"\bWithout (?:a )?(?:doubt|question|reservation)\b", re.I), lambda m: _match_case(m.group(), "clearly")),
+    (re.compile(r"\bBy and large\b", re.I), lambda m: _match_case(m.group(), "overall")),
+    (re.compile(r"\bBy no means\b", re.I), lambda m: _match_case(m.group(), "not")),
     # Time/world clichés
-    (re.compile(r"\bIn today['’]?s (?:world|society|age|era|landscape)\b", re.I), "Today"),
-    (re.compile(r"\bin (?:today['’]?s|this) (?:fast-paced|rapidly changing) world\b", re.I), "now"),
-    (re.compile(r"\btapestry of\b", re.I), "mix of"),
+    (re.compile(r"\bIn today['’]?s (?:world|society|age|era|landscape)\b", re.I), lambda m: _match_case(m.group(), "today")),
+    (re.compile(r"\bin (?:today['’]?s|this) (?:fast-paced|rapidly changing) world\b", re.I), lambda m: _match_case(m.group(), "now")),
+    (re.compile(r"\btapestry of\b", re.I), lambda m: _match_case(m.group(), "mix of")),
     (re.compile(r"\bunprecedented (?:levels?|growth|challenges?)\b", re.I), lambda m: f"sharp {m.group().split()[-1]}"),
-    (re.compile(r"\bshed(?:s|ding)? light on\b", re.I), "clarify"),
-    (re.compile(r"\bnavigate(?:s|d)? the complexit(?:y|ies) of\b", re.I), "work through"),
-    (re.compile(r"\bstands? as a testament to\b", re.I), "reflects"),
-    (re.compile(r"\bserves? as a\b", re.I), "acts as a"),
+    (re.compile(r"\bshed(?:s|ding)? light on\b", re.I), lambda m: _match_case(m.group(), "clarify")),
+    (re.compile(r"\bnavigate(?:s|d)? the complexit(?:y|ies) of\b", re.I), lambda m: _match_case(m.group(), "work through")),
+    (re.compile(r"\bstands? as a testament to\b", re.I), lambda m: _match_case(m.group(), "reflects")),
+    (re.compile(r"\bserves? as a\b", re.I), lambda m: _match_case(m.group(), "acts as a")),
     (re.compile(r"\bgarner(?:s|ed|ing)? (?:attention|interest|support)\b", re.I), lambda m: f"attract {m.group().split()[-1]}"),
-    (re.compile(r"\bembark(?:s|ed|ing)? on a journey\b(?:\s+of)?", re.I), "begin"),
-    (re.compile(r"\bit cannot be denied that\b", re.I), "clearly,"),
-    (re.compile(r"\bin (?:conclusion|summary)\b,?", re.I), "overall,"),
-    (re.compile(r"\bon the other hand\b", re.I), "by contrast"),
-    (re.compile(r"\bThroughout history\b", re.I), "Historically"),
-    (re.compile(r"\bThroughout the ages\b", re.I), "Over the years"),
+    (re.compile(r"\bembark(?:s|ed|ing)? on a journey\b(?:\s+of)?", re.I), lambda m: _match_case(m.group(), "begin")),
+    (re.compile(r"\bit cannot be denied that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
+    (re.compile(r"\bin (?:conclusion|summary)\b,?", re.I), lambda m: _match_case(m.group(), "overall,")),
+    (re.compile(r"\bon the other hand\b", re.I), lambda m: _match_case(m.group(), "by contrast")),
+    (re.compile(r"\bThroughout history\b", re.I), lambda m: _match_case(m.group(), "historically")),
+    (re.compile(r"\bThroughout the ages\b", re.I), lambda m: _match_case(m.group(), "over the years")),
     # Meta-essay phrases
-    (re.compile(r"\bThis (?:essay|paper|study|section|chapter|report) (?:will|aims to|seeks to|endeavours? to)\b", re.I), "This study"),
-    (re.compile(r"\bThis (?:essay|paper|study|section|report) (?:will|aims to) (?:provide|offer|present) a (?:comprehensive|detailed)\b", re.I), "This paper presents"),
-    (re.compile(r"\bThis (?:highlights?|underscores?|demonstrates?|showcases?|illuminates?) the\b", re.I), "This shows the"),
-    (re.compile(r"\bIn (?:conclusion|summary),? (?:it is|we can|this study|this paper)\b", re.I), "In short,"),
+    (re.compile(r"\bThis (?:essay|paper|study|section|chapter|report) (?:will|aims to|seeks to|endeavours? to)\b", re.I), lambda m: _match_case(m.group(), "this study")),
+    (re.compile(r"\bThis (?:essay|paper|study|section|report) (?:will|aims to) (?:provide|offer|present) a (?:comprehensive|detailed)\b", re.I), lambda m: _match_case(m.group(), "this paper presents")),
+    (re.compile(r"\bThis (?:highlights?|underscores?|demonstrates?|showcases?|illuminates?) the\b", re.I), lambda m: _match_case(m.group(), "this shows the")),
+    (re.compile(r"\bIn (?:conclusion|summary),? (?:it is|we can|this study|this paper)\b", re.I), lambda m: _match_case(m.group(), "in short,")),
     # Buzzwords
-    (re.compile(r"\bdelve(?:s|d)?\s+into\b", re.I), "explore"),
-    (re.compile(r"\bcomprehensive (?:overview|analysis|examination|understanding)\b", re.I), "overview"),
-    (re.compile(r"\bholistic approach\b", re.I), "broad approach"),
-    (re.compile(r"\bparadigm shift\b", re.I), "major change"),
-    (re.compile(r"\binextricably linked\b", re.I), "closely connected"),
-    (re.compile(r"\bseamlessly integrat\b", re.I), "integrat"),
+    (re.compile(r"\bdelve(?:s|d)?\s+into\b", re.I), lambda m: _match_case(m.group(), "explore")),
+    (re.compile(r"\bcomprehensive (?:overview|analysis|examination|understanding)\b", re.I), lambda m: _match_case(m.group(), "overview")),
+    (re.compile(r"\bholistic approach\b", re.I), lambda m: _match_case(m.group(), "broad approach")),
+    (re.compile(r"\bparadigm shift\b", re.I), lambda m: _match_case(m.group(), "major change")),
+    (re.compile(r"\binextricably linked\b", re.I), lambda m: _match_case(m.group(), "closely connected")),
+    (re.compile(r"\bseamlessly integrat\b", re.I), lambda m: _match_case(m.group(), "integrat")),
     (re.compile(r"\brobust (?:framework|methodology|approach|solution|system)s?\b", re.I), lambda m: m.group().split()[-1]),
-    (re.compile(r"\bthe (?:realm|landscape|domain) of\b", re.I), "the area of"),
-    (re.compile(r"\bthe aforementioned\b", re.I), "these"),
-    (re.compile(r"\baforementioned\b", re.I), "above-mentioned"),
-    (re.compile(r"\bever-?(?:evolving|changing|growing)\b", re.I), "changing"),
-    (re.compile(r"\bmyriad(?:\s+of)?\b", re.I), "many"),
-    (re.compile(r"\bintricacies? of\b", re.I), "details of"),
-    (re.compile(r"\bfoster(?:s|ed|ing)? (?:a )?(?:deeper|better|greater|more nuanced) understanding\b", re.I), "build understanding"),
-    (re.compile(r"\bunderscores? the (?:importance|significance|need|necessity)\b", re.I), "highlights the importance"),
-    (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), "highlights the importance"),
+    (re.compile(r"\bthe (?:realm|landscape|domain) of\b", re.I), lambda m: _match_case(m.group(), "the area of")),
+    (re.compile(r"\bthe aforementioned\b", re.I), lambda m: _match_case(m.group(), "these")),
+    (re.compile(r"\baforementioned\b", re.I), lambda m: _match_case(m.group(), "above-mentioned")),
+    (re.compile(r"\bever-?(?:evolving|changing|growing)\b", re.I), lambda m: _match_case(m.group(), "changing")),
+    (re.compile(r"\bmyriad(?:\s+of)?\b", re.I), lambda m: _match_case(m.group(), "many")),
+    (re.compile(r"\bintricacies? of\b", re.I), lambda m: _match_case(m.group(), "details of")),
+    (re.compile(r"\bfoster(?:s|ed|ing)? (?:a )?(?:deeper|better|greater|more nuanced) understanding\b", re.I), lambda m: _match_case(m.group(), "build understanding")),
+    (re.compile(r"\bunderscores? the (?:importance|significance|need|necessity)\b", re.I), lambda m: _match_case(m.group(), "highlights the importance")),
+    (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), lambda m: _match_case(m.group(), "highlights the importance")),
     (re.compile(r"\b(plays?) (?:an? )?(?:crucial|pivotal|significant|vital|key|important|integral|essential|fundamental|instrumental|central) (?:role|part)\b", re.I),
      lambda m: "matters" if m.group(1).lower() == "plays" else "matter"),
     (re.compile(r"\bsignificantly (impacts?)\b", re.I),
      lambda m: "affects" if m.group(1).lower().endswith("s") else "affect"),
     (re.compile(r"\bpotential (?:benefits?|implications?|challenges?)\b", re.I), lambda m: m.group().split()[-1]),
     # Connective filler
-    (re.compile(r"\bFurthermore,?\s+", re.I), "Also, "),
-    (re.compile(r"\bMoreover,?\s+", re.I), "And "),
-    (re.compile(r"\bConsequently,?\s+", re.I), "So "),
-    (re.compile(r"\bAdditionally,?\s+", re.I), "Also, "),
+    (re.compile(r"\bFurthermore,?\s+", re.I), lambda m: _match_case(m.group(), "also, ")),
+    # Mid-clause parenthetical form ("X, moreover, Y") needs a verb-presence
+    # check before the general rule below: "and" is a coordinating
+    # conjunction, only grammatical once X is already an independent clause.
+    # When X is just a bare subject (no verb yet), fall back to "also" —
+    # already proven safe as a floating parenthetical (see Furthermore above).
+    (re.compile(r",\s*moreover\s*,\s*", re.I),
+     lambda m: ", and " if _preceding_clause_has_verb(m.string, m.start()) else ", also, "),
+    (re.compile(r"\bMoreover,?\s+", re.I), lambda m: _match_case(m.group(), "and ")),
+    (re.compile(r",\s*consequently\s*,\s*", re.I),
+     lambda m: ", so " if _preceding_clause_has_verb(m.string, m.start()) else ", also, "),
+    (re.compile(r"\bConsequently,?\s+", re.I), lambda m: _match_case(m.group(), "so ")),
+    (re.compile(r"\bAdditionally,?\s+", re.I), lambda m: _match_case(m.group(), "also, ")),
     # Sentence-initial-only removal (anchored on start-of-text/line or a prior
     # sentence terminator) so the word right after the dropped filler can be
     # re-capitalized — a bare "" replacement would leave it lowercase mid-sentence.
     (re.compile(r"(?:^|(?<=[.!?]\s))(?:Notably|Importantly|Essentially|Fundamentally|In essence),?\s+(\w)",
                 re.IGNORECASE | re.MULTILINE),
      lambda m: m.group(1).upper()),
-    (re.compile(r"\bUltimately,?\s+", re.I), "In the end, "),
+    (re.compile(r"\bUltimately,?\s+", re.I), lambda m: _match_case(m.group(), "in the end, ")),
     (re.compile(r"\bthe importance of (.{3,40}) cannot be (?:overstated|understated|emphasised|emphasized)\b", re.I), lambda m: f"{m.group(1)} matters a great deal"),
     # More filler/cliché openers
     (re.compile(r"\bwhen it comes to\b", re.I), lambda m: _match_case(m.group(), "regarding")),
@@ -297,13 +343,13 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bfirst and foremost,?\s*", re.I), lambda m: _match_case(m.group(), "first, ")),
     (re.compile(r"\blast but not least,?\s*", re.I), lambda m: _match_case(m.group(), "finally, ")),
     (re.compile(r"\b(?:with )?that being said,?\s*", re.I), lambda m: _match_case(m.group(), "still, ")),
-    (re.compile(r"\bit is no secret that\b", re.I), "Clearly,"),
+    (re.compile(r"\bit is no secret that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
     (re.compile(r"\bas previously mentioned,?\s*", re.I), lambda m: _match_case(m.group(), "as noted earlier, ")),
     (re.compile(r"\b(?:to put it simply|simply put),?\s*", re.I), lambda m: _match_case(m.group(), "in short, ")),
     (re.compile(r"\ball things considered,?\s*", re.I), lambda m: _match_case(m.group(), "overall, ")),
     (re.compile(r"\bmoving forward,?\s*", re.I), lambda m: _match_case(m.group(), "next, ")),
-    (re.compile(r"\bit should be noted that\b", re.I), "Note that"),
-    (re.compile(r"\bbegs the question\b", re.I), "raises the question"),
+    (re.compile(r"\bit should be noted that\b", re.I), lambda m: _match_case(m.group(), "note that")),
+    (re.compile(r"\bbegs the question\b", re.I), lambda m: _match_case(m.group(), "raises the question")),
     (re.compile(r"\bmake no mistake,?\s*", re.I), lambda m: _match_case(m.group(), "to be clear, ")),
     (re.compile(r"\bat its core,?\s*", re.I), lambda m: _match_case(m.group(), "basically, ")),
     # Even more filler/cliché openers
@@ -328,8 +374,8 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bit is (?:crystal clear|clear) that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
     (re.compile(r"\bin a nutshell,?\s*", re.I), lambda m: _match_case(m.group(), "briefly, ")),
     (re.compile(r"\bwithout further ado,?\s*", re.I), lambda m: _match_case(m.group(), "now, ")),
-    (re.compile(r"\bopens up new avenues for\b", re.I), "creates new options for"),
-    (re.compile(r"\bopen up new avenues for\b", re.I), "create new options for"),
+    (re.compile(r"\bopens up new avenues for\b", re.I), lambda m: _match_case(m.group(), "creates new options for")),
+    (re.compile(r"\bopen up new avenues for\b", re.I), lambda m: _match_case(m.group(), "create new options for")),
     (re.compile(r"\bcontinues to (evolve|grow|develop|change|expand|improve)\b", re.I),
      lambda m: f"keeps {_ING_FORMS[m.group(1).lower()]}"),
     (re.compile(r"\bcontinue to (evolve|grow|develop|change|expand|improve)\b", re.I),
@@ -375,10 +421,10 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bit is important to (?:recognize|recognise|acknowledge) that\b", re.I),
      lambda m: _match_case(m.group(), "recognize that" if "recogni" in m.group().lower() else "acknowledge that")),
     # Passive constructions (common AI pattern)
-    (re.compile(r"\bIt (?:has|have) been (?:noted|observed|suggested|argued) that\b", re.I), "Research suggests that"),
-    (re.compile(r"\bit is (?:widely )?(?:recognised|recognized|acknowledged|accepted) that\b", re.I), "Most researchers agree that"),
-    (re.compile(r"\bit has been (?:established|shown|demonstrated) that\b", re.I), "Studies show that"),
-    (re.compile(r"\bit is (?:generally|commonly) (?:believed|thought|assumed) that\b", re.I), "Most people assume that"),
+    (re.compile(r"\bIt (?:has|have) been (?:noted|observed|suggested|argued) that\b", re.I), lambda m: _match_case(m.group(), "research suggests that")),
+    (re.compile(r"\bit is (?:widely )?(?:recognised|recognized|acknowledged|accepted) that\b", re.I), lambda m: _match_case(m.group(), "most researchers agree that")),
+    (re.compile(r"\bit has been (?:established|shown|demonstrated) that\b", re.I), lambda m: _match_case(m.group(), "studies show that")),
+    (re.compile(r"\bit is (?:generally|commonly) (?:believed|thought|assumed) that\b", re.I), lambda m: _match_case(m.group(), "most people assume that")),
 ]
 
 
@@ -507,8 +553,18 @@ def _restructure_clauses(text: str, rng: random.Random) -> str:
     # Connector substitution — preserves clause structure, swaps the linking word.
     # "X; however, Y" -> "X; but Y" (semicolon already separates the clauses).
     text = re.sub(r";\s+however,\s+", "; but ", text, flags=re.IGNORECASE)
-    # "X, however, Y" -> "X, but Y" (mid-clause insertion, drop the trailing comma "but" doesn't take)
-    text = re.sub(r",\s+however,\s+", ", but ", text, flags=re.IGNORECASE)
+    # "X, however, Y" -> "X, but Y" (mid-clause insertion, drop the trailing
+    # comma "but" doesn't take) — but only when X is already an independent
+    # clause. "however" is a conjunctive adverb, not a coordinating
+    # conjunction like "but"; when X is just a bare subject with no verb yet
+    # ("The results, however, supported..."), "however" is a true mid-clause
+    # parenthetical interrupter, and substituting "but" there strands a
+    # subject-only fragment. Fall back to "also" — safe in both positions.
+    text = re.sub(
+        r",\s+however,\s+",
+        lambda m: ", but " if _preceding_clause_has_verb(m.string, m.start()) else ", also, ",
+        text, flags=re.IGNORECASE,
+    )
     # Sentence-initial "However, X" -> "But X" — anchored to start-of-text/line or
     # right after a sentence terminator, so a mid-sentence "however," that slips
     # past the two rules above (e.g. no leading comma/semicolon) isn't wrongly
@@ -737,25 +793,46 @@ def _fronting_floor(sent: str) -> int:
     return comma + 1 if comma != -1 else len(sent)
 
 
+_RELATIVE_PRONOUN_LEAD_RE = re.compile(r"^,?\s*(?:which|who|whom|whose)\b", re.IGNORECASE)
+
+
 def _starts_with_dangling_participle(rest: str) -> bool:
     """True if `rest` — sentence text starting at a tentative cut point —
-    would open with a subjectless present-participle phrase once turned into
-    its own sentence (e.g. "checking the records..."). Splitting there would
-    strand a dangling-modifier fragment rather than an independent clause.
+    would strand a fragment once turned into its own sentence: a subjectless
+    present-participle phrase (e.g. "checking the records..."), a subordinate
+    clause opened by a fronting subordinator (e.g. "As reduced overhead
+    costs..."/"Because the deadline..."), or a non-restrictive relative
+    clause (e.g. "..., which surprised everyone."). All three read as
+    incomplete on their own — the participle/subordinate clause needs the
+    main clause it depends on, and a relative clause needs the antecedent it
+    modifies — and the split-construction code below would strip the
+    leading "which"/"who" entirely, stranding a bare verb with no subject at
+    all. Splitting at such a point would produce a fragment rather than an
+    independent clause.
     """
+    if _RELATIVE_PRONOUN_LEAD_RE.match(rest.strip()):
+        return True
     stripped = _CLAUSE_LEAD_STRIP_RE.sub("", rest).lstrip()
     first_word = stripped.split(" ", 1)[0] if stripped else ""
-    return bool(re.match(r"^[A-Za-z]+ing[.,;:!?]?$", first_word))
+    if re.match(r"^[A-Za-z]+ing[.,;:!?]?$", first_word):
+        return True
+    return bool(_FRONTING_OPENER_RE.match(stripped))
 
 
 def _find_safe_comma(sent: str, start: int) -> int:
-    """First comma at/after `start` whose following text wouldn't read as a
-    dangling-participle fragment if split there. Returns -1 if none exists.
+    """First comma at/after `start` that's safe to split on: the text before
+    it must already form a clause with its own verb (otherwise "first" would
+    be a bare-subject fragment, e.g. splitting "The benefits, also, ..." at
+    the first comma strands "The benefits."), and the text after it mustn't
+    read as a dangling participle. Returns -1 if none exists.
     """
     pos = start
     while True:
         comma = sent.find(",", pos)
-        if comma == -1 or not _starts_with_dangling_participle(sent[comma:]):
+        if comma == -1:
+            return -1
+        if (_preceding_clause_has_verb(sent, comma)
+                and not _starts_with_dangling_participle(sent[comma:])):
             return comma
         pos = comma + 1
 
@@ -865,12 +942,17 @@ def rule_based_humanise(text: str, seed: str | None = None) -> str:
         result = pattern.sub(repl, result)
     # Collapse accidental double-spaces
     result = re.sub(r"  +", " ", result)
-    # Collapse duplicate connectors left by stacked substitutions
-    # (e.g. "Furthermore, it is evident that" -> "Also, " + "Clearly," -> "Also, Clearly,")
+    # Collapse duplicate connectors left by stacked substitutions (e.g.
+    # "Furthermore, it is evident that" -> "Also, " + "Clearly," -> "Also,
+    # Clearly,"). Connectors now keep whatever case the source actually had
+    # (sentence-initial vs. mid-sentence), so this must match case-insensitively
+    # and re-capitalize the surviving connector via _match_case rather than
+    # assuming the first one was always capitalized.
     result = re.sub(
-        r"\b(?:Also|And|So|Overall),\s+(?=(?:Also|And|So|Clearly|Obviously|Overall),)",
-        "",
+        r"\b(also|and|so|overall),\s+((?:also|and|so|clearly|obviously|overall),)",
+        lambda m: _match_case(m.group(1), m.group(2)),
         result,
+        flags=re.IGNORECASE,
     )
     # Remove stray leading commas after blank substitutions
     result = re.sub(r"\.\s+,\s+", ". ", result)
