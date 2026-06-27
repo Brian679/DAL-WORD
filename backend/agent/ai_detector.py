@@ -213,10 +213,19 @@ def detect_ai_content(text: str) -> dict[str, Any]:
 # Applied when no LLM key is available, or as a pre-pass before LLM polish.
 # Each entry: (compiled_regex, replacement_string)
 
+# -ing forms for the small set of regular verbs used in the "continues/continue
+# to VERB" -> "keeps/keep VERBing" rule below (drop a trailing silent "e").
+_ING_FORMS: dict[str, str] = {
+    "evolve": "evolving", "grow": "growing", "develop": "developing",
+    "change": "changing", "expand": "expanding", "improve": "improving",
+}
+
 _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     # Hedge openers
     (re.compile(r"\bIt is important to note that\b", re.I), "Note that"),
     (re.compile(r"\bIt is worth noting that\b", re.I), "Worth noting:"),
+    (re.compile(r"\bIt is (?:essential|vital|crucial) to (?:understand|recogni[sz]e) that\b", re.I),
+     lambda m: _match_case(m.group(), "understand that")),
     (re.compile(r"\bIt is (?:crucial|essential|vital) to\b", re.I), lambda m: _match_case(m.group(), "to")),
     (re.compile(r"\bIt is evident that\b", re.I), "Clearly,"),
     (re.compile(r"\bIt (?:is|can be) (?:argued|said|noted|observed) that\b", re.I), "I would argue that"),
@@ -264,7 +273,7 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bfoster(?:s|ed|ing)? (?:a )?(?:deeper|better|greater|more nuanced) understanding\b", re.I), "build understanding"),
     (re.compile(r"\bunderscores? the (?:importance|significance|need|necessity)\b", re.I), "highlights the importance"),
     (re.compile(r"\bemphasise?s? the (?:importance|need|significance)\b", re.I), "highlights the importance"),
-    (re.compile(r"\b(plays?) (?:a )?(?:crucial|pivotal|significant|vital|key|important) role\b", re.I),
+    (re.compile(r"\b(plays?) (?:an? )?(?:crucial|pivotal|significant|vital|key|important|integral|essential|fundamental|instrumental|central) (?:role|part)\b", re.I),
      lambda m: "matters" if m.group(1).lower() == "plays" else "matter"),
     (re.compile(r"\bsignificantly (impacts?)\b", re.I),
      lambda m: "affects" if m.group(1).lower().endswith("s") else "affect"),
@@ -297,9 +306,79 @@ _HUMANISE_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bbegs the question\b", re.I), "raises the question"),
     (re.compile(r"\bmake no mistake,?\s*", re.I), lambda m: _match_case(m.group(), "to be clear, ")),
     (re.compile(r"\bat its core,?\s*", re.I), lambda m: _match_case(m.group(), "basically, ")),
+    # Even more filler/cliché openers
+    (re.compile(r"\bin this day and age,?\s*", re.I), lambda m: _match_case(m.group(), "today, ")),
+    (re.compile(r"\bin recent years,?\s*", re.I), lambda m: _match_case(m.group(), "recently, ")),
+    (re.compile(r"\bto put it bluntly,?\s*", re.I), lambda m: _match_case(m.group(), "bluntly, ")),
+    (re.compile(r"\bin other words,?\s*", re.I), lambda m: _match_case(m.group(), "that is, ")),
+    (re.compile(r"\bthat is to say,?\s*", re.I), lambda m: _match_case(m.group(), "that is, ")),
+    (re.compile(r"\bsuffice it to say(?: that)?,?\s*", re.I), lambda m: _match_case(m.group(), "in short, ")),
+    (re.compile(r"\b(?:without|beyond) (?:a )?shadow of a doubt\b", re.I), lambda m: _match_case(m.group(), "clearly")),
+    (re.compile(r"\brest assured,? that\b", re.I), lambda m: _match_case(m.group(), "know that")),
+    (re.compile(r"\bin light of this,?\s*", re.I), lambda m: _match_case(m.group(), "given this, ")),
+    (re.compile(r"\bwith this in mind,?\s*", re.I), lambda m: _match_case(m.group(), "given this, ")),
+    (re.compile(r"\bto sum up,?\s*", re.I), lambda m: _match_case(m.group(), "overall, ")),
+    (re.compile(r"\bon a final note,?\s*", re.I), lambda m: _match_case(m.group(), "finally, ")),
+    (re.compile(r"\ball in all,?\s*", re.I), lambda m: _match_case(m.group(), "overall, ")),
+    (re.compile(r"\bthe bottom line is(?: that)?,?\s*", re.I), lambda m: _match_case(m.group(), "in short, ")),
+    (re.compile(r"\bit is interesting to note that\b", re.I), lambda m: _match_case(m.group(), "interestingly,")),
+    (re.compile(r"\bit is also worth mentioning that\b", re.I), lambda m: _match_case(m.group(), "also,")),
+    (re.compile(r"\bit is also important to highlight that\b", re.I), lambda m: _match_case(m.group(), "also,")),
+    (re.compile(r"\bthere is no denying that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
+    (re.compile(r"\bit is (?:crystal clear|clear) that\b", re.I), lambda m: _match_case(m.group(), "clearly,")),
+    (re.compile(r"\bin a nutshell,?\s*", re.I), lambda m: _match_case(m.group(), "briefly, ")),
+    (re.compile(r"\bwithout further ado,?\s*", re.I), lambda m: _match_case(m.group(), "now, ")),
+    (re.compile(r"\bopens up new avenues for\b", re.I), "creates new options for"),
+    (re.compile(r"\bopen up new avenues for\b", re.I), "create new options for"),
+    (re.compile(r"\bcontinues to (evolve|grow|develop|change|expand|improve)\b", re.I),
+     lambda m: f"keeps {_ING_FORMS[m.group(1).lower()]}"),
+    (re.compile(r"\bcontinue to (evolve|grow|develop|change|expand|improve)\b", re.I),
+     lambda m: f"keep {_ING_FORMS[m.group(1).lower()]}"),
+    # Further hedges, transitions, and qualifiers
+    (re.compile(r"\bit is no surprise that\b", re.I), lambda m: _match_case(m.group(), "unsurprisingly,")),
+    (re.compile(r"\bas a result of this,?\s*", re.I), lambda m: _match_case(m.group(), "because of this, ")),
+    (re.compile(r"\bin spite of the fact that\b", re.I), lambda m: _match_case(m.group(), "although")),
+    (re.compile(r"\bregardless of the fact that\b", re.I), lambda m: _match_case(m.group(), "even though")),
+    (re.compile(r"\bfor all intents and purposes,?\s*", re.I), lambda m: _match_case(m.group(), "essentially, ")),
+    (re.compile(r"\bwith that in mind,?\s*", re.I), lambda m: _match_case(m.group(), "given this, ")),
+    (re.compile(r"\ball things being equal,?\s*", re.I), lambda m: _match_case(m.group(), "generally, ")),
+    (re.compile(r"\bgiven the fact that\b", re.I), lambda m: _match_case(m.group(), "given that")),
+    (re.compile(r"\bowing to the fact that\b", re.I), lambda m: _match_case(m.group(), "because")),
+    (re.compile(r"\bin view of the fact that\b", re.I), lambda m: _match_case(m.group(), "given that")),
+    (re.compile(r"\bat this point in time\b", re.I), lambda m: _match_case(m.group(), "now")),
+    (re.compile(r"\bin the not[- ]too[- ]distant future\b", re.I), lambda m: _match_case(m.group(), "soon")),
+    (re.compile(r"\bduring the course of\b", re.I), lambda m: _match_case(m.group(), "during")),
+    # "for the purpose of" is followed by either a gerund ("...of collecting
+    # data") or a bare noun phrase ("...of this study") in real usage, never a
+    # bare infinitive — so unlike "in order to"/"in a bid to" below, it can't
+    # collapse to a bare "to" (that would leave "to collecting", ungrammatical).
+    # "for" accepts either a gerund or a noun phrase that follows.
+    (re.compile(r"\bfor the purpose of\b", re.I), lambda m: _match_case(m.group(), "for")),
+    # "a wide range/variety of"/"a plethora of" keep their singular "a ... of"
+    # determiner-noun shape rather than collapsing to a bare "many" — a bare
+    # plural quantifier would break subject-verb agreement with a preceding
+    # singular copula ("There is a plethora of options" -> "There is many
+    # options" is wrong; "There is a wide array of options" stays correct).
+    (re.compile(r"\ba wide range of\b", re.I), lambda m: _match_case(m.group(), "a broad range of")),
+    (re.compile(r"\ba wide variety of\b", re.I), lambda m: _match_case(m.group(), "a broad variety of")),
+    (re.compile(r"\ba plethora of\b", re.I), lambda m: _match_case(m.group(), "a wide array of")),
+    (re.compile(r"\bin a bid to\b", re.I), lambda m: _match_case(m.group(), "to")),
+    # "with the aim of"/"with a view to" keep the same "with the/a NOUN of"
+    # shape (only the head noun changes) rather than swapping to a participle
+    # like "aimed at" — that would stack two participles back to back after a
+    # passive verb ("was designed aimed at improving X" is ungrammatical),
+    # whereas "with the goal of" drops cleanly into the same slot.
+    (re.compile(r"\bwith the aim of\b", re.I), lambda m: _match_case(m.group(), "with the goal of")),
+    (re.compile(r"\bwith a view to\b", re.I), lambda m: _match_case(m.group(), "with the goal of")),
+    (re.compile(r"\bas (?:mentioned|stated) (?:earlier|above)\b,?\s*", re.I), lambda m: _match_case(m.group(), "as noted earlier, ")),
+    (re.compile(r"\bin light of the above,?\s*", re.I), lambda m: _match_case(m.group(), "given this, ")),
+    (re.compile(r"\bit is important to (?:recognize|recognise|acknowledge) that\b", re.I),
+     lambda m: _match_case(m.group(), "recognize that" if "recogni" in m.group().lower() else "acknowledge that")),
     # Passive constructions (common AI pattern)
     (re.compile(r"\bIt (?:has|have) been (?:noted|observed|suggested|argued) that\b", re.I), "Research suggests that"),
     (re.compile(r"\bit is (?:widely )?(?:recognised|recognized|acknowledged|accepted) that\b", re.I), "Most researchers agree that"),
+    (re.compile(r"\bit has been (?:established|shown|demonstrated) that\b", re.I), "Studies show that"),
+    (re.compile(r"\bit is (?:generally|commonly) (?:believed|thought|assumed) that\b", re.I), "Most people assume that"),
 ]
 
 
@@ -501,8 +580,12 @@ _SYNONYM_MAP: dict[str, list[str]] = {
     "analyze": ["examine", "investigate"], "analyzes": ["examines", "investigates"],
     "analyzed": ["examined", "investigated"], "analyzing": ["examining", "investigating"],
     "motivate": ["inspire", "drive"], "motivates": ["inspires", "drives"], "motivated": ["inspired", "driven"],
-    "understand": ["learn about", "grasp"], "understands": ["learns about", "grasps"],
-    "understood": ["learned about", "grasped"],
+    # "learn about"/"learns about"/"learned about" were dropped as options here:
+    # unlike "understand", they can't take a "that"-clause ("learn about that
+    # risk varies" is ungrammatical), and "understand" frequently precedes one
+    # ("Understand that risk varies" — see the dissertation-hedge rule above).
+    "understand": ["grasp", "comprehend"], "understands": ["grasps", "comprehends"],
+    "understood": ["grasped", "comprehended"],
     "seek": ["aim", "set out"], "seeks": ["aims", "sets out"], "sought": ["aimed", "set out"],
     "adopt": ["use", "apply"], "adopts": ["uses", "applies"],
     "adopted": ["used", "applied"], "adopting": ["using", "applying"],
@@ -532,6 +615,63 @@ _SYNONYM_MAP: dict[str, list[str]] = {
     # "a"/"an" earlier in the sentence stays grammatical after the swap.
     "innovative": ["original", "inventive"], "crucial": ["vital", "key"],
     "essential": ["important", "integral"], "vital": ["crucial", "key"],
+    "critical": ["vital", "key"], "paramount": ["critical", "foremost"],
+    "pivotal": ["central", "key"], "instrumental": ["essential", "integral"],
+    # Marketing/tech AI-cliché verbs — every option matches the key's tense/
+    # conjugation exactly (base/3rd-person/past/-ing), same discipline as above.
+    "boast": ["have", "feature"], "boasts": ["has", "features"],
+    "boasted": ["had", "featured"], "boasting": ["having", "featuring"],
+    "harness": ["use", "tap into"], "harnesses": ["uses", "taps into"],
+    "harnessed": ["used", "tapped into"], "harnessing": ["using", "tapping into"],
+    "unlock": ["enable", "open up"], "unlocks": ["enables", "opens up"],
+    "unlocked": ["enabled", "opened up"], "unlocking": ["enabling", "opening up"],
+    "unleash": ["release"], "unleashes": ["releases"],
+    "unleashed": ["released"], "unleashing": ["releasing"],
+    "revolutionize": ["transform", "overhaul"], "revolutionizes": ["transforms", "overhauls"],
+    "revolutionized": ["transformed", "overhauled"], "revolutionizing": ["transforming", "overhauling"],
+    "revolutionise": ["transform", "overhaul"], "revolutionises": ["transforms", "overhauls"],
+    "revolutionised": ["transformed", "overhauled"], "revolutionising": ["transforming", "overhauling"],
+    "elevate": ["raise", "improve"], "elevates": ["raises", "improves"],
+    "elevated": ["raised", "improved"], "elevating": ["raising", "improving"],
+    "streamline": ["simplify", "speed up"], "streamlines": ["simplifies", "speeds up"],
+    "streamlined": ["simplified", "sped up"], "streamlining": ["simplifying", "speeding up"],
+    "optimize": ["improve", "refine"], "optimizes": ["improves", "refines"],
+    "optimized": ["improved", "refined"], "optimizing": ["improving", "refining"],
+    "optimise": ["improve", "refine"], "optimises": ["improves", "refines"],
+    "optimised": ["improved", "refined"], "optimising": ["improving", "refining"],
+    "empower": ["enable", "equip"], "empowers": ["enables", "equips"],
+    "empowered": ["enabled", "equipped"], "empowering": ["enabling", "equipping"],
+    "underpin": ["support", "ground"], "underpins": ["supports", "grounds"],
+    "underpinned": ["supported", "grounded"], "underpinning": ["supporting", "grounding"],
+    "encompass": ["cover", "include"], "encompasses": ["covers", "includes"],
+    "encompassed": ["covered", "included"], "encompassing": ["covering", "including"],
+    "embody": ["represent", "reflect"], "embodies": ["represents", "reflects"],
+    "embodied": ["represented", "reflected"], "embodying": ["representing", "reflecting"],
+    "exemplify": ["illustrate", "demonstrate"], "exemplifies": ["illustrates", "demonstrates"],
+    "exemplified": ["illustrated", "demonstrated"], "exemplifying": ["illustrating", "demonstrating"],
+    # "epitomize/epitomise" are kept independent of "embody" above (not chained
+    # to it) since they're a different conjugation class once tensed/pluralised
+    # and chaining could otherwise mix up which form maps to which.
+    "epitomize": ["represent", "capture"], "epitomizes": ["represents", "captures"],
+    "epitomized": ["represented", "captured"], "epitomizing": ["representing", "capturing"],
+    "epitomise": ["represent", "capture"], "epitomises": ["represents", "captures"],
+    "epitomised": ["represented", "captured"], "epitomising": ["representing", "capturing"],
+    # Further AI-cliché adjectives/nouns. Every option shares the key's leading
+    # vowel-or-consonant SOUND, so "a"/"an" earlier in the sentence stays
+    # grammatical after the swap (e.g. "an instrumental" needs a vowel-sound
+    # replacement like "essential", never a consonant-sound one like "key").
+    "groundbreaking": ["pioneering", "novel"],
+    "transformative": ["major", "far-reaching"],
+    "game-changer": ["breakthrough", "turning point"], "game-changers": ["breakthroughs", "turning points"],
+    "synergy": ["cooperation", "teamwork"], "synergies": ["efficiencies", "collaborations"],
+    "bespoke": ["custom", "tailored"], "multifaceted": ["complex", "varied"],
+    "nuanced": ["subtle", "detailed"], "intricate": ["elaborate", "involved"],
+    "vibrant": ["lively", "dynamic"], "dynamic": ["changing", "responsive"],
+    "overarching": ["encompassing", "all-encompassing"],
+    "profound": ["deep", "far-reaching"], "remarkable": ["notable", "striking"],
+    "noteworthy": ["notable", "significant"],
+    "invaluable": ["essential", "important"], "indispensable": ["essential", "integral"],
+    "unparalleled": ["unmatched", "exceptional"],
 }
 _SYNONYM_RES = sorted(_SYNONYM_MAP.keys(), key=len, reverse=True)
 
@@ -572,6 +712,52 @@ _CLAUSE_SPLIT_RE = re.compile(
 _CLAUSE_LEAD_STRIP_RE = re.compile(
     r"^,\s*(?:(?:and|but|so|which|while|although|though|since|yet)\s+)?", re.IGNORECASE,
 )
+# Sentence-initial prepositions/subordinators that introduce a fronted clause
+# or phrase with no subject/verb of its own (e.g. "With the goal of improving
+# outcomes, this study ..."). The comma that ends such an opener is NOT a safe
+# split point — cutting there strands the opener as a fragment.
+_FRONTING_OPENER_RE = re.compile(
+    r"^(?:with|in|by|during|through|throughout|for|to|given|due to|owing to|"
+    r"according to|despite|in spite of|because of|because|although|though|"
+    r"while|since|if|unless|whereas|once|until|after|before|upon|regarding|"
+    r"concerning|unlike|instead of|amid|amidst|following|prior to|"
+    r"as a result of|in light of|in view of|when|as)\b",
+    re.IGNORECASE,
+)
+
+
+def _fronting_floor(sent: str) -> int:
+    """Index just past the comma that closes a sentence-opening fronted
+    clause/phrase, so split logic can avoid cutting inside it. Returns 0 when
+    the sentence doesn't open with one (i.e. splitting anywhere is fine).
+    """
+    if not _FRONTING_OPENER_RE.match(sent.strip()):
+        return 0
+    comma = sent.find(",")
+    return comma + 1 if comma != -1 else len(sent)
+
+
+def _starts_with_dangling_participle(rest: str) -> bool:
+    """True if `rest` — sentence text starting at a tentative cut point —
+    would open with a subjectless present-participle phrase once turned into
+    its own sentence (e.g. "checking the records..."). Splitting there would
+    strand a dangling-modifier fragment rather than an independent clause.
+    """
+    stripped = _CLAUSE_LEAD_STRIP_RE.sub("", rest).lstrip()
+    first_word = stripped.split(" ", 1)[0] if stripped else ""
+    return bool(re.match(r"^[A-Za-z]+ing[.,;:!?]?$", first_word))
+
+
+def _find_safe_comma(sent: str, start: int) -> int:
+    """First comma at/after `start` whose following text wouldn't read as a
+    dangling-participle fragment if split there. Returns -1 if none exists.
+    """
+    pos = start
+    while True:
+        comma = sent.find(",", pos)
+        if comma == -1 or not _starts_with_dangling_participle(sent[comma:]):
+            return comma
+        pos = comma + 1
 
 
 def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
@@ -597,8 +783,9 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
             # comma/conjunction split; otherwise fall back to a clause boundary,
             # then to the first comma if no conjunction is present either.
             if len(words) > 20:
+                floor = _fronting_floor(sent)
                 semi = sent.find(";")
-                if semi != -1 and 8 < semi < len(sent) - 8 and rng.random() < 0.85:
+                if semi != -1 and semi > floor and 8 < semi < len(sent) - 8 and rng.random() < 0.85:
                     first = sent[:semi].strip() + "."
                     rest = sent[semi + 1:].strip()
                     rest = rest[:1].upper() + rest[1:]
@@ -606,10 +793,13 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
                     rebuilt.append(rest)
                     i += 1
                     continue
-                m = _CLAUSE_SPLIT_RE.search(sent)
-                cut = m.start() if m else None
+                cut = None
+                for m in _CLAUSE_SPLIT_RE.finditer(sent):
+                    if m.start() > floor and not _starts_with_dangling_participle(sent[m.start():]):
+                        cut = m.start()
+                        break
                 if cut is None:
-                    comma = sent.find(",", 15)
+                    comma = _find_safe_comma(sent, max(15, floor))
                     if comma != -1:
                         cut = comma
                 if cut is not None and rng.random() < 0.85:
@@ -644,7 +834,7 @@ def _restructure_for_burstiness(text: str, rng: random.Random) -> str:
         if len(rebuilt) >= 2 and lens and (max(lens) - min(lens)) < 7:
             longest_i = max(range(len(rebuilt)), key=lambda idx: lens[idx])
             longest = rebuilt[longest_i]
-            comma = longest.find(",", 10)
+            comma = _find_safe_comma(longest, max(10, _fronting_floor(longest)))
             if comma != -1:
                 first = longest[:comma].strip().rstrip(",") + "."
                 rest = longest[comma:].strip()
