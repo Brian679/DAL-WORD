@@ -11131,6 +11131,8 @@ def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
 
 def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
     """Detect AI-generated sentences per section and rewrite them to sound human-written."""
+    from .ai_detector import detect_ai_content
+
     sections = (document.content or {}).get("sections", [])
     if not sections:
         _all_done(plan)
