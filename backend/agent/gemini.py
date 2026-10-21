@@ -117,17 +117,10 @@ def create_execution_plan(intent: str) -> list[str]:
     plans = {
         "humanise_ai_sections": [
             "Running AI content detection across all sections",
-            "Identifying AI-detected sentences (high perplexity / low burstiness)",
-            "Rewriting flagged passages with authentic human voice",
-            "Varying sentence length and structure for natural burstiness",
-            "Saving humanised document",
+            "Reporting passages that read as generic so you can revise them",
         ],
         "reduce_plagiarism_similarity": [
-            "Scanning document for matched/similar passages",
-            "Comparing against other documents in the workspace",
-            "Rewriting flagged passages to reduce textual overlap",
-            "Re-checking similarity after rewrite",
-            "Saving updated document",
+            "Explaining how to quote, cite, or rewrite overlapping passages",
         ],
         "enhance_document": [
             "Reading and analysing document structure",
@@ -240,46 +233,6 @@ def chat_with_document(message: str, doc_context: str) -> str:
         "- Do NOT include labels like 'User:' or 'Assistant:'.\n"
         "- Do NOT output prompt templates unless the user explicitly asked for one.\n"
         "- Write the answer immediately, starting with the actual content."
-    )
-    return generate_text(prompt)
-
-
-def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) -> str:
-    """Rewrite text to reduce AI-detection signals: remove stock phrases, add burstiness."""
-    phrase_list = ""
-    if ai_phrases:
-        phrase_list = (
-            "\n\nAvoid or replace these detected AI phrases:\n"
-            + "\n".join(f"  • {p}" for p in ai_phrases[:12])
-        )
-    prompt = (
-        f"You are an expert academic editor helping a student humanise their writing on '{topic}' "
-        "so it passes AI-detection tools (GPTZero, Turnitin, Originality.ai), using the same "
-        "approach as professional humanisers like StealthWriter: attack perplexity and burstiness, "
-        "the two signals those detectors score, not just surface phrasing.\n\n"
-        "Work through three internal passes, then output only the final rewritten text:\n"
-        "PASS 1 — Paraphrase: re-order clauses and restructure sentences so the result isn't a "
-        "near-copy of the source, while keeping every fact, figure, and citation exact.\n"
-        "PASS 2 — Raise perplexity: swap common, highly predictable words for precise but less "
-        "obvious synonyms a human writer would choose; avoid the statistically expected word.\n"
-        "PASS 3 — Raise burstiness: vary sentence length deliberately. "
-        "   Abrupt stops. Then a longer, more reflective sentence that develops the idea further. "
-        "LLM text is unnaturally uniform in length — uneven rhythm is the strongest human signal.\n\n"
-        "Additional rules:\n"
-        "- Use concrete, specific details and first-person perspective where natural "
-        "  (e.g. 'I found', 'The data showed', 'Three participants said').\n"
-        "- Avoid these AI clichés entirely: 'it is important to note', 'in today's world', "
-        "  'holistic approach', 'paradigm shift', 'delve into', 'comprehensive overview', "
-        "  'it is crucial', 'furthermore', 'moreover', 'it is evident that', "
-        "  'the realm of', 'seamlessly', 'robust framework', 'plays a crucial role'.\n"
-        "- Passive voice sparingly — prefer active constructions; vary sentence openers so "
-        "  consecutive sentences don't start with the same word or transition.\n"
-        "- Let opinions or observations show. Real writers hedge naturally ('I think', 'It seemed').\n"
-        "- Preserve ALL factual claims, citations, and core argument — only the phrasing changes.\n"
-        "- Do NOT add new claims or fabricate data.\n"
-        f"{phrase_list}\n\n"
-        f"TEXT TO REWRITE:\n{text[:4000]}\n\n"
-        "Return ONLY the rewritten text. No explanations, no markdown, no pass labels."
     )
     return generate_text(prompt)
 

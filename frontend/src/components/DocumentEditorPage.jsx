@@ -2229,10 +2229,6 @@ export default function DocumentEditorPage({
 
   function _isAiDetectRequest(text) {
     const lower = _normalizeForIntent(text);
-    // "humanise the AI content" should route to humanising, not detection —
-    // don't let the bare "ai content" phrase steal requests that are really
-    // asking to rewrite/humanise the text.
-    if (/humanis|humaniz/.test(lower)) return false;
     return AI_DETECT_PHRASES.some(p => lower.includes(p)) || _CHECK_FOR_AI_RE.test(lower);
   }
 
@@ -2295,7 +2291,7 @@ export default function DocumentEditorPage({
               text: aiDetectResultRef.current?.error
                 ? `AI detection failed: ${aiDetectResultRef.current.error}`
                 : `AI detection complete. Overall AI score: **${(aiDetectResultRef.current?.overall_ai_percentage ?? 0).toFixed(1)}%** — ${
-                    aiDetectResultRef.current?.verdict === 'likely_ai' ? 'Likely AI-generated. Consider humanising the flagged passages.'
+                    aiDetectResultRef.current?.verdict === 'likely_ai' ? 'Likely AI-generated. Revise the flagged passages in your own words, with your own reasoning and citations.'
                     : aiDetectResultRef.current?.verdict === 'mixed' ? 'Mixed content detected. Some passages show AI signals — review the highlighted sections.'
                     : 'Content reads as human-written. No significant AI signals detected.'
                   } Flagged sentences are highlighted in the document.`,
@@ -2575,11 +2571,6 @@ export default function DocumentEditorPage({
       }
       if (result.document_updated) {
         onDocumentChanged?.();
-        // After humanising, auto re-run AI detection so the score updates in place
-        const wasHumanise = /humanis|humaniz/i.test(userText);
-        if (wasHumanise) {
-          setTimeout(() => runAiDetect(), 1800);
-        }
       }
     } catch (err) {
       clearProgressPolling();
@@ -3768,15 +3759,6 @@ export default function DocumentEditorPage({
                     <div className="doc-tool-group-row">
                       <button
                         className="doc-tool-btn doc-tool-btn--labeled"
-                        title="Rewrite matched/similar passages to reduce overlap with other documents"
-                        disabled={isThinking}
-                        onClick={() => { setAiPanelOpen(true); sendMessage('Reduce the plagiarism similarity in this document.'); }}
-                      >
-                        <Wand2 size={13}/>
-                        <span>Reduce Similarity</span>
-                      </button>
-                      <button
-                        className="doc-tool-btn doc-tool-btn--labeled"
                         title="Clear plagiarism highlights"
                         disabled={!plagiarismResult}
                         onClick={clearPlagiarismHighlights}
@@ -4218,7 +4200,7 @@ export default function DocumentEditorPage({
                     </div>
                   )}
                   <div style={{marginTop:12,padding:'8px 10px',background:'#f0f9ff',borderRadius:6,fontSize:10,color:'#0369a1',lineHeight:1.6}}>
-                    <strong>Quick fix:</strong> Type <em>"enhance [section name]"</em> to improve a specific section, or <em>"humanise"</em> to reduce AI-detection signals.
+                    <strong>Quick fix:</strong> Type <em>"enhance [section name]"</em> to improve a specific section, or ask for feedback on a flagged passage and revise it in your own words.
                   </div>
                 </>
               ) : (

@@ -48,8 +48,6 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_document",
     "enhance_section",
     "enhance_document",
-    "humanise_ai_sections",
-    "reduce_plagiarism_similarity",
     "address_comments",
     "create_outline",
     "add_chart",
@@ -81,8 +79,8 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "search_image": f"Find a real photo on Wikimedia Commons{' for **' + t + '**' if t else ''}",
         "generate_ai_image": f"Generate an AI illustrative image{' for **' + t + '**' if t else ''}",
-        "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
-        "reduce_plagiarism_similarity": "Detect passages that overlap with other workspace documents and rewrite them to reduce textual similarity",
+        "humanise_ai_sections": "Explain which passages read as generic or AI-like so you can revise them in your own words",
+        "reduce_plagiarism_similarity": "Show passages that overlap with other sources so you can quote, cite, or rewrite them yourself",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
         # Legacy aliases
         "write_report":     "Plan and write a report based on the request",
@@ -4836,11 +4834,9 @@ def _execute_subsection_nodes(
                 table_child.setdefault("meta", {})["_precomputed_table_dataset"] = table_dataset
             grounding = _objective_findings_preview(table_dataset, research_design)
             quote_guidance = (
-                "Where it fits, ground the discussion with 1-2 short direct quotes presented as indented "
-                "block quotes, each attributed to an anonymized informant role consistent with this study "
-                "(e.g. \"(Informant 3, Operations Manager)\" or \"(Participant 5, Frontline Staff)\") rather "
-                "than a generic 'respondents said' paraphrase — but only invent quotes that are plausible "
-                "given the actual data/themes above, never quotes that contradict them.\n"
+                "Do not write direct quotes attributed to participants or informants. Where a quote would "
+                "help, insert a placeholder like [Insert participant quote on <theme>] for the author to "
+                "fill from their own interview data.\n"
                 if research_design in {"qualitative", "mixed"} else ""
             )
             try:
@@ -11094,205 +11090,48 @@ def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, 
     return "Could not generate revisions for the found comments. Please try again.", False
 
 
-def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
-    """Detect AI-sounding sentences in freshly generated prose and rewrite them to read
-    human-written. Used as the first pass on every section/chapter the agent writes,
-    BEFORE citation grounding ever sees the text — so in-text citation markers land in
-    the final wording instead of being shuffled or dropped by a later humanising rewrite.
-
-    Always rewrites with the rule-based phrase/structure substitution engine — no LLM
-    call is made here, so behaviour is deterministic and has no network dependency.
-    Returns the text unchanged (second element always False, kept for call-site
-    compatibility) if nothing reads as AI-flagged, or if the rewrite degenerates.
-    """
-    from .ai_detector import detect_ai_content, rule_based_humanise
-
-    plain = (text or "").strip()
-    if not plain:
-        return text, False
-
-    try:
-        detection = detect_ai_content(plain)
-    except Exception as exc:
-        logger.info("_auto_humanise_text: detection failed (%s), leaving text untouched.", exc)
-        return text, False
-
-    flagged = [s for s in detection.get("sentences", []) if s.get("label") != "likely_human"]
-    if not flagged:
-        return text, False
-
-    new_text = rule_based_humanise(plain)
-
-    new_text = (new_text or "").strip()
-    if new_text and new_text != plain:
-        return new_text, False
-    return text, False
-
-
 def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect AI-generated sentences per section and rewrite them to sound human-written."""
+    """Report which passages read as generic or AI-like, without rewriting them.
+
+    DAL Word does not disguise text to get past AI detectors. The detector is a
+    self-check: it points the writer at passages to revise in their own voice.
+    """
     from .ai_detector import detect_ai_content
 
     sections = (document.content or {}).get("sections", [])
-    if not sections:
-        _all_done(plan)
+    full_text = "\n\n".join(
+        (s.get("content") or "").strip() for s in sections if (s.get("content") or "").strip()
+    )
+    _all_done(plan)
+    if not full_text:
         return "The document has no sections yet.", False
 
-    _done(plan, 0)  # Running AI detection
+    try:
+        result = detect_ai_content(full_text)
+    except Exception as exc:
+        logger.warning("_humanise_ai_sections: detection failed: %s", exc)
+        return "AI detection failed on this document. Please try again.", False
 
-    humanised = 0
-    llm_used = False
-    for i, section in enumerate(sections):
-        content = (section.get("content") or "").strip()
-        if not content:
-            continue
-
-        _done(plan, 1)  # Identifying AI passages
-
-        new_content, used_llm = _auto_humanise_text(content, topic or document.title)
-        if used_llm:
-            llm_used = True
-
-        if new_content != content:
-            sections[i]["content"] = new_content
-            humanised += 1
-
-        _done(plan, 2)  # Rewriting with human voice
-
-    _done(plan, 3)  # Varying sentence structure
-    _all_done(plan)
-
-    if humanised:
-        document.content["sections"] = sections
-        _save(document, "humanise-ai-sections")
-        # Compute after score for the reply
-        try:
-            full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
-            after_result = detect_ai_content(full_text)
-            after_pct = after_result.get("overall_ai_percentage", 0)
-            after_verdict = after_result.get("verdict", "")
-        except Exception:
-            after_pct = None
-            after_verdict = ""
-
-        method = "AI model" if llm_used else "rule-based phrase substitution"
-        after_msg = f" AI score dropped to **{after_pct}%** ({after_verdict.replace('_',' ')})." if after_pct is not None else ""
-        return (
-            f"Humanised {humanised} section(s) using {method} — replaced AI clichés, "
-            f"varied sentence structure, and added authentic voice.{after_msg} "
-            "Click **Detect AI** to see the highlighted improvement.",
-            True,
-        )
-
+    pct = result.get("overall_ai_percentage", 0)
+    flagged = [s for s in result.get("sentences", []) if s.get("label") != "likely_human"]
     return (
-        "No strongly AI-detected passages were found — your document already reads naturally. "
-        "Try running **Detect AI** first to scan for flagged sentences.",
+        "DAL Word doesn't rewrite text to get past AI detectors. "
+        f"About **{pct}%** of this document reads as generic or AI-like "
+        f"({len(flagged)} sentence(s) flagged). Click **Detect AI** to see them highlighted, "
+        "then revise them in your own words: add your own reasoning, specific evidence, "
+        "and citations. You can also ask me for feedback on a specific section.",
         False,
     )
 
 
 def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect passages overlapping with other workspace documents (and, unless disabled, the open web) and rewrite them to cut similarity."""
-    from .ai_detector import _split_sentences
-    from .plagiarism_detector import check_plagiarism, reduce_similarity
-    from .web_plagiarism import check_external_plagiarism, external_check_enabled
-
-    sections = (document.content or {}).get("sections", [])
-    if not sections:
-        _all_done(plan)
-        return "The document has no sections yet.", False
-
-    source_docs = []
-    for other in Document.objects.filter(user=document.user).exclude(pk=document.pk).only("id", "title", "content"):
-        other_content = other.content or {}
-        parts = [
-            (s.get("content") or "").strip()
-            for s in other_content.get("sections", [])
-            if (s.get("content") or "").strip()
-        ]
-        other_text = "\n\n".join(parts)
-        if other_text.strip():
-            source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
-
-    use_external = external_check_enabled()
-
-    _done(plan, 0)  # Scanning document for matched/similar passages
-
-    if not source_docs and not use_external:
-        _all_done(plan)
-        return (
-            "No other documents exist in the workspace to compare against, so there is nothing to "
-            "reduce — plagiarism similarity is only measured against other workspace documents.",
-            False,
-        )
-
-    _done(plan, 1)  # Comparing against other documents and the open web
-
-    # Run the (network-bound) web search exactly once for the whole document
-    # rather than per section/per retry, so reducing similarity stays fast.
-    external_hit_texts: set[str] = set()
-    if use_external:
-        full_text_before = "\n\n".join(
-            (s.get("content") or "").strip() for s in sections if (s.get("content") or "").strip()
-        )
-        external = check_external_plagiarism(full_text_before)
-        external_hit_texts = {h["text"] for h in external.get("hits", [])}
-
-    def _flagged_for(content: str) -> set[str]:
-        detection = check_plagiarism(content, source_docs)
-        flagged = {s["text"] for s in detection.get("sentences", []) if s.get("label") != "original"}
-        flagged |= {s.strip() for s in _split_sentences(content) if s.strip() in external_hit_texts}
-        return flagged
-
-    reduced = 0
-    for i, section in enumerate(sections):
-        content = (section.get("content") or "").strip()
-        if not content:
-            continue
-
-        flagged = _flagged_for(content)
-        if not flagged:
-            continue
-
-        new_content = reduce_similarity(content, flagged, seed=f"{document.id}:{i}")
-
-        # Re-check; if anything is still flagged, retry once with a fresh seed
-        # (mirrors the before/after verification pattern used by AI-humanisation).
-        still_flagged = _flagged_for(new_content)
-        if still_flagged:
-            retry_content = reduce_similarity(new_content, still_flagged, seed=f"{document.id}:{i}:retry")
-            if retry_content != new_content:
-                new_content = retry_content
-
-        if new_content.strip() != content:
-            sections[i]["content"] = new_content.strip()
-            reduced += 1
-
-    _done(plan, 2)  # Rewriting flagged passages to reduce textual overlap
-    _done(plan, 3)  # Re-checking similarity after rewrite
+    """Point the writer at overlapping passages instead of disguising them."""
     _all_done(plan)
-
-    if reduced:
-        document.content["sections"] = sections
-        _save(document, "reduce-plagiarism-similarity")
-
-        full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
-        after_result = check_plagiarism(full_text, source_docs)
-        after_pct = after_result.get("overall_similarity_percentage", 0)
-        after_verdict = after_result.get("verdict", "")
-
-        return (
-            f"Rewrote {reduced} section(s) to reduce overlap with other workspace documents"
-            f"{' and the open web' if use_external else ''}. "
-            f"Similarity dropped to **{after_pct}%** ({after_verdict.replace('_', ' ')}). "
-            "Click **Check Plagiarism** to see the updated highlights.",
-            True,
-        )
-
     return (
-        "No matched or similar passages were found against other workspace documents"
-        f"{' or the open web' if use_external else ''} — your document "
-        "already reads as original. Try running **Check Plagiarism** first to scan for flagged sentences.",
+        "DAL Word doesn't paraphrase text to lower similarity scores. "
+        "Click **Check Plagiarism** to see which passages overlap with other sources, then for each one "
+        "either quote it and cite the source, or rewrite the idea in your own words and still cite it. "
+        "Ask me to find a proper reference for any passage and I'll add the citation.",
         False,
     )
 
@@ -12292,7 +12131,6 @@ def _write_section(
 
         # Humanise before any citation grounding so in-text citation markers land in
         # the wording that actually ships, not in a draft a later rewrite will reshuffle.
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         if is_lit_review:
             try:
@@ -12344,7 +12182,6 @@ def _write_section(
             sample_size=_infer_sample_size(document),
         )
     content = _sanitize_body(content)
-    content, _ = _auto_humanise_text(content, topic)
     _done(plan, 2)
 
     if idx is not None:
@@ -12460,7 +12297,6 @@ def _rewrite_chapter_batch(
             citation_pool=citation_pool,
         )
 
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         if chapter["number"] == 2:
             try:
@@ -12992,7 +12828,6 @@ def _plan_and_write_document(
             # grounding is deferred to a pass after every section is written
             # (below), so in-text citation markers land in the final wording
             # instead of being shuffled or dropped by a later humanising rewrite.
-            text, _ = _auto_humanise_text(text, topic)
 
         sections.append({"title": title, "content": text})
         document.content = _content_snapshot()
@@ -13375,7 +13210,6 @@ def _write_dissertation(
         # deferred to a pass after every chapter is written (below), so in-text
         # citation markers land in the final wording instead of being shuffled or
         # dropped by a later humanising rewrite.
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         _done(plan, plan_cursor[0])
         plan_cursor[0] += 1
