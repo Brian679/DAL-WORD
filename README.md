@@ -19,6 +19,7 @@ This repository contains a practical MVP scaffold for an AI-assisted dissertatio
 
 - `Document` model with JSON content and version snapshots
 - Document CRUD API (`/api/documents/`)
+- Stripe billing (`/api/billing/`): checkout, customer portal, webhooks, monthly AI request limits
 - Tool-based agent actions (`/api/agent/<doc_id>/action/`):
   - `generate_outline`
   - `enhance_section`
@@ -72,6 +73,18 @@ npm run dev
 
 Frontend runs on `http://localhost:5173`.
 Backend runs on `http://127.0.0.1:8000`.
+
+## Payments (Stripe)
+
+Plans: **Free** (30 AI requests a month), **Pro** monthly or yearly, and a one-off **Thesis Pass** (30 days of Pro). Pro allows 1,000 AI requests a month. All limits are set in `.env`. AI detection, the plagiarism check and the quality check use AI requests only when run from chat.
+
+1. In the Stripe dashboard (start in test mode), create a product called "DAL Word Pro" with two recurring prices ($12/month, $96/year). Create a product called "Thesis Pass" with a one-time $29 price. Copy the three `price_...` IDs into `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY` and `STRIPE_PRICE_THESIS_PASS`.
+2. Put the secret key in `STRIPE_SECRET_KEY` and set `FRONTEND_URL` to where the app runs.
+3. Add a webhook endpoint at `https://<your-domain>/api/billing/webhook/` for these events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+4. Turn on the customer portal (Settings → Billing → Customer portal) so users can update their card or cancel.
+5. Run `python manage.py migrate`.
+
+For local testing, run `stripe listen --forward-to localhost:8000/api/billing/webhook/` and use the `whsec_...` it prints. Pay with test card `4242 4242 4242 4242`.
 
 ## Example Document JSON
 

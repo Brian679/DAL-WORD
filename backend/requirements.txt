@@ -14,3 +14,4 @@ google-generativeai==0.8.3
 requests==2.32.3
 beautifulsoup4==4.12.3
 pypdf==5.1.0
+stripe==12.5.1

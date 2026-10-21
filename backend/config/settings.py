@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "accounts",
     "documents",
     "agent",
+    "billing",
 ]
 
 MIDDLEWARE = [
@@ -132,3 +133,16 @@ SIMPLE_JWT = {
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+
+# Stripe billing. Prices are Stripe Price IDs (price_...) created in the Stripe dashboard.
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_PRO_MONTHLY = os.getenv("STRIPE_PRICE_PRO_MONTHLY", "")
+STRIPE_PRICE_PRO_YEARLY = os.getenv("STRIPE_PRICE_PRO_YEARLY", "")
+STRIPE_PRICE_THESIS_PASS = os.getenv("STRIPE_PRICE_THESIS_PASS", "")
+# Where Stripe sends the user back after checkout or the billing portal.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+BILLING_FREE_MONTHLY_AI_LIMIT = int(os.getenv("BILLING_FREE_MONTHLY_AI_LIMIT", "30"))
+BILLING_PRO_MONTHLY_AI_LIMIT = int(os.getenv("BILLING_PRO_MONTHLY_AI_LIMIT", "1000"))
+BILLING_THESIS_PASS_DAYS = int(os.getenv("BILLING_THESIS_PASS_DAYS", "30"))

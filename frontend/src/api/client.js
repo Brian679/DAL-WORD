@@ -216,6 +216,7 @@ export async function runAgentAction(docId, action, payload) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ doc_id: docId, action, payload }),
     });
+    window.dispatchEvent(new Event('billing:refresh'));
     if (!res.ok) throw new Error(await readApiError(res, 'Agent action failed'));
     return res.json();
 }
@@ -262,6 +263,8 @@ export async function chatWithDocument(
         headers,
         body,
     });
+    // Each request counts toward the plan's monthly AI limit shown in the header.
+    window.dispatchEvent(new Event('billing:refresh'));
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Chat request failed');
@@ -300,4 +303,28 @@ export async function checkPlagiarism(docId, text = '') {
     });
     if (!res.ok) throw new Error(await readApiError(res, 'Plagiarism check failed'));
     return res.json();
+}
+
+export async function getBillingStatus() {
+    const res = await apiFetch(`${API_BASE}/billing/status/`);
+    if (!res.ok) throw new Error(await readApiError(res, 'Could not load your plan'));
+    return res.json();
+}
+
+// Returns the Stripe Checkout URL for 'pro_monthly' | 'pro_yearly' | 'thesis_pass'.
+export async function startCheckout(option) {
+    const res = await apiFetch(`${API_BASE}/billing/checkout/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ option }),
+    });
+    if (!res.ok) throw new Error(await readApiError(res, 'Could not start checkout'));
+    return (await res.json()).url;
+}
+
+// Returns the Stripe customer portal URL (update card, cancel, invoices).
+export async function openBillingPortal() {
+    const res = await apiFetch(`${API_BASE}/billing/portal/`, { method: 'POST' });
+    if (!res.ok) throw new Error(await readApiError(res, 'Could not open billing settings'));
+    return (await res.json()).url;
 }

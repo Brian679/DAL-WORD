@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/auth/", include("accounts.urls")),
     path("api/documents/", include("documents.urls")),
     path("api/agent/", include("agent.urls")),
+    path("api/billing/", include("billing.urls")),
 ]
 
 if settings.DEBUG:

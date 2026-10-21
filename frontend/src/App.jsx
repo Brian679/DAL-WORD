@@ -3,6 +3,7 @@ import HomePage from './components/HomePage';
 import DocumentEditorPage from './components/DocumentEditorPage';
 import LoginPage from './components/LoginPage';
 import SignupPage from './components/SignupPage';
+import PlanMenu from './components/PlanMenu';
 import { useAuth } from './context/AuthContext';
 import { createDocument, getDocument, listDocuments, runAgentAction, updateDocument } from './api/client';
 import './styles.css';
@@ -155,6 +156,7 @@ export default function App() {
         </div>
         <div className="wps-header-right">
           {message && <span className="status-pill">{message}</span>}
+          <PlanMenu onMessage={setMessage} />
           <span className="header-icon-btn" title="Headphones">&#127911;</span>
           <span className="header-icon-btn" title="Settings">&#9881;</span>
           <div className="user-menu">
@@ -195,7 +197,12 @@ export default function App() {
         )}
         <button className="wtab-new" onClick={handleNewDocument}>+ New</button>
         <span className="tabbar-spacer" />
-        <button className="upgrade-now-btn">&#9889; <span>Upgrade Now</span></button>
+        <button
+          className="upgrade-now-btn"
+          onClick={() => window.dispatchEvent(new Event('billing:open'))}
+        >
+          &#9889; <span>Upgrade Now</span>
+        </button>
       </div>
 
       {/* ── View ───────────────────────────────────────────────── */}

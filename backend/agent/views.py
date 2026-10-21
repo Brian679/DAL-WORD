@@ -8,6 +8,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from billing.usage import limit_reached_payload, monthly_limit, try_consume_ai_request, used_this_month
 from documents.models import Document, ChatMessage
 from documents.serializers import DocumentSerializer
 
@@ -56,6 +57,10 @@ def _strip_comment_markers(text: str) -> str:
     return _COMMENT_MARKER_RE.sub("", text)
 
 
+# Actions that call the AI provider and so count toward the plan's monthly limit.
+_AI_ACTIONS = {"enhance_section", "generate_outline", "generate_image"}
+
+
 class AgentActionView(APIView):
     def post(self, request, document_id: int):
         action = request.data.get("action")
@@ -65,6 +70,8 @@ class AgentActionView(APIView):
             document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+        if action in _AI_ACTIONS and not try_consume_ai_request(request.user):
+            return Response(limit_reached_payload(request.user), status=status.HTTP_402_PAYMENT_REQUIRED)
         try:
             updated = run_action(document, action, payload)
         except ActionError as exc:
@@ -195,6 +202,14 @@ class ChatView(APIView):
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        # A preview only counts if it ends up running (non-modifying intents run straight
+        # away); a real request is counted up front so parallel requests can't overshoot.
+        if preview_only:
+            if used_this_month(request.user) >= monthly_limit(request.user):
+                return Response(limit_reached_payload(request.user), status=status.HTTP_402_PAYMENT_REQUIRED)
+        elif not try_consume_ai_request(request.user):
+            return Response(limit_reached_payload(request.user), status=status.HTTP_402_PAYMENT_REQUIRED)
+
         user_chat_content = message
         if attachment_note:
             user_chat_content = f"{message}\n\n{attachment_note}" if message else attachment_note
@@ -231,6 +246,8 @@ class ChatView(APIView):
             return Response({"error": error_text}, status=status.HTTP_502_BAD_GATEWAY)
 
         awaiting_confirmation = result.get("awaiting_confirmation", False)
+        if preview_only and not awaiting_confirmation:
+            try_consume_ai_request(request.user)
 
         if awaiting_confirmation:
             # Preview for a document-modifying intent: don't persist anything yet.
