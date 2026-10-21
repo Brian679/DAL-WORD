@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -24,7 +26,9 @@ class Subscription(models.Model):
         if self.plan != self.PLAN_PRO:
             return False
         if self.status in {"active", "trialing"}:
-            return True
+            # A renewal webhook moves access_until forward; allow a few days' slack
+            # so a late webhook doesn't lock out a paying user.
+            return not self.access_until or self.access_until + timedelta(days=3) > timezone.now()
         # Passes, and subscriptions that were cancelled but are paid up to period end.
         return bool(self.access_until and self.access_until > timezone.now())
 

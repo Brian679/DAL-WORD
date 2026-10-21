@@ -40,7 +40,39 @@ class WebhookSyncTests(TestCase):
 
     def test_cancellation_ends_pro_after_period(self):
         Subscription.objects.create(user=self.user, stripe_customer_id="cus_1", plan="pro", status="active")
-        handle_event(_event("evt_2", "customer.subscription.deleted", _stripe_subscription("canceled", days=-1)), None)
+        canceled = _stripe_subscription("canceled", days=-1)
+        handle_event(_event("evt_2", "customer.subscription.deleted", canceled), lambda _id: canceled)
+        self.assertFalse(subscription_for(self.user).is_pro())
+
+    def test_late_stale_update_does_not_restore_pro(self):
+        Subscription.objects.create(user=self.user, stripe_customer_id="cus_1", plan="pro", status="active")
+        canceled = _stripe_subscription("canceled", days=-1)
+        handle_event(_event("evt_5", "customer.subscription.deleted", canceled), lambda _id: canceled)
+        # An older "active" snapshot arrives late; the current state from Stripe wins.
+        handle_event(_event("evt_6", "customer.subscription.updated", _stripe_subscription("active")),
+                     lambda _id: canceled)
+        self.assertFalse(subscription_for(self.user).is_pro())
+
+    def test_same_session_in_two_events_grants_one_pass(self):
+        session = {"id": "cs_7", "client_reference_id": str(self.user.pk), "customer": "cus_1",
+                   "mode": "payment", "payment_status": "paid"}
+        handle_event(_event("evt_7", "checkout.session.completed", session), None)
+        first = subscription_for(self.user).access_until
+        handle_event(_event("evt_8", "checkout.session.async_payment_succeeded", session), None)
+        self.assertEqual(subscription_for(self.user).access_until, first)
+
+    def test_delayed_payment_is_fulfilled_when_it_succeeds(self):
+        session = {"id": "cs_8", "client_reference_id": str(self.user.pk), "customer": "cus_1",
+                   "mode": "payment", "payment_status": "unpaid"}
+        handle_event(_event("evt_9", "checkout.session.completed", session), None)
+        self.assertFalse(subscription_for(self.user).is_pro())
+        handle_event(_event("evt_10", "checkout.session.async_payment_succeeded",
+                            {**session, "payment_status": "paid"}), None)
+        self.assertTrue(subscription_for(self.user).is_pro())
+
+    def test_active_subscription_past_its_period_lapses(self):
+        Subscription.objects.create(user=self.user, plan="pro", status="active",
+                                    access_until=timezone.now() - timedelta(days=4))
         self.assertFalse(subscription_for(self.user).is_pro())
 
     def test_thesis_pass_grants_thirty_days(self):
@@ -121,3 +153,26 @@ class UsageLimitTests(TestCase):
         self.assertEqual(kwargs["customer"], "cus_9")
         self.assertEqual(kwargs["client_reference_id"], str(self.user.pk))
         self.assertEqual(self.client.post("/api/billing/checkout/", {"option": "gold"}, format="json").status_code, 400)
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test", STRIPE_PRICE_PRO_MONTHLY="price_123")
+    def test_active_subscriber_cannot_start_second_subscription(self):
+        Subscription.objects.create(user=self.user, plan="pro", status="active",
+                                    stripe_customer_id="cus_1", stripe_subscription_id="sub_1")
+        with mock.patch("stripe.checkout.Session.create") as session:
+            response = self.client.post("/api/billing/checkout/", {"option": "pro_monthly"}, format="json")
+        self.assertEqual(response.status_code, 409)
+        session.assert_not_called()
+
+    def test_invalid_action_is_not_charged(self):
+        url = f"/api/agent/{self.document.id}/action/"
+        response = self.client.post(url, {"action": "enhance_section", "payload": {"query": "Nowhere",
+                                                                                  "instruction": "x"}}, format="json")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(used_this_month(self.user), 0)
+
+    def test_preview_that_waits_for_confirmation_is_refunded(self):
+        url = f"/api/agent/{self.document.id}/chat/"
+        response = self.client.post(url, {"message": "create outline for remote work", "preview_only": True},
+                                    format="json")
+        self.assertTrue(response.json()["awaiting_confirmation"])
+        self.assertEqual(used_this_month(self.user), 0)

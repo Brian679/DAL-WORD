@@ -36,6 +36,11 @@ def try_consume_ai_request(user) -> bool:
     return updated == 1
 
 
+def refund_ai_request(user) -> None:
+    """Give back a request that was reserved but did no AI work."""
+    AIUsage.objects.filter(user=user, month=current_month(), count__gt=0).update(count=F("count") - 1)
+
+
 def limit_reached_payload(user) -> dict:
     return {
         "error": (

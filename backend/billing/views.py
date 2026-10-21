@@ -63,6 +63,15 @@ class CheckoutView(APIView):
             return _not_configured()
 
         subscription = subscription_for(request.user)
+        if (
+            mode == "subscription"
+            and subscription.stripe_subscription_id
+            and subscription.status in {"active", "trialing", "past_due", "unpaid"}
+        ):
+            return Response(
+                {"error": "You already have a Pro subscription. Use Manage billing to change it."},
+                status=status.HTTP_409_CONFLICT,
+            )
         stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
             if not subscription.stripe_customer_id:

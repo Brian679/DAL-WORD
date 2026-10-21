@@ -54,7 +54,13 @@ def apply_subscription(subscription: Subscription, stripe_subscription: Any) -> 
     subscription.save()
 
 
-def _grant_pass(subscription: Subscription) -> None:
+def _grant_pass(subscription: Subscription, session_id: str) -> None:
+    # Stripe can send separate events for the same session, so fulfil each session once.
+    try:
+        with transaction.atomic():
+            ProcessedStripeEvent.objects.create(event_id=f"checkout:{session_id}")
+    except IntegrityError:
+        return
     start = max(timezone.now(), subscription.access_until or timezone.now())
     subscription.access_until = start + timedelta(days=settings.BILLING_THESIS_PASS_DAYS)
     subscription.plan = Subscription.PLAN_PRO
@@ -76,7 +82,7 @@ def _on_checkout_completed(session: Any, retrieve_subscription) -> None:
     if _get(session, "mode") == "subscription" and _get(session, "subscription"):
         apply_subscription(subscription, retrieve_subscription(_get(session, "subscription")))
     elif _get(session, "mode") == "payment" and _get(session, "payment_status") == "paid":
-        _grant_pass(subscription)
+        _grant_pass(subscription, _get(session, "id", ""))
     else:
         subscription.save()
 
@@ -88,7 +94,8 @@ def handle_event(event: Any, retrieve_subscription) -> bool:
             ProcessedStripeEvent.objects.create(event_id=_get(event, "id"))
             event_type = _get(event, "type", "")
             obj = _get(_get(event, "data", {}), "object", {})
-            if event_type == "checkout.session.completed":
+            # Delayed payment methods complete checkout unpaid, then send async_payment_succeeded.
+            if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
                 _on_checkout_completed(obj, retrieve_subscription)
             elif event_type in {
                 "customer.subscription.created",
@@ -97,7 +104,9 @@ def handle_event(event: Any, retrieve_subscription) -> bool:
             }:
                 subscription = _subscription_for_customer(_get(obj, "customer", ""))
                 if subscription is not None:
-                    apply_subscription(subscription, obj)
+                    # Stripe doesn't guarantee event order, so apply the subscription as it
+                    # is now rather than the possibly stale snapshot in this event.
+                    apply_subscription(subscription, retrieve_subscription(_get(obj, "id")))
     except IntegrityError:
         return False
     return True

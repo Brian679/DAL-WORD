@@ -80,7 +80,7 @@ Plans: **Free** (30 AI requests a month), **Pro** monthly or yearly, and a one-o
 
 1. In the Stripe dashboard (start in test mode), create a product called "DAL Word Pro" with two recurring prices ($12/month, $96/year). Create a product called "Thesis Pass" with a one-time $29 price. Copy the three `price_...` IDs into `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY` and `STRIPE_PRICE_THESIS_PASS`.
 2. Put the secret key in `STRIPE_SECRET_KEY` and set `FRONTEND_URL` to where the app runs.
-3. Add a webhook endpoint at `https://<your-domain>/api/billing/webhook/` for these events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+3. Add a webhook endpoint at `https://<your-domain>/api/billing/webhook/` for these events: `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Put its signing secret in `STRIPE_WEBHOOK_SECRET`.
 4. Turn on the customer portal (Settings → Billing → Customer portal) so users can update their card or cancel.
 5. Run `python manage.py migrate`.
 
