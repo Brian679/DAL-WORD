@@ -3962,6 +3962,10 @@ def _next_caption_number(document: Document, kind: str) -> int:
     return max_seen + 1
 
 
+# Generated tables and charts are always placeholders, never results, so their
+# captions say so and the text under them repeats it.
+_SAMPLE_DATA_LABEL = " (SAMPLE DATA, replace with your results)"
+
 _SYNTHETIC_DATA_NOTE = (
     "\nNote: these figures are AI-simulated placeholders for demonstration purposes only — "
     "they are not real survey/experimental results. Replace with your actual collected data before submission."
@@ -4039,7 +4043,6 @@ def _table_discussion_text(
                 "Discussion: This level of return supports the adequacy of the dataset for the analysis "
                 "applied in the objective-level sections that follow, and reduces the risk that "
                 "non-response materially biases the findings."
-                f"{_SYNTHETIC_DATA_NOTE}"
             )
 
     if "demographic" in title_lower and rows:
@@ -4059,7 +4062,6 @@ def _table_discussion_text(
             "indicating where participation was concentrated.\n"
             "Discussion: This composition should be borne in mind when generalizing the objective-level "
             "findings, and is reported transparently so readers can judge the sample's representativeness."
-            f"{_SYNTHETIC_DATA_NOTE}"
         )
 
     if "correlation" in title_lower:
@@ -4549,7 +4551,7 @@ def _execute_subsection_nodes(
             objective = str(meta.get("objective") or "") or None
             table_no = table_counter[0]
             table_counter[0] += 1
-            table_caption = f"Table {table_no}: {title}"
+            table_caption = f"Table {table_no}: {title}{_SAMPLE_DATA_LABEL}"
             sample_size = _infer_sample_size(document)
             # Reuse the dataset already computed for this objective by the
             # objective_findings parent (if any) so the table and the findings
@@ -4584,6 +4586,7 @@ def _execute_subsection_nodes(
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective, table_dataset, has_hypotheses)}"
+                f"{_SYNTHETIC_DATA_NOTE}"
             )
         elif kind == "image" and meta.get("image_kind") == "process_flow":
             figure_no = figure_counter[0]
@@ -4688,7 +4691,7 @@ def _execute_subsection_nodes(
             else:
                 figure_no = figure_counter[0]
                 figure_counter[0] += 1
-                figure_caption = f"Figure {figure_no}: {title}"
+                figure_caption = f"Figure {figure_no}: {title}{_SAMPLE_DATA_LABEL}"
                 context_str = title + (f" — {objective}" if objective else "")
                 is_demographics_chart = meta.get("chart_type") == "demographics" or any(
                     k in title.lower() for k in ["demographic", "response rate", "respondent"]
@@ -4743,7 +4746,7 @@ def _execute_subsection_nodes(
                 chart_path = generate_chart(
                     series=ai_data["series"],
                     chart_type=ai_data["chart_type"],
-                    title=title,
+                    title=f"{title}{_SAMPLE_DATA_LABEL}",
                     x_labels=ai_data.get("x_labels") or None,
                     unit=ai_data.get("unit") or None,
                 )
@@ -4759,6 +4762,7 @@ def _execute_subsection_nodes(
                     f"{figure_caption}\n"
                     f"[[BLOCK:{block_id}]]\n"
                     f"{_chart_discussion_text(ai_data['series'], objective, title)}"
+                    f"{_SYNTHETIC_DATA_NOTE}"
                 )
         elif kind == "objective_findings":
             objective = str(meta.get("objective") or title)
@@ -4800,12 +4804,16 @@ def _execute_subsection_nodes(
                         f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
                         f"Parent chapter: {section_title}\n"
-                        + (f"Actual data collected for this objective: {grounding}\n" if grounding else "")
+                        + (
+                            f"Sample placeholder data for this objective (not real results): {grounding}\n"
+                            if grounding else ""
+                        )
                         + f"Current document context:\n{current_document_context[-3000:]}\n\n"
                         "Write 2-3 paragraphs presenting findings specifically for this objective. "
                         "Discuss patterns, trends, and how findings directly address the objective. "
-                        "Be specific and academically rigorous, and stay consistent with the actual data "
-                        "noted above where provided.\n"
+                        "Be specific and academically rigorous, and stay consistent with the sample data "
+                        "noted above where provided. Refer to those figures as sample figures the author "
+                        "will replace with their own results, never as findings of a completed study.\n"
                         f"{quote_guidance}"
                     ),
                     word_count=default_word_count,
@@ -4824,6 +4832,8 @@ def _execute_subsection_nodes(
                 )
                 if grounding:
                     body = f"{grounding} {body}"
+            if grounding:
+                body = f"{body}{_SYNTHETIC_DATA_NOTE}"
         else:
             lowered_title = title.lower()
             real_references = (
@@ -6032,118 +6042,8 @@ def _seeded_pick(seed_text: str, options: tuple[str, ...]) -> str:
     return options[sum(ord(c) for c in seed_text) % len(options)]
 
 
-# ── Synthetic citation pool (deterministic fallback / offline mode) ─────────
-# When _retrieve_citation_pool() returns nothing (no network access to Crossref/arXiv/
-# PubMed/Semantic Scholar) and no LLM key is configured, the dissertation is written
-# entirely from the deterministic templates below. Real dissertations cite sources
-# throughout the Literature Review and discuss findings against the literature in
-# Chapters 1, 4 and 5 — so the deterministic path needs its own citation pool, used
-# consistently for both the in-text "(Author, Year)" citations woven into the prose
-# and the final References back-matter section, so the two always match each other.
-_CITATION_SURNAMES: tuple[str, ...] = (
-    "Adeyemi", "Brown", "Chen", "Diallo", "Edwards", "Fernandez", "Garcia", "Hassan",
-    "Ibrahim", "Johansson", "Kumar", "Lindqvist", "Mensah", "Nguyen", "Okafor", "Patel",
-    "Quresh", "Rossi", "Santos", "Tanaka", "Umeh", "Varga", "Wang", "Yilmaz", "Zhao",
-)
-
-_CITATION_TITLE_TEMPLATES: tuple[str, ...] = (
-    "a review of {topic}",
-    "examining the determinants of {topic}",
-    "methodological approaches to studying {topic}",
-    "theoretical foundations of {topic}",
-    "contemporary perspectives on {topic}",
-    "{topic}: a systematic review",
-    "evaluating outcomes associated with {topic}",
-    "{topic} and organisational performance: an empirical study",
-    "towards a framework for understanding {topic}",
-    "{topic} in comparative perspective",
-)
-
-
-def _build_synthetic_citation_pool(topic: str, field_label: str, n: int = 14) -> list[dict[str, Any]]:
-    """Deterministic, topic-seeded set of plausible-looking (but fictitious) sources.
-
-    Same topic always yields the same pool, so in-text citations and the References
-    chapter stay consistent with each other across the whole document, even though
-    each subsection is generated independently and statelessly.
-    """
-    rng = random.Random(f"citation-pool|{topic}")
-    venues = (
-        f"Journal of {field_label} Research",
-        f"International Journal of {field_label} Studies",
-        f"{field_label} Quarterly",
-        f"Journal of Applied {field_label}",
-        f"Annual Review of {field_label}",
-        f"{field_label} Policy and Practice",
-        f"Journal of Contemporary {field_label}",
-    )
-    used: set[tuple[str, ...]] = set()
-    pool: list[dict[str, Any]] = []
-    for _ in range(n):
-        surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
-        attempts = 0
-        while surnames in used and attempts < 10:
-            surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
-            attempts += 1
-        used.add(surnames)
-        initials = ["".join(rng.sample("ABCDEFGHJKLMNPQRSTUVWXYZ", k=rng.choice([1, 2]))) for _ in surnames]
-        year = rng.randint(2015, 2024)
-        title = rng.choice(_CITATION_TITLE_TEMPLATES).format(topic=topic)
-        pages_start = rng.randint(1, 210)
-        pool.append({
-            "surnames": surnames,
-            "initials": initials,
-            "year": year,
-            "title": title[:1].upper() + title[1:],
-            "venue": rng.choice(venues),
-            "volume": rng.randint(4, 22),
-            "issue": rng.randint(1, 4),
-            "pages": f"{pages_start}-{pages_start + rng.randint(8, 26)}",
-        })
-    return pool
-
-
-def _citation_paren(entry: dict[str, Any]) -> str:
-    """'(Surname, Year)' or '(Surname1 & Surname2, Year)' parenthetical in-text citation."""
-    surnames = entry["surnames"]
-    if len(surnames) == 1:
-        return f"({surnames[0]}, {entry['year']})"
-    return f"({surnames[0]} & {surnames[1]}, {entry['year']})"
-
-
-def _citation_narrative(entry: dict[str, Any]) -> str:
-    """'Surname (Year)' or 'Surname1 and Surname2 (Year)' narrative in-text citation."""
-    surnames = entry["surnames"]
-    if len(surnames) == 1:
-        return f"{surnames[0]} ({entry['year']})"
-    return f"{surnames[0]} and {surnames[1]} ({entry['year']})"
-
-
-def _citation_apa_entry(entry: dict[str, Any]) -> str:
-    names = []
-    for surname, initials in zip(entry["surnames"], entry["initials"]):
-        names.append(f"{surname}, {'. '.join(initials)}.")
-    author_str = names[0] if len(names) == 1 else " & ".join(names)
-    return (
-        f"{author_str} ({entry['year']}). {entry['title']}. {entry['venue']}, "
-        f"{entry['volume']}({entry['issue']}), {entry['pages']}."
-    )
-
-
-def _format_synthetic_reference_list(pool: list[dict[str, Any]]) -> str:
-    """APA-style reference list built from the same pool used for in-text citations."""
-    entries = sorted({_citation_apa_entry(e) for e in pool})
-    return "\n\n".join(entries)
-
-
-def _pick_citations(pool: list[dict[str, Any]], seed_text: str, k: int = 1) -> list[dict[str, Any]]:
-    """Deterministically pick k distinct entries from pool based on seed_text, so the
-    same subsection always cites the same sources but different subsections draw from
-    different parts of the pool."""
-    if not pool:
-        return []
-    start = sum(ord(c) for c in seed_text) % len(pool)
-    return [pool[(start + i) % len(pool)] for i in range(min(k, len(pool)))]
+# Fallback prose never invents sources: it marks where a real citation belongs.
+_CITATION_NEEDED = "[citation needed]"
 
 
 # Background of the Study — multiple structurally distinct openings (trend-led,
@@ -7386,7 +7286,6 @@ def _fallback_subsection_body(
     _field_terms = _topic_terms(topic, 4) or [topic]
     _field_term = re.sub(r"^(a|an|the)\s+", "", max(_field_terms, key=len), flags=re.IGNORECASE)
     field_label = _truncate_label(_field_term, 40)
-    citation_pool = _build_synthetic_citation_pool(topic, field_label)
 
     # ── Preliminary pages ───────────────────────────────────────────────────
     if "abstract" in sub_lower:
@@ -7580,7 +7479,7 @@ def _fallback_subsection_body(
                 _BACKGROUND_VARIANTS_SYSTEM_BUILD if is_system_build else _BACKGROUND_VARIANTS_TECHNICAL
             )
         )
-        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|background", k=1)[0])
+        cite1 = _CITATION_NEEDED
         return _seeded_pick(topic, pool).format(topic=topic, cite1=cite1)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
@@ -7589,7 +7488,7 @@ def _fallback_subsection_body(
                 _PROBLEM_VARIANTS_SYSTEM_BUILD if is_system_build else _PROBLEM_VARIANTS_TECHNICAL
             )
         )
-        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|problem", k=1)[0])
+        cite1 = _CITATION_NEEDED
         return _seeded_pick(f"{topic}|problem", pool).format(topic=topic, cite1=cite1)
 
     if "significance" in sub_lower:
@@ -7740,7 +7639,7 @@ def _fallback_subsection_body(
                 "current knowledge that justify the present inquiry."
             )
         if any(k in sub_lower for k in ["conceptual", "core concept", "dimension", "relationships between variables", "definition and conceptualisation"]):
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conceptual", k=1)[0])
+            c1 = _CITATION_NEEDED
             return (
                 f"The conceptual review clarifies the key terms and constructs underpinning {topic}, establishing a shared "
                 "vocabulary for the analysis that follows. Each construct is defined with reference to its dominant usage "
@@ -7759,8 +7658,7 @@ def _fallback_subsection_body(
             # feedback control theory and sensor models).
             named_theory = _select_named_theory(topic, "", objectives)
             if named_theory:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
 
                 def _join_items(items: list[str]) -> str:
                     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f", and {items[-1]}"
@@ -7782,8 +7680,7 @@ def _fallback_subsection_body(
                     "study."
                 )
             if is_doctrinal:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
                 return (
                     f"This section presents the theoretical and doctrinal foundations relevant to {topic}. Several "
                     "schools of thought offer complementary lenses for interpreting the sources and arguments under "
@@ -7798,8 +7695,7 @@ def _fallback_subsection_body(
                     "specific doctrine, text, or argument examined here."
                 )
             if survey_based:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
                 return (
                     f"This section presents the theoretical foundations relevant to {topic}. Several theories offer "
                     "complementary lenses for understanding the relationships under investigation, including classical "
@@ -7812,8 +7708,7 @@ def _fallback_subsection_body(
                     "applicable to this study is justified on the grounds of its explanatory power for the specific "
                     "relationships and context examined here."
                 )
-            c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-            c1, c2 = _citation_paren(c1), _citation_paren(c2)
+            c1 = c2 = _CITATION_NEEDED
             return (
                 f"This section presents the theoretical and engineering foundations relevant to {topic}. Several "
                 "established frameworks offer complementary lenses for understanding the system under investigation, "
@@ -7829,7 +7724,7 @@ def _fallback_subsection_body(
                 "characteristics examined here."
             )
         if "global evidence" in sub_lower or ("empirical" in sub_lower and "global" in sub_lower):
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|global", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Scholarship and authoritative sources on {topic} reveal broadly consistent lines of reasoning "
@@ -7852,7 +7747,7 @@ def _fallback_subsection_body(
                 "this study seeks to generate."
             )
         if "developed econom" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developed", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Scholarship from well-established legal, philosophical, or institutional systems demonstrates "
@@ -7873,7 +7768,7 @@ def _fallback_subsection_body(
                 "guarantee favourable results."
             )
         if "emerging econom" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|emerging", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Sources from transitional or reforming systems provide important comparative material on "
@@ -7894,7 +7789,7 @@ def _fallback_subsection_body(
                 "and capacity-building interventions have been implemented."
             )
         if "developing econom" in sub_lower or "africa" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developing", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Sources situated in developing or African legal, institutional, and intellectual contexts "
@@ -7917,7 +7812,7 @@ def _fallback_subsection_body(
                 "context and underscoring the importance of locally grounded evidence."
             )
         if "sectoral" in sub_lower or "industry" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|sectoral", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Treatment of {topic} is not uniform across sub-fields, branches, or schools of thought, but "
@@ -7937,7 +7832,7 @@ def _fallback_subsection_body(
                 "the selection of an appropriate analytical frame for interpreting the primary data collected."
             )
         if "synthesis" in sub_lower or "critical appraisal" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|synthesis", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Synthesising the sources reviewed above, the scholarship on {topic} is consistent in its "
@@ -7966,10 +7861,10 @@ def _fallback_subsection_body(
                     _EMPIRICAL_REVIEW_VARIANTS_SYSTEM_BUILD if is_system_build else _EMPIRICAL_REVIEW_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|{subsection}", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(subsection, pool).format(topic=topic, cite1=cite1)
         if "research gap" in sub_lower or "gap" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|gap", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Despite the volume of scholarship on {topic}, this review identifies a clear and persistent "
@@ -8604,7 +8499,7 @@ def _fallback_subsection_body(
             )
         if ("presentation" in sub_lower or "finding" in sub_lower) and "discussion" not in sub_lower:
             if is_doctrinal:
-                c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|findings", k=1)[0])
+                c1 = _CITATION_NEEDED
                 return (
                     f"Close analysis of the source corpus reveals several recurring lines of argument relating to "
                     f"{topic}. Authoritative sources consistently converge on the core principles at stake, with "
@@ -8685,7 +8580,7 @@ def _fallback_subsection_body(
                     _DISCUSSION_VARIANTS_SYSTEM_BUILD if is_system_build else _DISCUSSION_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|discussion", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic, cite1=cite1)
         if is_doctrinal:
             return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_DOCTRINAL).format(topic=topic)
@@ -8766,7 +8661,7 @@ def _fallback_subsection_body(
                     _CONCLUSION_VARIANTS_SYSTEM_BUILD if is_system_build else _CONCLUSION_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conclusion", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic, cite1=cite1)
         if "recommendation" in sub_lower:
             pool = _RECOMMENDATION_VARIANTS_DOCTRINAL if is_doctrinal else (
@@ -8869,12 +8764,9 @@ def _fallback_subsection_body(
     # ── References / Appendices ─────────────────────────────────────────────
     if "reference" in sub_lower:
         return (
-            "Automatic source retrieval failed for this document (e.g. no network access), so the entries below "
-            "are SIMULATED, illustrative references rather than verified literature — they are consistent with "
-            "the in-text citations used throughout this dissertation (same authors, years, and titles), but they "
-            f"do not correspond to real publications and MUST be replaced with verified literature on {topic} "
-            "before submission.\n\n"
-            f"{_format_synthetic_reference_list(citation_pool)}"
+            "Automatic source retrieval failed for this document (e.g. no network access), so no "
+            "references could be added. Search for sources on this topic, replace each [citation needed] "
+            "marker with a real citation, and list those sources here."
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
         if is_doctrinal:
@@ -12741,11 +12633,12 @@ def _add_chart(document: Document, target: str | None, plan: list, instruction: 
         is_user_provided = False
 
     figure_no = _next_caption_number(document, "figure")
-    figure_caption = f"Figure {figure_no}: {_section_title}"
+    sample_label = "" if is_user_provided else _SAMPLE_DATA_LABEL
+    figure_caption = f"Figure {figure_no}: {_section_title}{sample_label}"
     chart_path = generate_chart(
         series=series,
         chart_type=chart_type,
-        title=_section_title,
+        title=f"{_section_title}{sample_label}",
         x_labels=x_labels or None,
         unit=unit or None,
     )
@@ -12757,6 +12650,7 @@ def _add_chart(document: Document, target: str | None, plan: list, instruction: 
     addition = (
         f"\n\n{figure_caption}\n[[BLOCK:{block_id}]]\n"
         f"{_chart_discussion_text(series, None, _section_title, is_user_provided=is_user_provided)}"
+        f"{'' if is_user_provided else _SYNTHETIC_DATA_NOTE}"
     )
     section["content"] = (section.get("content", "") or "").rstrip() + addition
     _save(document, f"chart:{target or 'section'}")
