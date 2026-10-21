@@ -9,6 +9,31 @@ from .tools import find_section, generate_chart, generate_image, insert_after, i
 import re
 
 
+class ActionError(ValueError):
+    """A request the caller can fix (bad action, missing field, unknown section)."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "enhance_section": ("query", "instruction"),
+    "generate_outline": ("topic",),
+    "generate_chart": ("query",),
+    "generate_image": ("query", "prompt"),
+    "insert_section": ("after_query", "title", "content"),
+    "update_table_of_contents": (),
+}
+
+
+def _find_section_or_fail(document: Document, query: str) -> int:
+    idx = find_section(document.content or {}, query)
+    if idx is None:
+        raise ActionError(f"No section matches '{query}'.", status=404)
+    return idx
+
+
 def _sanitize_body(text: str) -> str:
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
@@ -23,9 +48,7 @@ def _save(document: Document, note: str) -> Document:
 
 
 def enhance_section(document: Document, query: str, instruction: str) -> Document:
-    idx = find_section(document.content, query)
-    if idx is None:
-        raise ValueError(f"section not found for query: {query}")
+    idx = _find_section_or_fail(document, query)
 
     section = document.content["sections"][idx]
     original = section.get("content", "")
@@ -36,8 +59,11 @@ def enhance_section(document: Document, query: str, instruction: str) -> Documen
             topic=topic,
             context=f"{instruction}\n\n{original}",
         )
-    except Exception:
-        enhanced = f"{original}\n\nRefined draft: {instruction}."
+    except Exception as exc:
+        raise ActionError(
+            "The AI writing service isn't available right now, so the section was not changed.",
+            status=503,
+        ) from exc
     enhanced = _sanitize_body(enhanced)
     document.content = update_section(document.content, idx, enhanced)
     return _save(document, f"enhance:{query}")
@@ -68,9 +94,7 @@ def insert_chart(
     chart_type: str = "line",
     title: str | None = None,
 ) -> Document:
-    idx = find_section(document.content, section_query)
-    if idx is None:
-        raise ValueError(f"section not found for query: {section_query}")
+    idx = _find_section_or_fail(document, section_query)
 
     section_title = document.content["sections"][idx].get("title", "")
     chart_path = generate_chart(
@@ -88,9 +112,7 @@ def insert_chart(
 
 
 def insert_concept_image(document: Document, section_query: str, prompt: str) -> Document:
-    idx = find_section(document.content, section_query)
-    if idx is None:
-        raise ValueError(f"section not found for query: {section_query}")
+    idx = _find_section_or_fail(document, section_query)
 
     image_path = generate_image(prompt)
     section_title = document.content["sections"][idx].get("title", "")
@@ -104,9 +126,7 @@ def insert_concept_image(document: Document, section_query: str, prompt: str) ->
 
 
 def insert_section(document: Document, after_query: str, title: str, content: str) -> Document:
-    idx = find_section(document.content, after_query)
-    if idx is None:
-        raise ValueError(f"section not found for query: {after_query}")
+    idx = _find_section_or_fail(document, after_query)
 
     document.content = insert_after(document.content, idx, title=title, content=content)
     return _save(document, f"insert-after:{after_query}")
@@ -124,6 +144,13 @@ def update_table_of_contents(document: Document) -> Document:
 
 
 def run_action(document: Document, action: str, payload: dict[str, Any]) -> Document:
+    if action not in _REQUIRED_FIELDS:
+        raise ActionError(f"Unsupported action: {action!r}.")
+    if not isinstance(payload, dict):
+        raise ActionError("payload must be an object.")
+    missing = [f for f in _REQUIRED_FIELDS[action] if not payload.get(f)]
+    if missing:
+        raise ActionError(f"Missing payload field(s) for {action}: {', '.join(missing)}.")
     if action == "enhance_section":
         return enhance_section(document, payload["query"], payload["instruction"])
     if action == "generate_outline":
@@ -142,4 +169,4 @@ def run_action(document: Document, action: str, payload: dict[str, Any]) -> Docu
         return insert_section(document, payload["after_query"], payload["title"], payload["content"])
     if action == "update_table_of_contents":
         return update_table_of_contents(document)
-    raise ValueError(f"unsupported action: {action}")
+    raise ActionError(f"Unsupported action: {action!r}.")

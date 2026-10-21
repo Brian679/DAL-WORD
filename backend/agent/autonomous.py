@@ -16,6 +16,7 @@ from typing import Any
 from documents.models import Document, DocumentVersion
 
 from .llm import (
+    ai_available,
     chat_with_document,
     classify_intent,
     create_execution_plan,
@@ -61,6 +62,18 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_spreadsheet",
     "write_article",
 })
+
+
+# Intents that rewrite the writer's text. Without an AI provider these used to fall
+# back to generic template prose and overwrite the section, so they stop instead.
+_AI_REQUIRED_INTENTS: frozenset[str] = frozenset({
+    "write_section", "enhance_section", "enhance_document", "address_comments",
+})
+
+_AI_UNAVAILABLE_REPLY = (
+    "The AI writing service isn't available right now, so I haven't changed your document. "
+    "Please try again in a few minutes."
+)
 
 
 def _intent_description(intent: str, target_section: str | None, topic: str | None) -> str:
@@ -5226,6 +5239,19 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
         topic = _extract_topic_phrase(text, ("on", "about", "for", "regarding"))
         return {"intent": "write_document", "target_section": None, "topic": topic}
 
+    # ── Grammar / proofreading ───────────────────────────────────────────────
+    # Checked before the generic "fix/improve" rule so "fix grammar" with no section
+    # named proofreads the whole document instead of hunting for a "grammar" section.
+    _grammar_kw = {"grammar", "spelling", "spell", "typo", "typos", "proofread", "spellcheck", "spell check"}
+    if any(k in text for k in _grammar_kw):
+        names_section = target or re.search(
+            r"\b(?:introduction|abstract|background|literature|methodology|methods|results|findings|"
+            r"discussion|conclusion|recommendations?|chapter|paragraph)\b",
+            text,
+        )
+        intent = "enhance_section" if names_section else "enhance_document"
+        return {"intent": intent, "target_section": target, "topic": "grammar_and_style"}
+
     # "edit"/"edits"/"editing" need word-boundary matching — bare substring would
     # false-positive on "credit", "expedite", "edition", "editorial", etc.
     if any(k in text for k in [
@@ -5240,10 +5266,6 @@ def _heuristic_intent(message: str) -> dict[str, Any]:
             return {"intent": "enhance_document", "target_section": None, "topic": None}
         return {"intent": "enhance_section", "target_section": target, "topic": None}
 
-    # ── Grammar / proofreading ───────────────────────────────────────────────
-    _grammar_kw = {"grammar", "spelling", "spell", "typo", "typos", "proofread", "spellcheck", "spell check"}
-    if any(k in text for k in _grammar_kw):
-        return {"intent": "enhance_section", "target_section": target, "topic": "grammar_and_style"}
 
     # Strip common filler determiners so natural insertions like "remove THE ai"
     # or "get rid of THE plagiarism" still match the literal phrases below.
@@ -10694,7 +10716,10 @@ def run_agent(
         chapter_numbers = _extract_chapter_numbers(effective_message)
         chapter_request = "chapter" in lowered_message and len(chapter_numbers) >= 1
 
-        if intent == "summarize_document":
+        if intent in _AI_REQUIRED_INTENTS and not ai_available():
+            _all_done(plan)
+            reply, updated = _AI_UNAVAILABLE_REPLY, False
+        elif intent == "summarize_document":
             reply, updated = _summarize_document(document, effective_message, plan)
         elif intent == "address_comments":
             reply, updated = _address_comments(document, topic, plan)
@@ -11733,12 +11758,10 @@ def _enhance_section(
     source_text = subsection_block[1] if subsection_block and subsection_block[1] else original
     try:
         enhanced = enhance_text(source_text, topic, enhance_instruction, section_title=sec_title)
-    except Exception:
-        enhanced = _fallback_subsection_text(
-            topic, sec_title, query,
-            objectives=(document.content or {}).get("research_objectives"),
-            sample_size=_infer_sample_size(document),
-        )
+    except Exception as exc:
+        logger.warning("enhance_text failed for '%s': %s", sec_title, exc)
+        _all_done(plan)
+        return _AI_UNAVAILABLE_REPLY, False
 
     if subsection_block:
         heading = subsection_block[0]
@@ -12018,12 +12041,10 @@ def _write_section(
         )
         if _looks_like_meta_commentary(content):
             raise ValueError("Generated body reads like document meta-commentary, not section prose.")
-    except Exception:
-        content = _fallback_subsection_text(
-            topic, section_name, section_name,
-            objectives=(document.content or {}).get("research_objectives"),
-            sample_size=_infer_sample_size(document),
-        )
+    except Exception as exc:
+        logger.warning("generate_section_content failed for '%s': %s", section_name, exc)
+        _all_done(plan)
+        return _AI_UNAVAILABLE_REPLY, False
     content = _sanitize_body(content)
     _done(plan, 2)
 
@@ -12730,7 +12751,8 @@ def _add_image(
         image_path = generate_image(generation_prompt, framework_spec=framework_spec)
     except Exception as exc:
         _all_done(plan)
-        return f"Image generation failed: {exc}", False
+        logger.warning("generate_image failed: %s", exc)
+        return "I couldn't generate that image just now. Please try again in a minute.", False
 
     _done(plan, 1)
 
@@ -12738,9 +12760,10 @@ def _add_image(
         section = sections[idx]
         blocks = section.setdefault("blocks", [])
         block_id = f"img-{idx + 1}-{len(blocks) + 1}"
+        subject = _image_caption_subject(prompt)
         caption = (
             (framework_spec or {}).get("title")
-            or prompt[:80]
+            or (subject[:1].upper() + subject[1:] if subject else "")
             or f"Image for {section.get('title', 'section')}"
         )
         blocks.append(
@@ -12753,6 +12776,15 @@ def _add_image(
     _all_done(plan)
     section_name = sections[idx].get("title", "the section") if sections else "the section"
     return f"Added an image to '{section_name}'. {description}", True
+
+
+def _image_caption_subject(prompt: str) -> str:
+    """'add an image of a city to introduction' -> 'a city'; '' when nothing usable is left."""
+    subject = _extract_photo_query(prompt)
+    subject = re.split(r"\s+(?:to|into|in|for|under)\s+(?:the\s+)?\S+", subject, maxsplit=1)[0].strip()
+    if subject.lower() in {"", "image", "add image", "an image", "a picture", "picture", "photo"}:
+        return ""
+    return subject
 
 
 def _extract_photo_query(prompt: str) -> str:
@@ -12784,7 +12816,7 @@ def _search_wikimedia_image(document: Document, target: str | None, prompt: str,
     except Exception as exc:
         _all_done(plan)
         logger.warning("_search_wikimedia_image failed: %s", exc)
-        return f"Image search failed: {exc}", False
+        return "I couldn't reach the image library just now. Please try again in a minute.", False
     _done(plan, 1)
 
     if not result:

@@ -31,6 +31,14 @@ def _provider_module():
     return gemini
 
 
+def ai_available() -> bool:
+    """True when the active provider has an API key configured."""
+    from django.conf import settings
+
+    key = "GROK_API_KEY" if get_active_model() == "grok" else "GEMINI_API_KEY"
+    return bool(getattr(settings, key, ""))
+
+
 def get_model_label() -> str:
     return _provider_module().get_model_label()
 
