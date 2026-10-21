@@ -1,6 +1,8 @@
 from unittest import mock
 
-from django.test import TestCase
+from django.contrib.auth import get_user_model
+from django.test import TestCase, override_settings
+from rest_framework.test import APIClient
 
 from documents.models import Document, DocumentVersion
 
@@ -98,3 +100,54 @@ class SampleDataLabelTests(TestCase):
         section, title = self._chart("plot Agree: 42, Neutral: 10, Disagree: 8")
         self.assertNotIn("SAMPLE DATA", section["blocks"][0]["caption"])
         self.assertNotIn("not real survey/experimental results", section["content"])
+
+
+@override_settings(GEMINI_API_KEY="", GROK_API_KEY="")
+class ErrorHandlingTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user("writer", password="Str0ng-pass-123")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+        self.document = Document.objects.create(
+            user=self.user,
+            title="Thesis",
+            content={"topic": "Remote work", "sections": [{"title": "Introduction", "content": "My own words."}]},
+        )
+
+    def test_writing_without_ai_leaves_text_alone(self):
+        for message in ["write the introduction", "enhance the introduction", "fix grammar"]:
+            result = autonomous.run_agent(self.document, message, model_choice="gemini")
+            self.document.refresh_from_db()
+            self.assertFalse(result["document_updated"], message)
+            self.assertEqual(self.document.content["sections"][0]["content"], "My own words.")
+
+    def test_bad_actions_return_client_errors(self):
+        url = f"/api/agent/{self.document.id}/action/"
+        cases = [
+            ({"action": "bogus"}, 400),
+            ({"action": "insert_section", "payload": {}}, 400),
+            ({"action": "generate_chart", "payload": {"query": "nowhere"}}, 404),
+            ({"action": "enhance_section", "payload": {"query": "Introduction", "instruction": "tighten"}}, 503),
+        ]
+        for body, expected in cases:
+            response = self.client.post(url, body, format="json")
+            self.assertEqual(response.status_code, expected, body)
+            self.assertIn("error", response.json())
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content["sections"][0]["content"], "My own words.")
+
+    def test_malformed_content_is_rejected(self):
+        url = f"/api/documents/{self.document.id}/"
+        for content in ["text", {"sections": "x"}, {"sections": [{"content": 5}]}]:
+            response = self.client.patch(url, {"content": content}, format="json")
+            self.assertEqual(response.status_code, 400, content)
+
+    def test_grammar_without_section_means_whole_document(self):
+        self.assertEqual(autonomous._heuristic_intent("fix grammar")["intent"], "enhance_document")
+        self.assertEqual(
+            autonomous._heuristic_intent("fix grammar in the introduction")["intent"], "enhance_section"
+        )
+
+    def test_image_caption_is_the_subject_not_the_command(self):
+        self.assertEqual(autonomous._image_caption_subject("add an image of a city to introduction"), "a city")
+        self.assertEqual(autonomous._image_caption_subject("add image"), "")

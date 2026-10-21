@@ -30,3 +30,14 @@ class DocumentSerializer(serializers.ModelSerializer):
             "versions",
             "chat_messages",
         ]
+
+    def validate_content(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("content must be an object.")
+        sections = value.get("sections", [])
+        if not isinstance(sections, list) or not all(isinstance(s, dict) for s in sections):
+            raise serializers.ValidationError("content.sections must be a list of objects.")
+        for section in sections:
+            if not isinstance(section.get("content") or "", str) or not isinstance(section.get("title") or "", str):
+                raise serializers.ValidationError("each section's title and content must be text.")
+        return value

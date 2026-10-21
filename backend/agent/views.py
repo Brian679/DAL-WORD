@@ -14,7 +14,7 @@ from documents.serializers import DocumentSerializer
 from .autonomous import run_agent
 from .agents_v2 import run_multi_agent_supervision
 from .academic_runtime import ClaimGraphBuilder, CoherenceChecker, EvaluationEngine, WorkflowEngine
-from .executor import run_action
+from .executor import ActionError, run_action
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,16 @@ class AgentActionView(APIView):
             document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
-        updated = run_action(document, action, payload)
+        try:
+            updated = run_action(document, action, payload)
+        except ActionError as exc:
+            return Response({"error": str(exc)}, status=exc.status)
+        except Exception as exc:
+            logger.error("Action %r failed for doc %d: %s", action, document_id, exc, exc_info=True)
+            return Response(
+                {"error": "Something went wrong running that action. Please try again."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(DocumentSerializer(updated).data)
 
 
@@ -216,9 +225,10 @@ class ChatView(APIView):
             )
         except Exception as exc:
             logger.error("Agent error for doc %d: %s", document_id, exc, exc_info=True)
+            error_text = "Something went wrong while working on your request. Please try again."
             if not preview_only:
-                ChatMessage.objects.create(document=document, role="assistant", content=f"Error: {exc}")
-            return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+                ChatMessage.objects.create(document=document, role="assistant", content=error_text)
+            return Response({"error": error_text}, status=status.HTTP_502_BAD_GATEWAY)
 
         awaiting_confirmation = result.get("awaiting_confirmation", False)
 
