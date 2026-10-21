@@ -6,7 +6,6 @@ export default function AIPanel({
   onGenerateOutline,
   onGenerateChart,
   onGenerateImage,
-  onGenerateDissertation,
 }) {
   const [topic, setTopic] = useState("Impact of AI on education");
   const [sectionQuery, setSectionQuery] = useState("Methodology");
@@ -27,7 +26,6 @@ export default function AIPanel({
         <button onClick={() => onEnhanceSection(sectionQuery)}>Enhance Section</button>
         <button onClick={() => onGenerateImage(sectionQuery)}>Insert Image</button>
         <button onClick={() => onGenerateChart(sectionQuery)}>Insert Chart</button>
-        <button onClick={() => onGenerateDissertation(topic)}>Run Full Dissertation</button>
       </div>
     </aside>
   );

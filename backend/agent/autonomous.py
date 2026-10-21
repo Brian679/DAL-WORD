@@ -48,8 +48,6 @@ DOCUMENT_MODIFYING_INTENTS: frozenset[str] = frozenset({
     "write_document",
     "enhance_section",
     "enhance_document",
-    "humanise_ai_sections",
-    "reduce_plagiarism_similarity",
     "address_comments",
     "create_outline",
     "add_chart",
@@ -71,8 +69,8 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
     tp = topic or ""
     _descriptions: dict[str, str] = {
         "write_section":    f"Write the **{t or 'target'}** section",
-        "write_dissertation": f"Write the full dissertation on **{tp}**",
-        "write_document":   f"Plan and write a complete document on **{tp or 'the topic'}**",
+        "write_dissertation": f"Create an outline for **{tp}** to write section by section",
+        "write_document":   f"Create an outline for **{tp or 'the topic'}** to write section by section",
         "enhance_section":  f"Improve and polish {'the **' + t + '** section' if t else 'the document content'}",
         "enhance_document": "Improve the entire document — structure, clarity, and academic quality",
         "address_comments": "Read all inline reviewer comments and address each one in the document",
@@ -81,8 +79,8 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
         "add_image":  f"Generate and insert an image{' into **' + t + '**' if t else ''}",
         "search_image": f"Find a real photo on Wikimedia Commons{' for **' + t + '**' if t else ''}",
         "generate_ai_image": f"Generate an AI illustrative image{' for **' + t + '**' if t else ''}",
-        "humanise_ai_sections": "Detect AI-generated passages and rewrite them to sound natural and human-written",
-        "reduce_plagiarism_similarity": "Detect passages that overlap with other workspace documents and rewrite them to reduce textual similarity",
+        "humanise_ai_sections": "Explain which passages read as generic or AI-like so you can revise them in your own words",
+        "reduce_plagiarism_similarity": "Show passages that overlap with other sources so you can quote, cite, or rewrite them yourself",
         "check_academic_quality": "Analyse the document for academic writing quality — vocabulary, evidence, structure, and argument strength",
         # Legacy aliases
         "write_report":     "Plan and write a report based on the request",
@@ -3502,18 +3500,6 @@ def _sections_to_nodes(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def llm_chapters_to_flat_steps(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert LLM plan chapters to the flat step list shown in the frontend todo."""
-    steps: list[dict[str, Any]] = [{"step": "Creating dissertation to-do list", "status": "done"}]
-    first = True
-    for chapter in chapters:
-        step_status = "in_progress" if first else "pending"
-        first = False
-        steps.append({"step": f"Writing {chapter.get('title', 'Chapter')}", "status": step_status})
-        _sections_to_steps(steps, chapter.get("sections", []), depth=1)
-    return steps
-
-
 def _sections_to_steps(
     steps: list[dict[str, Any]], sections: list[dict[str, Any]], depth: int
 ) -> None:
@@ -3976,6 +3962,10 @@ def _next_caption_number(document: Document, kind: str) -> int:
     return max_seen + 1
 
 
+# Generated tables and charts are always placeholders, never results, so their
+# captions say so and the text under them repeats it.
+_SAMPLE_DATA_LABEL = " (SAMPLE DATA, replace with your results)"
+
 _SYNTHETIC_DATA_NOTE = (
     "\nNote: these figures are AI-simulated placeholders for demonstration purposes only — "
     "they are not real survey/experimental results. Replace with your actual collected data before submission."
@@ -4053,7 +4043,6 @@ def _table_discussion_text(
                 "Discussion: This level of return supports the adequacy of the dataset for the analysis "
                 "applied in the objective-level sections that follow, and reduces the risk that "
                 "non-response materially biases the findings."
-                f"{_SYNTHETIC_DATA_NOTE}"
             )
 
     if "demographic" in title_lower and rows:
@@ -4073,7 +4062,6 @@ def _table_discussion_text(
             "indicating where participation was concentrated.\n"
             "Discussion: This composition should be borne in mind when generalizing the objective-level "
             "findings, and is reported transparently so readers can judge the sample's representativeness."
-            f"{_SYNTHETIC_DATA_NOTE}"
         )
 
     if "correlation" in title_lower:
@@ -4504,42 +4492,6 @@ def _cited_reference_list(citation_pool: list[Any], full_text: str, style: str) 
     return _format_reference_list(cited_pool, style=style)
 
 
-def _compute_bibliography(citation_pool: list[Any], sections: list[dict[str, Any]], style: str) -> tuple[list[Any], str]:
-    """Filter citation_pool down to only what's actually cited across `sections`
-    — excluding the References/Bibliography section itself, since that section is
-    the OUTPUT of this filtering, not an input to it (its own [n]-style markers
-    would otherwise look like extra in-text citations). Returns (cited_pool, bibtex_text)."""
-    from .research_layer import build_bibtex, filter_cited_pool
-
-    body_text = "\n\n".join(
-        s.get("content", "") or "" for s in sections
-        if "reference" not in (s.get("title") or "").lower()
-        and "bibliograph" not in (s.get("title") or "").lower()
-    )
-    cited_pool = filter_cited_pool(body_text, citation_pool, style=style)
-    return cited_pool, build_bibtex(cited_pool)
-
-
-def _ensure_references_section(sections_plan: list[dict[str, Any]], do_citations: bool) -> list[dict[str, Any]]:
-    """If a document needs citation grounding but its plan has no References/
-    Bibliography section, append one. The planning LLM (or the offline
-    fallback plan, which never includes one) may omit it, but the citation
-    pipeline always needs somewhere in the body to put the compiled,
-    cited-only list — without this, it would only ever be reachable by
-    asking for "the bibtex" conversationally, not as part of the document."""
-    if not do_citations:
-        return sections_plan
-    has_one = any(
-        "reference" in (s.get("title") or "").lower() or "bibliograph" in (s.get("title") or "").lower()
-        for s in sections_plan
-    )
-    if has_one:
-        return sections_plan
-    return sections_plan + [
-        {"title": "References", "word_count": 150, "notes": "List the sources cited in this document"}
-    ]
-
-
 def _execute_subsection_nodes(
     nodes: list[dict[str, Any]],
     document: Document,
@@ -4599,7 +4551,7 @@ def _execute_subsection_nodes(
             objective = str(meta.get("objective") or "") or None
             table_no = table_counter[0]
             table_counter[0] += 1
-            table_caption = f"Table {table_no}: {title}"
+            table_caption = f"Table {table_no}: {title}{_SAMPLE_DATA_LABEL}"
             sample_size = _infer_sample_size(document)
             # Reuse the dataset already computed for this objective by the
             # objective_findings parent (if any) so the table and the findings
@@ -4634,6 +4586,7 @@ def _execute_subsection_nodes(
                 f"{table_caption}\n"
                 f"[[BLOCK:{block_id}]]\n"
                 f"{_table_discussion_text(title, research_design, objective, table_dataset, has_hypotheses)}"
+                f"{_SYNTHETIC_DATA_NOTE}"
             )
         elif kind == "image" and meta.get("image_kind") == "process_flow":
             figure_no = figure_counter[0]
@@ -4738,7 +4691,7 @@ def _execute_subsection_nodes(
             else:
                 figure_no = figure_counter[0]
                 figure_counter[0] += 1
-                figure_caption = f"Figure {figure_no}: {title}"
+                figure_caption = f"Figure {figure_no}: {title}{_SAMPLE_DATA_LABEL}"
                 context_str = title + (f" — {objective}" if objective else "")
                 is_demographics_chart = meta.get("chart_type") == "demographics" or any(
                     k in title.lower() for k in ["demographic", "response rate", "respondent"]
@@ -4793,7 +4746,7 @@ def _execute_subsection_nodes(
                 chart_path = generate_chart(
                     series=ai_data["series"],
                     chart_type=ai_data["chart_type"],
-                    title=title,
+                    title=f"{title}{_SAMPLE_DATA_LABEL}",
                     x_labels=ai_data.get("x_labels") or None,
                     unit=ai_data.get("unit") or None,
                 )
@@ -4809,6 +4762,7 @@ def _execute_subsection_nodes(
                     f"{figure_caption}\n"
                     f"[[BLOCK:{block_id}]]\n"
                     f"{_chart_discussion_text(ai_data['series'], objective, title)}"
+                    f"{_SYNTHETIC_DATA_NOTE}"
                 )
         elif kind == "objective_findings":
             objective = str(meta.get("objective") or title)
@@ -4836,11 +4790,9 @@ def _execute_subsection_nodes(
                 table_child.setdefault("meta", {})["_precomputed_table_dataset"] = table_dataset
             grounding = _objective_findings_preview(table_dataset, research_design)
             quote_guidance = (
-                "Where it fits, ground the discussion with 1-2 short direct quotes presented as indented "
-                "block quotes, each attributed to an anonymized informant role consistent with this study "
-                "(e.g. \"(Informant 3, Operations Manager)\" or \"(Participant 5, Frontline Staff)\") rather "
-                "than a generic 'respondents said' paraphrase — but only invent quotes that are plausible "
-                "given the actual data/themes above, never quotes that contradict them.\n"
+                "Do not write direct quotes attributed to participants or informants. Where a quote would "
+                "help, insert a placeholder like [Insert participant quote on <theme>] for the author to "
+                "fill from their own interview data.\n"
                 if research_design in {"qualitative", "mixed"} else ""
             )
             try:
@@ -4852,12 +4804,16 @@ def _execute_subsection_nodes(
                         f"Research objective: {objective}\n"
                         f"Research design: {research_design}\n"
                         f"Parent chapter: {section_title}\n"
-                        + (f"Actual data collected for this objective: {grounding}\n" if grounding else "")
+                        + (
+                            f"Sample placeholder data for this objective (not real results): {grounding}\n"
+                            if grounding else ""
+                        )
                         + f"Current document context:\n{current_document_context[-3000:]}\n\n"
                         "Write 2-3 paragraphs presenting findings specifically for this objective. "
                         "Discuss patterns, trends, and how findings directly address the objective. "
-                        "Be specific and academically rigorous, and stay consistent with the actual data "
-                        "noted above where provided.\n"
+                        "Be specific and academically rigorous, and stay consistent with the sample data "
+                        "noted above where provided. Refer to those figures as sample figures the author "
+                        "will replace with their own results, never as findings of a completed study.\n"
                         f"{quote_guidance}"
                     ),
                     word_count=default_word_count,
@@ -4876,6 +4832,8 @@ def _execute_subsection_nodes(
                 )
                 if grounding:
                     body = f"{grounding} {body}"
+            if grounding:
+                body = f"{body}{_SYNTHETIC_DATA_NOTE}"
         else:
             lowered_title = title.lower()
             real_references = (
@@ -6084,118 +6042,8 @@ def _seeded_pick(seed_text: str, options: tuple[str, ...]) -> str:
     return options[sum(ord(c) for c in seed_text) % len(options)]
 
 
-# ── Synthetic citation pool (deterministic fallback / offline mode) ─────────
-# When _retrieve_citation_pool() returns nothing (no network access to Crossref/arXiv/
-# PubMed/Semantic Scholar) and no LLM key is configured, the dissertation is written
-# entirely from the deterministic templates below. Real dissertations cite sources
-# throughout the Literature Review and discuss findings against the literature in
-# Chapters 1, 4 and 5 — so the deterministic path needs its own citation pool, used
-# consistently for both the in-text "(Author, Year)" citations woven into the prose
-# and the final References back-matter section, so the two always match each other.
-_CITATION_SURNAMES: tuple[str, ...] = (
-    "Adeyemi", "Brown", "Chen", "Diallo", "Edwards", "Fernandez", "Garcia", "Hassan",
-    "Ibrahim", "Johansson", "Kumar", "Lindqvist", "Mensah", "Nguyen", "Okafor", "Patel",
-    "Quresh", "Rossi", "Santos", "Tanaka", "Umeh", "Varga", "Wang", "Yilmaz", "Zhao",
-)
-
-_CITATION_TITLE_TEMPLATES: tuple[str, ...] = (
-    "a review of {topic}",
-    "examining the determinants of {topic}",
-    "methodological approaches to studying {topic}",
-    "theoretical foundations of {topic}",
-    "contemporary perspectives on {topic}",
-    "{topic}: a systematic review",
-    "evaluating outcomes associated with {topic}",
-    "{topic} and organisational performance: an empirical study",
-    "towards a framework for understanding {topic}",
-    "{topic} in comparative perspective",
-)
-
-
-def _build_synthetic_citation_pool(topic: str, field_label: str, n: int = 14) -> list[dict[str, Any]]:
-    """Deterministic, topic-seeded set of plausible-looking (but fictitious) sources.
-
-    Same topic always yields the same pool, so in-text citations and the References
-    chapter stay consistent with each other across the whole document, even though
-    each subsection is generated independently and statelessly.
-    """
-    rng = random.Random(f"citation-pool|{topic}")
-    venues = (
-        f"Journal of {field_label} Research",
-        f"International Journal of {field_label} Studies",
-        f"{field_label} Quarterly",
-        f"Journal of Applied {field_label}",
-        f"Annual Review of {field_label}",
-        f"{field_label} Policy and Practice",
-        f"Journal of Contemporary {field_label}",
-    )
-    used: set[tuple[str, ...]] = set()
-    pool: list[dict[str, Any]] = []
-    for _ in range(n):
-        surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
-        attempts = 0
-        while surnames in used and attempts < 10:
-            surnames = tuple(rng.sample(_CITATION_SURNAMES, k=rng.choice([1, 1, 2])))
-            attempts += 1
-        used.add(surnames)
-        initials = ["".join(rng.sample("ABCDEFGHJKLMNPQRSTUVWXYZ", k=rng.choice([1, 2]))) for _ in surnames]
-        year = rng.randint(2015, 2024)
-        title = rng.choice(_CITATION_TITLE_TEMPLATES).format(topic=topic)
-        pages_start = rng.randint(1, 210)
-        pool.append({
-            "surnames": surnames,
-            "initials": initials,
-            "year": year,
-            "title": title[:1].upper() + title[1:],
-            "venue": rng.choice(venues),
-            "volume": rng.randint(4, 22),
-            "issue": rng.randint(1, 4),
-            "pages": f"{pages_start}-{pages_start + rng.randint(8, 26)}",
-        })
-    return pool
-
-
-def _citation_paren(entry: dict[str, Any]) -> str:
-    """'(Surname, Year)' or '(Surname1 & Surname2, Year)' parenthetical in-text citation."""
-    surnames = entry["surnames"]
-    if len(surnames) == 1:
-        return f"({surnames[0]}, {entry['year']})"
-    return f"({surnames[0]} & {surnames[1]}, {entry['year']})"
-
-
-def _citation_narrative(entry: dict[str, Any]) -> str:
-    """'Surname (Year)' or 'Surname1 and Surname2 (Year)' narrative in-text citation."""
-    surnames = entry["surnames"]
-    if len(surnames) == 1:
-        return f"{surnames[0]} ({entry['year']})"
-    return f"{surnames[0]} and {surnames[1]} ({entry['year']})"
-
-
-def _citation_apa_entry(entry: dict[str, Any]) -> str:
-    names = []
-    for surname, initials in zip(entry["surnames"], entry["initials"]):
-        names.append(f"{surname}, {'. '.join(initials)}.")
-    author_str = names[0] if len(names) == 1 else " & ".join(names)
-    return (
-        f"{author_str} ({entry['year']}). {entry['title']}. {entry['venue']}, "
-        f"{entry['volume']}({entry['issue']}), {entry['pages']}."
-    )
-
-
-def _format_synthetic_reference_list(pool: list[dict[str, Any]]) -> str:
-    """APA-style reference list built from the same pool used for in-text citations."""
-    entries = sorted({_citation_apa_entry(e) for e in pool})
-    return "\n\n".join(entries)
-
-
-def _pick_citations(pool: list[dict[str, Any]], seed_text: str, k: int = 1) -> list[dict[str, Any]]:
-    """Deterministically pick k distinct entries from pool based on seed_text, so the
-    same subsection always cites the same sources but different subsections draw from
-    different parts of the pool."""
-    if not pool:
-        return []
-    start = sum(ord(c) for c in seed_text) % len(pool)
-    return [pool[(start + i) % len(pool)] for i in range(min(k, len(pool)))]
+# Fallback prose never invents sources: it marks where a real citation belongs.
+_CITATION_NEEDED = "[citation needed]"
 
 
 # Background of the Study — multiple structurally distinct openings (trend-led,
@@ -7438,7 +7286,6 @@ def _fallback_subsection_body(
     _field_terms = _topic_terms(topic, 4) or [topic]
     _field_term = re.sub(r"^(a|an|the)\s+", "", max(_field_terms, key=len), flags=re.IGNORECASE)
     field_label = _truncate_label(_field_term, 40)
-    citation_pool = _build_synthetic_citation_pool(topic, field_label)
 
     # ── Preliminary pages ───────────────────────────────────────────────────
     if "abstract" in sub_lower:
@@ -7632,7 +7479,7 @@ def _fallback_subsection_body(
                 _BACKGROUND_VARIANTS_SYSTEM_BUILD if is_system_build else _BACKGROUND_VARIANTS_TECHNICAL
             )
         )
-        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|background", k=1)[0])
+        cite1 = _CITATION_NEEDED
         return _seeded_pick(topic, pool).format(topic=topic, cite1=cite1)
 
     if "problem" in sub_lower and ("chapter 1" in sec or "introduction" in sec):
@@ -7641,7 +7488,7 @@ def _fallback_subsection_body(
                 _PROBLEM_VARIANTS_SYSTEM_BUILD if is_system_build else _PROBLEM_VARIANTS_TECHNICAL
             )
         )
-        cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|problem", k=1)[0])
+        cite1 = _CITATION_NEEDED
         return _seeded_pick(f"{topic}|problem", pool).format(topic=topic, cite1=cite1)
 
     if "significance" in sub_lower:
@@ -7792,7 +7639,7 @@ def _fallback_subsection_body(
                 "current knowledge that justify the present inquiry."
             )
         if any(k in sub_lower for k in ["conceptual", "core concept", "dimension", "relationships between variables", "definition and conceptualisation"]):
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conceptual", k=1)[0])
+            c1 = _CITATION_NEEDED
             return (
                 f"The conceptual review clarifies the key terms and constructs underpinning {topic}, establishing a shared "
                 "vocabulary for the analysis that follows. Each construct is defined with reference to its dominant usage "
@@ -7811,8 +7658,7 @@ def _fallback_subsection_body(
             # feedback control theory and sensor models).
             named_theory = _select_named_theory(topic, "", objectives)
             if named_theory:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
 
                 def _join_items(items: list[str]) -> str:
                     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + f", and {items[-1]}"
@@ -7834,8 +7680,7 @@ def _fallback_subsection_body(
                     "study."
                 )
             if is_doctrinal:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
                 return (
                     f"This section presents the theoretical and doctrinal foundations relevant to {topic}. Several "
                     "schools of thought offer complementary lenses for interpreting the sources and arguments under "
@@ -7850,8 +7695,7 @@ def _fallback_subsection_body(
                     "specific doctrine, text, or argument examined here."
                 )
             if survey_based:
-                c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-                c1, c2 = _citation_paren(c1), _citation_paren(c2)
+                c1 = c2 = _CITATION_NEEDED
                 return (
                     f"This section presents the theoretical foundations relevant to {topic}. Several theories offer "
                     "complementary lenses for understanding the relationships under investigation, including classical "
@@ -7864,8 +7708,7 @@ def _fallback_subsection_body(
                     "applicable to this study is justified on the grounds of its explanatory power for the specific "
                     "relationships and context examined here."
                 )
-            c1, c2 = _pick_citations(citation_pool, f"{topic}|theory", k=2)
-            c1, c2 = _citation_paren(c1), _citation_paren(c2)
+            c1 = c2 = _CITATION_NEEDED
             return (
                 f"This section presents the theoretical and engineering foundations relevant to {topic}. Several "
                 "established frameworks offer complementary lenses for understanding the system under investigation, "
@@ -7881,7 +7724,7 @@ def _fallback_subsection_body(
                 "characteristics examined here."
             )
         if "global evidence" in sub_lower or ("empirical" in sub_lower and "global" in sub_lower):
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|global", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Scholarship and authoritative sources on {topic} reveal broadly consistent lines of reasoning "
@@ -7904,7 +7747,7 @@ def _fallback_subsection_body(
                 "this study seeks to generate."
             )
         if "developed econom" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developed", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Scholarship from well-established legal, philosophical, or institutional systems demonstrates "
@@ -7925,7 +7768,7 @@ def _fallback_subsection_body(
                 "guarantee favourable results."
             )
         if "emerging econom" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|emerging", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Sources from transitional or reforming systems provide important comparative material on "
@@ -7946,7 +7789,7 @@ def _fallback_subsection_body(
                 "and capacity-building interventions have been implemented."
             )
         if "developing econom" in sub_lower or "africa" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|developing", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Sources situated in developing or African legal, institutional, and intellectual contexts "
@@ -7969,7 +7812,7 @@ def _fallback_subsection_body(
                 "context and underscoring the importance of locally grounded evidence."
             )
         if "sectoral" in sub_lower or "industry" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|sectoral", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Treatment of {topic} is not uniform across sub-fields, branches, or schools of thought, but "
@@ -7989,7 +7832,7 @@ def _fallback_subsection_body(
                 "the selection of an appropriate analytical frame for interpreting the primary data collected."
             )
         if "synthesis" in sub_lower or "critical appraisal" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|synthesis", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Synthesising the sources reviewed above, the scholarship on {topic} is consistent in its "
@@ -8018,10 +7861,10 @@ def _fallback_subsection_body(
                     _EMPIRICAL_REVIEW_VARIANTS_SYSTEM_BUILD if is_system_build else _EMPIRICAL_REVIEW_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|{subsection}", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(subsection, pool).format(topic=topic, cite1=cite1)
         if "research gap" in sub_lower or "gap" in sub_lower:
-            c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|gap", k=1)[0])
+            c1 = _CITATION_NEEDED
             if is_doctrinal:
                 return (
                     f"Despite the volume of scholarship on {topic}, this review identifies a clear and persistent "
@@ -8656,7 +8499,7 @@ def _fallback_subsection_body(
             )
         if ("presentation" in sub_lower or "finding" in sub_lower) and "discussion" not in sub_lower:
             if is_doctrinal:
-                c1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|findings", k=1)[0])
+                c1 = _CITATION_NEEDED
                 return (
                     f"Close analysis of the source corpus reveals several recurring lines of argument relating to "
                     f"{topic}. Authoritative sources consistently converge on the core principles at stake, with "
@@ -8737,7 +8580,7 @@ def _fallback_subsection_body(
                     _DISCUSSION_VARIANTS_SYSTEM_BUILD if is_system_build else _DISCUSSION_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|discussion", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(f"{topic}|discussion", pool).format(topic=topic, cite1=cite1)
         if is_doctrinal:
             return _seeded_pick(subsection, _OBJECTIVE_FINDINGS_VARIANTS_DOCTRINAL).format(topic=topic)
@@ -8818,7 +8661,7 @@ def _fallback_subsection_body(
                     _CONCLUSION_VARIANTS_SYSTEM_BUILD if is_system_build else _CONCLUSION_VARIANTS_TECHNICAL
                 )
             )
-            cite1 = _citation_paren(_pick_citations(citation_pool, f"{topic}|conclusion", k=1)[0])
+            cite1 = _CITATION_NEEDED
             return _seeded_pick(f"{topic}|conclusion", pool).format(topic=topic, cite1=cite1)
         if "recommendation" in sub_lower:
             pool = _RECOMMENDATION_VARIANTS_DOCTRINAL if is_doctrinal else (
@@ -8921,12 +8764,9 @@ def _fallback_subsection_body(
     # ── References / Appendices ─────────────────────────────────────────────
     if "reference" in sub_lower:
         return (
-            "Automatic source retrieval failed for this document (e.g. no network access), so the entries below "
-            "are SIMULATED, illustrative references rather than verified literature — they are consistent with "
-            "the in-text citations used throughout this dissertation (same authors, years, and titles), but they "
-            f"do not correspond to real publications and MUST be replaced with verified literature on {topic} "
-            "before submission.\n\n"
-            f"{_format_synthetic_reference_list(citation_pool)}"
+            "Automatic source retrieval failed for this document (e.g. no network access), so no "
+            "references could be added. Search for sources on this topic, replace each [citation needed] "
+            "marker with a real citation, and list those sources here."
         )
     if "appendix" in sub_lower or "appendices" in sub_lower:
         if is_doctrinal:
@@ -10878,12 +10718,11 @@ def run_agent(
             reply, updated = _run_copilot_loop(document, generation_message, plan, target_section, topic)
         elif intent == "write_section":
             reply, updated = _write_section(document, target_section, topic, generation_message, plan)
-        elif intent == "write_dissertation":
-            reply, updated = _write_dissertation(document, topic, generation_message, plan)
-        elif intent in ("write_document", "write_article", "write_report",
+        elif intent in ("write_dissertation", "write_document", "write_article", "write_report",
                         "write_assignment", "write_presentation", "write_spreadsheet"):
-            # All non-dissertation document writing funnels through the unified AI planner
-            reply, updated = _plan_and_write_document(document, topic, generation_message, plan)
+            # DAL Word doesn't write whole documents in one go; it sets up an outline
+            # and helps section by section.
+            reply, updated = _outline_instead_of_full_draft(document, topic, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "add_chart":
@@ -11094,205 +10933,48 @@ def _address_comments(document: Document, topic: str, plan: list) -> tuple[str, 
     return "Could not generate revisions for the found comments. Please try again.", False
 
 
-def _auto_humanise_text(text: str, topic: str) -> tuple[str, bool]:
-    """Detect AI-sounding sentences in freshly generated prose and rewrite them to read
-    human-written. Used as the first pass on every section/chapter the agent writes,
-    BEFORE citation grounding ever sees the text — so in-text citation markers land in
-    the final wording instead of being shuffled or dropped by a later humanising rewrite.
-
-    Always rewrites with the rule-based phrase/structure substitution engine — no LLM
-    call is made here, so behaviour is deterministic and has no network dependency.
-    Returns the text unchanged (second element always False, kept for call-site
-    compatibility) if nothing reads as AI-flagged, or if the rewrite degenerates.
-    """
-    from .ai_detector import detect_ai_content, rule_based_humanise
-
-    plain = (text or "").strip()
-    if not plain:
-        return text, False
-
-    try:
-        detection = detect_ai_content(plain)
-    except Exception as exc:
-        logger.info("_auto_humanise_text: detection failed (%s), leaving text untouched.", exc)
-        return text, False
-
-    flagged = [s for s in detection.get("sentences", []) if s.get("label") != "likely_human"]
-    if not flagged:
-        return text, False
-
-    new_text = rule_based_humanise(plain)
-
-    new_text = (new_text or "").strip()
-    if new_text and new_text != plain:
-        return new_text, False
-    return text, False
-
-
 def _humanise_ai_sections(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect AI-generated sentences per section and rewrite them to sound human-written."""
+    """Report which passages read as generic or AI-like, without rewriting them.
+
+    DAL Word does not disguise text to get past AI detectors. The detector is a
+    self-check: it points the writer at passages to revise in their own voice.
+    """
     from .ai_detector import detect_ai_content
 
     sections = (document.content or {}).get("sections", [])
-    if not sections:
-        _all_done(plan)
+    full_text = "\n\n".join(
+        (s.get("content") or "").strip() for s in sections if (s.get("content") or "").strip()
+    )
+    _all_done(plan)
+    if not full_text:
         return "The document has no sections yet.", False
 
-    _done(plan, 0)  # Running AI detection
+    try:
+        result = detect_ai_content(full_text)
+    except Exception as exc:
+        logger.warning("_humanise_ai_sections: detection failed: %s", exc)
+        return "AI detection failed on this document. Please try again.", False
 
-    humanised = 0
-    llm_used = False
-    for i, section in enumerate(sections):
-        content = (section.get("content") or "").strip()
-        if not content:
-            continue
-
-        _done(plan, 1)  # Identifying AI passages
-
-        new_content, used_llm = _auto_humanise_text(content, topic or document.title)
-        if used_llm:
-            llm_used = True
-
-        if new_content != content:
-            sections[i]["content"] = new_content
-            humanised += 1
-
-        _done(plan, 2)  # Rewriting with human voice
-
-    _done(plan, 3)  # Varying sentence structure
-    _all_done(plan)
-
-    if humanised:
-        document.content["sections"] = sections
-        _save(document, "humanise-ai-sections")
-        # Compute after score for the reply
-        try:
-            full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
-            after_result = detect_ai_content(full_text)
-            after_pct = after_result.get("overall_ai_percentage", 0)
-            after_verdict = after_result.get("verdict", "")
-        except Exception:
-            after_pct = None
-            after_verdict = ""
-
-        method = "AI model" if llm_used else "rule-based phrase substitution"
-        after_msg = f" AI score dropped to **{after_pct}%** ({after_verdict.replace('_',' ')})." if after_pct is not None else ""
-        return (
-            f"Humanised {humanised} section(s) using {method} — replaced AI clichés, "
-            f"varied sentence structure, and added authentic voice.{after_msg} "
-            "Click **Detect AI** to see the highlighted improvement.",
-            True,
-        )
-
+    pct = result.get("overall_ai_percentage", 0)
+    flagged = [s for s in result.get("sentences", []) if s.get("label") != "likely_human"]
     return (
-        "No strongly AI-detected passages were found — your document already reads naturally. "
-        "Try running **Detect AI** first to scan for flagged sentences.",
+        "DAL Word doesn't rewrite text to get past AI detectors. "
+        f"About **{pct}%** of this document reads as generic or AI-like "
+        f"({len(flagged)} sentence(s) flagged). Click **Detect AI** to see them highlighted, "
+        "then revise them in your own words: add your own reasoning, specific evidence, "
+        "and citations. You can also ask me for feedback on a specific section.",
         False,
     )
 
 
 def _reduce_plagiarism_similarity(document: Document, topic: str, plan: list) -> tuple[str, bool]:
-    """Detect passages overlapping with other workspace documents (and, unless disabled, the open web) and rewrite them to cut similarity."""
-    from .ai_detector import _split_sentences
-    from .plagiarism_detector import check_plagiarism, reduce_similarity
-    from .web_plagiarism import check_external_plagiarism, external_check_enabled
-
-    sections = (document.content or {}).get("sections", [])
-    if not sections:
-        _all_done(plan)
-        return "The document has no sections yet.", False
-
-    source_docs = []
-    for other in Document.objects.filter(user=document.user).exclude(pk=document.pk).only("id", "title", "content"):
-        other_content = other.content or {}
-        parts = [
-            (s.get("content") or "").strip()
-            for s in other_content.get("sections", [])
-            if (s.get("content") or "").strip()
-        ]
-        other_text = "\n\n".join(parts)
-        if other_text.strip():
-            source_docs.append((other.id, other.title or f"Document {other.id}", other_text))
-
-    use_external = external_check_enabled()
-
-    _done(plan, 0)  # Scanning document for matched/similar passages
-
-    if not source_docs and not use_external:
-        _all_done(plan)
-        return (
-            "No other documents exist in the workspace to compare against, so there is nothing to "
-            "reduce — plagiarism similarity is only measured against other workspace documents.",
-            False,
-        )
-
-    _done(plan, 1)  # Comparing against other documents and the open web
-
-    # Run the (network-bound) web search exactly once for the whole document
-    # rather than per section/per retry, so reducing similarity stays fast.
-    external_hit_texts: set[str] = set()
-    if use_external:
-        full_text_before = "\n\n".join(
-            (s.get("content") or "").strip() for s in sections if (s.get("content") or "").strip()
-        )
-        external = check_external_plagiarism(full_text_before)
-        external_hit_texts = {h["text"] for h in external.get("hits", [])}
-
-    def _flagged_for(content: str) -> set[str]:
-        detection = check_plagiarism(content, source_docs)
-        flagged = {s["text"] for s in detection.get("sentences", []) if s.get("label") != "original"}
-        flagged |= {s.strip() for s in _split_sentences(content) if s.strip() in external_hit_texts}
-        return flagged
-
-    reduced = 0
-    for i, section in enumerate(sections):
-        content = (section.get("content") or "").strip()
-        if not content:
-            continue
-
-        flagged = _flagged_for(content)
-        if not flagged:
-            continue
-
-        new_content = reduce_similarity(content, flagged, seed=f"{document.id}:{i}")
-
-        # Re-check; if anything is still flagged, retry once with a fresh seed
-        # (mirrors the before/after verification pattern used by AI-humanisation).
-        still_flagged = _flagged_for(new_content)
-        if still_flagged:
-            retry_content = reduce_similarity(new_content, still_flagged, seed=f"{document.id}:{i}:retry")
-            if retry_content != new_content:
-                new_content = retry_content
-
-        if new_content.strip() != content:
-            sections[i]["content"] = new_content.strip()
-            reduced += 1
-
-    _done(plan, 2)  # Rewriting flagged passages to reduce textual overlap
-    _done(plan, 3)  # Re-checking similarity after rewrite
+    """Point the writer at overlapping passages instead of disguising them."""
     _all_done(plan)
-
-    if reduced:
-        document.content["sections"] = sections
-        _save(document, "reduce-plagiarism-similarity")
-
-        full_text = "\n\n".join(s.get("content", "") for s in sections if s.get("content"))
-        after_result = check_plagiarism(full_text, source_docs)
-        after_pct = after_result.get("overall_similarity_percentage", 0)
-        after_verdict = after_result.get("verdict", "")
-
-        return (
-            f"Rewrote {reduced} section(s) to reduce overlap with other workspace documents"
-            f"{' and the open web' if use_external else ''}. "
-            f"Similarity dropped to **{after_pct}%** ({after_verdict.replace('_', ' ')}). "
-            "Click **Check Plagiarism** to see the updated highlights.",
-            True,
-        )
-
     return (
-        "No matched or similar passages were found against other workspace documents"
-        f"{' or the open web' if use_external else ''} — your document "
-        "already reads as original. Try running **Check Plagiarism** first to scan for flagged sentences.",
+        "DAL Word doesn't paraphrase text to lower similarity scores. "
+        "Click **Check Plagiarism** to see which passages overlap with other sources, then for each one "
+        "either quote it and cite the source, or rewrite the idea in your own words and still cite it. "
+        "Ask me to find a proper reference for any passage and I'll add the citation.",
         False,
     )
 
@@ -12292,7 +11974,6 @@ def _write_section(
 
         # Humanise before any citation grounding so in-text citation markers land in
         # the wording that actually ships, not in a draft a later rewrite will reshuffle.
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         if is_lit_review:
             try:
@@ -12344,7 +12025,6 @@ def _write_section(
             sample_size=_infer_sample_size(document),
         )
     content = _sanitize_body(content)
-    content, _ = _auto_humanise_text(content, topic)
     _done(plan, 2)
 
     if idx is not None:
@@ -12460,7 +12140,6 @@ def _rewrite_chapter_batch(
             citation_pool=citation_pool,
         )
 
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
 
         if chapter["number"] == 2:
             try:
@@ -12768,364 +12447,6 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
     }
 
 
-def writing_plan_to_flat_steps(writing_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """Convert an `_llm_writing_plan` result into the flat todo-list format the
-    frontend renders (mirrors `llm_chapters_to_flat_steps` for dissertations).
-
-    Mirrors the do_citations/do_review gating in `_plan_and_write_document` so the
-    preview shown before writing starts has the same shape as the live run."""
-    needs_todo = writing_plan.get("needs_todo", True)
-    do_citations = bool(needs_todo and writing_plan.get("needs_citations", True))
-    do_review = bool(needs_todo)
-    sections_plan = _ensure_references_section(writing_plan.get("sections", []), do_citations)
-
-    # No upfront "Researching sources" step — each section is written plain
-    # first, then grounded against literature scoped to what it discusses (see
-    # _plan_and_write_document), so the first real step is always "Writing X".
-    steps: list[dict[str, Any]] = [{"step": "Planning your document", "status": "done"}]
-
-    first = True
-    for section in sections_plan:
-        title = section.get("title", "Section")
-        steps.append({
-            "step": f"Writing {title}",
-            "status": "in_progress" if first else "pending",
-        })
-        if do_review:
-            steps.append({"step": f"Reviewing {title}", "status": "pending"})
-        first = False
-    return steps
-
-
-def _plan_and_write_document(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    """Unified flexible document writer.
-
-    The LLM reads the user's raw instruction and decides:
-      - what kind of document it is
-      - how many sections and what to write in each
-      - whether to show a detailed to-do list (for long pieces)
-    No fixed templates. No pre-defined document types.
-
-    Long pieces (needs_todo) get the same research-grounding and self-review
-    pass `_write_dissertation` already runs per chapter: real citations are
-    retrieved and repaired when the document needs them, and each section is
-    auto-reviewed and tightened, with what changed reported in the reply.
-    Short pieces are unaffected — no extra retrieval, review, or progress
-    writes happen when needs_todo is False.
-    """
-    plan.clear()
-    plan.append({"step": "Planning your document", "status": "pending"})
-
-    doc_context = _full_context_for_generation(document)
-
-    # Parse user-provided guidelines to pass into every section
-    user_guidelines = _parse_user_guidelines(instruction)
-    _style_note = (
-        f"Citation style: {user_guidelines['citation_style']}. "
-        f"Academic level: {user_guidelines['academic_level']}. "
-    )
-    if user_guidelines.get("focus_notes"):
-        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
-
-    # ── Step 1: Let the LLM design the entire plan ────────────────────────────
-    # Reuse the plan generated by DocumentPlanView (shown to the user as a
-    # todo list before writing started) instead of calling the LLM twice.
-    stored_plan = None
-    try:
-        stored_plan = (document.content or {}).get("_document_plan_sections")
-    except Exception:
-        pass
-
-    if stored_plan and isinstance(stored_plan, dict) and stored_plan.get("sections"):
-        writing_plan = stored_plan
-        logger.info("_plan_and_write_document: using pre-generated plan (%d sections)", len(stored_plan["sections"]))
-    else:
-        writing_plan = _llm_writing_plan(instruction, topic, doc_context)
-
-    doc_title = writing_plan["document_title"]
-    doc_type = writing_plan["document_type"]
-    needs_todo = writing_plan["needs_todo"]
-    sections_plan = writing_plan["sections"]
-    estimated_words = writing_plan["estimated_words"]
-
-    needs_citations = writing_plan.get("needs_citations")
-    if needs_citations is None:
-        # Backward compat: a plan cached by DocumentPlanView before this field
-        # existed won't have the key — fall back to a document_type heuristic.
-        needs_citations = doc_type in {
-            "essay", "report", "article", "assignment", "proposal", "case_study", "lab_report", "review",
-        }
-    do_citations = bool(needs_todo and needs_citations)
-    do_review = bool(needs_todo)
-    sections_plan = _ensure_references_section(sections_plan, do_citations)
-
-    logger.info(
-        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s do_citations=%s sections=%d level=%s style=%s",
-        doc_type, estimated_words, needs_todo, do_citations, len(sections_plan),
-        user_guidelines["academic_level"], user_guidelines["citation_style"],
-    )
-
-    # Build the to-do list — always show section steps so the user sees progress
-    for item in sections_plan:
-        plan.append({"step": f"Writing {item['title']}", "status": "pending"})
-        if do_review:
-            plan.append({"step": f"Reviewing {item['title']}", "status": "pending"})
-    _done(plan, 0)
-
-    design = _research_design(instruction, topic, document)
-    sections: list[dict[str, Any]] = []
-    review_notes: list[str] = []
-
-    # ── Citation accumulator ──────────────────────────────────────────────────
-    # Starts empty. Each section is written PLAIN (no pre-fetched pool, no
-    # pressure to cite from a fixed list), then — once its own text actually
-    # exists — grounded against literature retrieved specifically for what THAT
-    # section discusses (see ground_section_text in research_layer.py). Sources
-    # it actually ends up citing are added here, so by the time the loop reaches
-    # the References section, this holds the real, section-targeted bibliography
-    # for the whole document instead of one generic topic-level pool fetched
-    # before anything was written.
-    citation_pool: list[Any] = []
-    _cited_keys: set[str] = set()
-
-    def _content_snapshot() -> dict[str, Any]:
-        snapshot: dict[str, Any] = {
-            "topic": topic,
-            "sections": sections,
-            "document_type": doc_type,
-            "document_title": doc_title,
-        }
-        if do_citations:
-            snapshot["_research_sources_count"] = len(citation_pool)
-            from dataclasses import asdict
-
-            cited_pool, bibtex_text = _compute_bibliography(
-                citation_pool, sections, user_guidelines["citation_style"],
-            )
-            snapshot["bibliography"] = [asdict(p) for p in cited_pool]
-            snapshot["bibliography_bibtex"] = bibtex_text
-        return snapshot
-
-    def _broadcast_activity(label: str) -> None:
-        if not needs_todo:
-            return
-        try:
-            content = _content_snapshot()
-            content["_current_activity"] = label
-            document.content = content
-            document.save(update_fields=["content", "updated_at"])
-        except Exception:
-            pass
-
-    plan_cursor = 1
-
-    # ── Step 2: Write (and, for long pieces, review) each section ────────────
-    for item in sections_plan:
-        title = item["title"]
-        wc = item["word_count"]
-        notes = item.get("notes", "")
-        section_guide = _subsection_guidelines(title, topic, design)
-        context_so_far = _full_context_for_generation(document)
-
-        lowered_title = title.lower()
-        is_reference_section = do_citations and ("reference" in lowered_title or "bibliograph" in lowered_title)
-
-        if is_reference_section:
-            # ── References/Bibliography: citation grounding only runs after
-            # every other section has been written and humanised (below), so
-            # citation_pool is still empty here. Leave a placeholder; it's
-            # overwritten with the real, verified list once grounding has run.
-            _broadcast_activity(f"Writing {title}")
-            text = "References will be compiled once the rest of the document has been written."
-            _done(plan, plan_cursor)
-            plan_cursor += 1
-            if do_review:
-                _done(plan, plan_cursor)
-                plan_cursor += 1
-        else:
-            _broadcast_activity(f"Writing {title}")
-            try:
-                text = generate_section_content(
-                    title=title,
-                    topic=topic,
-                    context=(
-                        f"{section_guide}\n\n"
-                        f"Document type: {doc_type}\n"
-                        f"Full user request: {instruction[:600]}\n"
-                        f"Research design: {design}\n"
-                        f"Writing note for this section: {notes}\n"
-                        f"GUIDELINES TO FOLLOW: {_style_note}\n\n"
-                        f"Document written so far:\n{context_so_far[-3500:]}"
-                    ),
-                    word_count=wc,
-                )
-                if _looks_like_meta_commentary(text):
-                    raise ValueError("Generated body reads like document meta-commentary, not section prose.")
-            except Exception:
-                text = _fallback_subsection_text(
-                    topic, doc_type.capitalize(), title,
-                    objectives=(document.content or {}).get("research_objectives"),
-                    target_words=wc,
-                    research_design=design,
-                    sample_size=_infer_sample_size(document),
-                    document=document,
-                )
-
-            _done(plan, plan_cursor)
-            plan_cursor += 1
-
-            if do_review:
-                _broadcast_activity(f"Reviewing {title}")
-                text, section_review_notes = _review_and_revise_chapter(
-                    title, text, [], topic, design, [],
-                )
-                review_notes.extend(section_review_notes)
-                _done(plan, plan_cursor)
-                plan_cursor += 1
-
-            # Humanise before any citation grounding ever sees this section —
-            # grounding is deferred to a pass after every section is written
-            # (below), so in-text citation markers land in the final wording
-            # instead of being shuffled or dropped by a later humanising rewrite.
-            text, _ = _auto_humanise_text(text, topic)
-
-        sections.append({"title": title, "content": text})
-        document.content = _content_snapshot()
-        _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
-
-    # ── Citation grounding ────────────────────────────────────────────────────
-    # Now that every section has been written, reviewed, and humanised, ground
-    # each one (other than the References/Bibliography placeholder above)
-    # against literature retrieved specifically for what THAT section
-    # discusses, accumulating whatever it actually cites into the document-wide
-    # pool. Deferred until the whole document exists so the humanising pass
-    # above never gets a chance to reshuffle or drop an in-text citation marker.
-    if do_citations:
-        for section in sections:
-            lowered = (section.get("title") or "").lower()
-            if "reference" in lowered or "bibliograph" in lowered:
-                continue
-            section_text = (section.get("content") or "").strip()
-            if not section_text:
-                continue
-            _broadcast_activity(f"Finding sources for {section['title']}")
-            try:
-                from .research_layer import ground_section_text
-
-                grounded_text, section_sources = ground_section_text(
-                    section["title"], section_text, topic, document.id, style=user_guidelines["citation_style"],
-                )
-                section["content"] = grounded_text
-                for src in section_sources:
-                    key = (src.doi or src.title or "").lower()
-                    if key and key not in _cited_keys:
-                        _cited_keys.add(key)
-                        citation_pool.append(src)
-            except Exception as exc:
-                logger.warning("_plan_and_write_document: citation grounding failed for '%s': %s", section["title"], exc)
-
-        # ── References/Bibliography: now built directly from verified papers
-        # actually cited above — never asked of the LLM, so there is nothing
-        # here for it to hallucinate.
-        full_text_so_far = "\n\n".join(
-            s.get("content", "") or "" for s in sections
-            if "reference" not in (s.get("title") or "").lower()
-            and "bibliograph" not in (s.get("title") or "").lower()
-        )
-        for section in sections:
-            lowered = (section.get("title") or "").lower()
-            if "reference" not in lowered and "bibliograph" not in lowered:
-                continue
-            real_references = _cited_reference_list(citation_pool, full_text_so_far, user_guidelines["citation_style"])
-            if real_references:
-                section["content"] = (
-                    "The following references were retrieved from open scholarly databases "
-                    "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
-                    "to this study topic:\n\n" + real_references
-                )
-            elif citation_pool:
-                # Sources were retrieved but none matched an in-text citation closely
-                # enough — never leave the "will be compiled" placeholder in a
-                # finished document.
-                section["content"] = (
-                    "Sources were retrieved from open scholarly databases (Crossref, arXiv, "
-                    "PubMed, Semantic Scholar) but none could be confidently matched to an "
-                    "in-text citation in this document — add references manually before submission."
-                )
-            else:
-                section["content"] = (
-                    "No verified external sources could be retrieved (e.g. no network access) — "
-                    "add references manually before submission."
-                )
-
-        document.content = _content_snapshot()
-        _save(document, "doc-step:grounding-citations")
-
-    document.content = _content_snapshot()
-    document.title = doc_title
-    document.save(update_fields=["content", "title", "updated_at"])
-    DocumentVersion.objects.create(
-        document=document,
-        content=document.content,
-        note=f"{doc_type}-generated",
-    )
-    _all_done(plan)
-
-    total_words = sum(len(s["content"].split()) for s in sections)
-    todo_note = " A writing plan was created and each section written in sequence." if needs_todo else ""
-    citation_note = ""
-    if do_citations:
-        cited_count = len((document.content or {}).get("bibliography") or [])
-        if cited_count:
-            citation_note = (
-                f" {cited_count} of {len(citation_pool)} retrieved sources were actually cited in-text; "
-                "they were compiled into the References list and a BibTeX library "
-                '(ask for "the bibtex" to get it).'
-            )
-        elif citation_pool:
-            citation_note = (
-                f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
-                "Semantic Scholar, but none could be confidently matched to an in-text citation — "
-                "check citations manually before submission."
-            )
-        else:
-            citation_note = (
-                " No verified external sources could be retrieved (e.g. no network access) — "
-                "in-text citations should be checked manually before submission."
-            )
-    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
-    reply = (
-        f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words."
-        f"{todo_note}{citation_note}{review_note}"
-    )
-    return reply, True
-
-
-# Legacy thin wrappers so old LLM classifications still route correctly
-def _write_ai_document(
-    document: Document,
-    topic: str,
-    instruction: str,
-    doc_type: str,
-    plan: list,
-) -> tuple[str, bool]:
-    return _plan_and_write_document(document, topic, instruction or topic, plan)
-
-
-def _write_article(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    return _plan_and_write_document(document, topic, instruction or f"Write an academic article on {topic}", plan)
-
-
 def _review_and_revise_chapter(
     chapter_title: str,
     chapter_text: str,
@@ -13203,282 +12524,28 @@ def _review_and_revise_chapter(
     return text, notes
 
 
-def _write_dissertation(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    """Write a full dissertation.
-
-    Flow:
-    1. Call the LLM to generate a tailored chapter/section plan (no hardcoded template).
-    2. Convert that plan into the internal blueprint format.
-    3. Walk each chapter and subsection, writing content via LLM.
-    4. Persist progress after every subsection so the frontend polling sees live updates.
-    """
-    plan.clear()
-    plan.append({"step": "Creating dissertation to-do list", "status": "pending"})
-
-    design = _research_design(instruction, topic, document)
-
-    # ── Parse user-provided guidelines (style, level, word count, notes) ─
-    user_guidelines = _parse_user_guidelines(instruction)
-    logger.info(
-        "_write_dissertation: guidelines — level=%s style=%s target_words=%s",
-        user_guidelines["academic_level"],
-        user_guidelines["citation_style"],
-        user_guidelines.get("target_words"),
+def _outline_instead_of_full_draft(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Answer a "write the whole thing" request with an outline to work through."""
+    note = (
+        "DAL Word doesn't write whole dissertations or assignments for you. "
+        "It helps you plan, research and write your own, section by section."
     )
-
-    # ── Step 0: Intent parsing via PlannerAgent ───────────────────────────
-    from .planner import PlannerAgent as _PlannerAgent
-    _planner = _PlannerAgent()
-    objectives_early = _extract_objectives(document, topic)
-    intent_spec = _planner.parse_intent(
-        message=instruction,
-        topic=topic,
-        research_design=design,
-        objectives=objectives_early,
-        intent="write_dissertation",
+    has_content = any(
+        (s.get("content") or "").strip() for s in (document.content or {}).get("sections", [])
     )
-    logger.info(
-        "_write_dissertation: IntentSpec parsed — topic=%s design=%s objectives=%d",
-        intent_spec.topic[:60], intent_spec.research_design, len(intent_spec.objectives),
+    if has_content or not (topic or "").strip():
+        _all_done(plan)
+        return (
+            f"{note} Pick a section and ask me to suggest sources, give feedback, "
+            "or help you draft a paragraph from your own notes.",
+            False,
+        )
+    reply, updated = _create_outline(document, topic, plan)
+    return (
+        f"{note} I've set up an outline to start from:\n\n{reply}\n\n"
+        "Next, ask me to find sources for a chapter or to help you draft a section.",
+        updated,
     )
-
-    # ── Step 1: Generate the full plan via LLM ────────────────────────────
-    # Check if a plan was already generated by the DissertationPlanView and cached
-    stored_chapters: list | None = None
-    try:
-        stored_chapters = (document.content or {}).get("_dissertation_plan_chapters")
-    except Exception:
-        pass
-
-    if stored_chapters and isinstance(stored_chapters, list) and len(stored_chapters) >= 3:
-        llm_chapters = stored_chapters
-        logger.info("_write_dissertation: using pre-generated plan (%d chapters)", len(llm_chapters))
-    else:
-        logger.info("_write_dissertation: calling LLM to generate plan for topic=%s", topic[:80])
-        llm_chapters = generate_dissertation_plan_llm(
-            topic, instruction, design,
-            objectives=objectives_early,
-            guidelines=user_guidelines,
-        )
-
-    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters, design, objectives_early, topic, instruction)
-
-    # ── Step 2: Build the flat step list ─────────────────────────────────
-    for chapter in chapter_blueprints:
-        plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
-        _append_node_plan_steps(plan, chapter["nodes"], depth=1)
-        plan.append({"step": f"  Reviewing {chapter['title']} for consistency", "status": "pending"})
-
-    _done(plan, 0)  # mark "Creating dissertation to-do list" done
-
-    # ── Step 3: Write each chapter ────────────────────────────────────────
-    objectives = _extract_objectives(document, topic)
-    sections: list[dict[str, Any]] = []
-    plan_cursor = [1]
-    figure_counter = [_next_caption_number(document, "figure")]
-    table_counter = [_next_caption_number(document, "table")]
-
-    # Build a compact guidelines string to inject into each subsection prompt
-    _style_note = (
-        f"Citation style: {user_guidelines['citation_style']}. "
-        f"Academic level: {user_guidelines['academic_level']}. "
-    )
-    if user_guidelines.get("focus_notes"):
-        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
-    # Prepend to the raw instruction so ContentGenerator sees it
-    enriched_instruction = f"{_style_note}\n\n{instruction}"
-
-    # ── Citation accumulator ──────────────────────────────────────────────────
-    # Starts empty — each chapter is drafted plain, then grounded against
-    # literature retrieved specifically for what THAT chapter discusses (not one
-    # generic topic-level pool fetched before anything was written). See the
-    # post-chapter grounding step in the loop below and ground_section_text() in
-    # research_layer.py.
-    citation_pool: list[Any] = []
-    _cited_keys: set[str] = set()
-
-    # Apportion a whole-document length budget (50-100 flexible pages, or the user's
-    # explicit request) across chapters by weight, rather than reapplying the same
-    # document-wide page count to every chapter independently.
-    chapter_word_budget = _dissertation_word_budget(chapter_blueprints, instruction)
-    logger.info(
-        "_write_dissertation: chapter word budget — %s",
-        ", ".join(f"{t[:30]}={w}" for t, w in chapter_word_budget.items()),
-    )
-
-    review_notes: list[str] = []
-    for chapter in chapter_blueprints:
-        chapter_title = chapter["title"]
-        ch_num = _chapter_number_from_title(chapter_title)
-        ch_word_count = chapter_word_budget.get(
-            chapter_title, _chapter_word_count_target(ch_num, instruction, chapter["nodes"]),
-        )
-
-        _done(plan, plan_cursor[0])
-        plan_cursor[0] += 1
-
-        # Add chapter placeholder so the frontend polling sees incremental progress.
-        section_payload: dict[str, Any] = {"title": chapter_title, "content": ""}
-        sections.append(section_payload)
-        document.content = {
-            "topic": topic,
-            "research_design": design,
-            "research_objectives": objectives,
-            "sections": sections,
-        }
-        _save(document, f"dissertation-step:{chapter_title}:start")
-
-        def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
-            safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
-            section_payload["content"] = partial_text if partial_text.strip() else ""
-            if partial_blocks:
-                section_payload["blocks"] = partial_blocks
-            elif "blocks" in section_payload:
-                section_payload.pop("blocks", None)
-            document.content = {
-                "topic": topic,
-                "research_design": design,
-                "research_objectives": objectives,
-                "sections": sections,
-            }
-            _save(document, f"dissertation-step:{chapter_title}:{safe_node}")
-
-        current_context = _full_context_for_generation(document)
-        chapter_text, _, chapter_blocks = _execute_subsection_nodes(
-            nodes=chapter["nodes"],
-            document=document,
-            section_title=chapter_title,
-            topic=topic,
-            research_design=design,
-            rolling_context=current_context,
-            plan=plan,
-            plan_cursor=plan_cursor,
-            figure_counter=figure_counter,
-            table_counter=table_counter,
-            on_node_completed=_persist_subsection_progress,
-            default_word_count=ch_word_count,
-            user_instruction=enriched_instruction,
-            citation_pool=citation_pool,
-        )
-
-        chapter_text, chapter_review_notes = _review_and_revise_chapter(
-            chapter_title, chapter_text, chapter_blocks, topic, design, objectives,
-        )
-        review_notes.extend(chapter_review_notes)
-
-        # Humanise before citation grounding ever sees this chapter — grounding is
-        # deferred to a pass after every chapter is written (below), so in-text
-        # citation markers land in the final wording instead of being shuffled or
-        # dropped by a later humanising rewrite.
-        chapter_text, _ = _auto_humanise_text(chapter_text, topic)
-
-        _done(plan, plan_cursor[0])
-        plan_cursor[0] += 1
-
-        section_payload["content"] = chapter_text if chapter_text.strip() else ""
-        if chapter_blocks:
-            section_payload["blocks"] = chapter_blocks
-        elif "blocks" in section_payload:
-            section_payload.pop("blocks", None)
-
-        document.content = {
-            "topic": topic,
-            "research_design": design,
-            "research_objectives": objectives,
-            "sections": sections,
-        }
-        _save(document, f"dissertation-step:{chapter_title}")
-
-    # ── Citation grounding ────────────────────────────────────────────────────
-    # Now that every chapter has been written, reviewed, and humanised, ground
-    # each one against literature retrieved specifically for what THAT chapter
-    # discusses, accumulating whatever it actually cites into the document-wide
-    # pool. Deferred until the whole dissertation exists so the humanising pass
-    # above never gets a chance to reshuffle or drop an in-text citation marker.
-    for section_payload in sections:
-        ground_title = section_payload.get("title", "")
-        ground_text = section_payload.get("content", "")
-        if not ground_text.strip():
-            continue
-        try:
-            from .research_layer import ground_section_text
-
-            ground_text, chapter_sources = ground_section_text(
-                ground_title, ground_text, topic, document.id, style=user_guidelines["citation_style"],
-            )
-            section_payload["content"] = ground_text
-            for src in chapter_sources:
-                key = (src.doi or src.title or "").lower()
-                if key and key not in _cited_keys:
-                    _cited_keys.add(key)
-                    citation_pool.append(src)
-        except Exception as exc:
-            logger.warning("_write_dissertation: citation grounding failed for '%s': %s", ground_title, exc)
-
-    document.content = {
-        "topic": topic,
-        "research_design": design,
-        "research_objectives": objectives,
-        "sections": sections,
-    }
-    _save(document, "dissertation-step:grounding-citations")
-
-    # Now that every chapter has its final content, replace the static
-    # Table of Contents / List of Figures / List of Tables placeholders in
-    # Preliminary Pages with real entries computed from what was actually
-    # written, and insert page breaks between each preliminary-page item.
-    _refresh_preliminary_pages(sections)
-    from dataclasses import asdict
-
-    cited_pool, bibtex_text = _compute_bibliography(
-        citation_pool, sections, user_guidelines["citation_style"],
-    )
-    document.content = {
-        "topic": topic,
-        "research_design": design,
-        "research_objectives": objectives,
-        "sections": sections,
-        "bibliography": [asdict(p) for p in cited_pool],
-        "bibliography_bibtex": bibtex_text,
-    }
-    _save(document, "dissertation-step:table-of-contents")
-
-    document.title = f"Dissertation: {topic}"
-    document.save(update_fields=["title", "updated_at"])
-    _all_done(plan)
-
-    citation_note = ""
-    if cited_pool:
-        citation_note = (
-            f" {len(cited_pool)} of {len(citation_pool)} retrieved sources were actually cited in-text; "
-            "they were compiled into the References chapter and a BibTeX library "
-            '(ask for "the bibtex" to get it).'
-        )
-    elif citation_pool:
-        citation_note = (
-            f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
-            "Semantic Scholar, but none could be confidently matched to an in-text citation — "
-            "check citations manually before submission."
-        )
-    else:
-        citation_note = (
-            " No verified external sources could be retrieved (e.g. no network access) — "
-            "in-text citations and the References section use a consistent set of simulated sources that "
-            "must be replaced with verified literature before submission."
-        )
-    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
-    reply = (
-        f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "
-        "The AI generated a tailored chapter and section plan, wrote each section sequentially, then "
-        "reviewed each chapter for consistency."
-        f"{citation_note}{review_note}"
-    )
-    return reply, True
 
 
 def _create_outline(document: Document, topic: str, plan: list) -> tuple[str, bool]:
@@ -13535,18 +12602,6 @@ def _extract_user_chart_data(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _write_structured_document(
-    document: Document,
-    topic: str,
-    kind: str,
-    plan: list,
-    instruction: str = "",
-) -> tuple[str, bool]:
-    """Route report/assignment/presentation/spreadsheet through the unified AI planner."""
-    effective = instruction or f"Write a {kind} on {topic}"
-    return _plan_and_write_document(document, topic, effective, plan)
-
-
 def _add_chart(document: Document, target: str | None, plan: list, instruction: str = "") -> tuple[str, bool]:
     _done(plan, 0)
     sections = (document.content or {}).get("sections", [])
@@ -13578,11 +12633,12 @@ def _add_chart(document: Document, target: str | None, plan: list, instruction: 
         is_user_provided = False
 
     figure_no = _next_caption_number(document, "figure")
-    figure_caption = f"Figure {figure_no}: {_section_title}"
+    sample_label = "" if is_user_provided else _SAMPLE_DATA_LABEL
+    figure_caption = f"Figure {figure_no}: {_section_title}{sample_label}"
     chart_path = generate_chart(
         series=series,
         chart_type=chart_type,
-        title=_section_title,
+        title=f"{_section_title}{sample_label}",
         x_labels=x_labels or None,
         unit=unit or None,
     )
@@ -13594,6 +12650,7 @@ def _add_chart(document: Document, target: str | None, plan: list, instruction: 
     addition = (
         f"\n\n{figure_caption}\n[[BLOCK:{block_id}]]\n"
         f"{_chart_discussion_text(series, None, _section_title, is_user_provided=is_user_provided)}"
+        f"{'' if is_user_provided else _SYNTHETIC_DATA_NOTE}"
     )
     section["content"] = (section.get("content", "") or "").rstrip() + addition
     _save(document, f"chart:{target or 'section'}")

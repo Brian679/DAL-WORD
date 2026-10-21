@@ -6,7 +6,7 @@ This repository contains a practical MVP scaffold for an AI-assisted dissertatio
 
 - Frontend: React + TipTap editor + AI sidebar
 - Backend API: Django REST (`documents`, `agent`)
-- Async orchestration: Celery task queue for long-running dissertation generation
+- Async orchestration: Celery task queue for background jobs
 - Asset generation: Matplotlib chart rendering and image placeholders
 - Document model: JSON-first document storage for section-aware editing
 
@@ -25,8 +25,6 @@ This repository contains a practical MVP scaffold for an AI-assisted dissertatio
   - `generate_chart`
   - `generate_image`
   - `insert_section`
-- Async dissertation generation endpoint (`/api/agent/<doc_id>/generate-dissertation/`)
-- Celery task to generate chapters sequentially and persist progress
 
 ## Frontend Features Implemented
 
@@ -35,7 +33,7 @@ This repository contains a practical MVP scaffold for an AI-assisted dissertatio
   - center: editor
   - right: AI action panel
 - TipTap editor for text editing
-- Buttons for outline generation, section enhancement, image/chart insertion, full dissertation generation
+- Buttons for outline generation, section enhancement, image/chart insertion
 
 ## Quick Start
 

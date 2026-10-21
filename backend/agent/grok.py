@@ -140,45 +140,6 @@ def chat_with_document(message: str, doc_context: str) -> str:
     return generate_text(prompt)
 
 
-def humanise_text(text: str, topic: str, ai_phrases: list[str] | None = None) -> str:
-    """Rewrite text to reduce AI-detection signals: remove stock phrases, add burstiness."""
-    phrase_list = ""
-    if ai_phrases:
-        phrase_list = (
-            "\n\nAvoid or replace these detected AI phrases:\n"
-            + "\n".join(f"  • {p}" for p in ai_phrases[:12])
-        )
-    prompt = (
-        f"Rewrite the following academic text on '{topic}' so it defeats AI-detection tools "
-        "(GPTZero, Turnitin, Originality.ai) the way a professional humaniser like StealthWriter "
-        "does — by attacking the two signals those detectors score: low perplexity (predictable "
-        "word choice) and low burstiness (uniform sentence length/structure).\n\n"
-        "Do this as three internal passes, then output only the final result:\n"
-        "PASS 1 — Paraphrase: restructure clauses and sentence order so the wording isn't a "
-        "near-copy of the source, while preserving every fact, figure, and citation exactly.\n"
-        "PASS 2 — Raise perplexity: replace common, predictable words/phrases with precise but "
-        "less-expected synonyms a human writer would reach for; avoid the most statistically "
-        "obvious next word at each point.\n"
-        "PASS 3 — Raise burstiness: deliberately vary sentence length — alternate short, blunt "
-        "sentences with longer, multi-clause ones. LLM output is unnaturally uniform in length; "
-        "uneven rhythm is the strongest human signal.\n\n"
-        "Additional rules:\n"
-        "- Use concrete details and first-person voice where natural ('I found', 'The results showed').\n"
-        "- REMOVE these AI clichés: 'it is important to note', 'in today's world', "
-        "'holistic approach', 'paradigm shift', 'delve into', 'comprehensive overview', "
-        "'it is crucial', 'furthermore', 'moreover', 'it is evident that', 'the realm of', "
-        "'seamlessly', 'robust framework', 'plays a crucial role', 'underscores the importance'.\n"
-        "- Prefer active voice over passive; vary sentence openers (don't start consecutive "
-        "sentences with the same word or transition).\n"
-        "- Show genuine perspective — hedges like 'I think', 'It seemed', 'Surprisingly' feel human.\n"
-        "- Keep ALL facts, data, citations, and the core argument intact — do not invent content.\n"
-        f"{phrase_list}\n\n"
-        f"TEXT:\n{text[:4000]}\n\n"
-        "Return ONLY the rewritten text. No explanations, no markdown, no pass labels."
-    )
-    return generate_text(prompt)
-
-
 def _classify_section_type(hint: str) -> str:
     h = hint.lower()
     if any(k in h for k in ["abstract", "executive summary"]):

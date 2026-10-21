@@ -301,34 +301,3 @@ export async function checkPlagiarism(docId, text = '') {
     if (!res.ok) throw new Error(await readApiError(res, 'Plagiarism check failed'));
     return res.json();
 }
-
-export async function getDissertationPlan(docId, message) {
-    try {
-        const res = await apiFetch(`${API_BASE}/agent/${docId}/dissertation-plan/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
-        });
-        if (!res.ok) return null;
-        return res.json();
-    } catch {
-        return null;
-    }
-}
-
-// Asks the agent to design a section plan for a non-dissertation document
-// (assignment, essay, report, ...) and decide whether it's substantial
-// enough to need a visible todo list before writing starts.
-export async function getDocumentPlan(docId, message) {
-    try {
-        const res = await apiFetch(`${API_BASE}/agent/${docId}/document-plan/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message }),
-        });
-        if (!res.ok) return null;
-        return res.json();
-    } catch {
-        return null;
-    }
-}
