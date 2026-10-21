@@ -8,13 +8,14 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from billing.usage import limit_reached_payload, refund_ai_request, try_consume_ai_request
 from documents.models import Document, ChatMessage
 from documents.serializers import DocumentSerializer
 
 from .autonomous import run_agent
 from .agents_v2 import run_multi_agent_supervision
 from .academic_runtime import ClaimGraphBuilder, CoherenceChecker, EvaluationEngine, WorkflowEngine
-from .executor import ActionError, run_action
+from .executor import ActionError, run_action, validate_action
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,10 @@ def _strip_comment_markers(text: str) -> str:
     return _COMMENT_MARKER_RE.sub("", text)
 
 
+# Actions that call the AI provider and so count toward the plan's monthly limit.
+_AI_ACTIONS = {"enhance_section", "generate_outline", "generate_image"}
+
+
 class AgentActionView(APIView):
     def post(self, request, document_id: int):
         action = request.data.get("action")
@@ -65,11 +70,23 @@ class AgentActionView(APIView):
             document = Document.objects.get(pk=document_id, user=request.user)
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
+        # Bad requests are rejected before they cost anything.
+        try:
+            validate_action(document, action, payload)
+        except ActionError as exc:
+            return Response({"error": str(exc)}, status=exc.status)
+        charged = action in _AI_ACTIONS
+        if charged and not try_consume_ai_request(request.user):
+            return Response(limit_reached_payload(request.user), status=status.HTTP_402_PAYMENT_REQUIRED)
         try:
             updated = run_action(document, action, payload)
         except ActionError as exc:
+            if charged:
+                refund_ai_request(request.user)
             return Response({"error": str(exc)}, status=exc.status)
         except Exception as exc:
+            if charged:
+                refund_ai_request(request.user)
             logger.error("Action %r failed for doc %d: %s", action, document_id, exc, exc_info=True)
             return Response(
                 {"error": "Something went wrong running that action. Please try again."},
@@ -195,6 +212,11 @@ class ChatView(APIView):
         except Document.DoesNotExist:
             return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        # Reserve a request up front so parallel requests can't overshoot the limit. A
+        # preview that stops at the confirmation card did no AI work and is refunded below.
+        if not try_consume_ai_request(request.user):
+            return Response(limit_reached_payload(request.user), status=status.HTTP_402_PAYMENT_REQUIRED)
+
         user_chat_content = message
         if attachment_note:
             user_chat_content = f"{message}\n\n{attachment_note}" if message else attachment_note
@@ -225,12 +247,15 @@ class ChatView(APIView):
             )
         except Exception as exc:
             logger.error("Agent error for doc %d: %s", document_id, exc, exc_info=True)
+            refund_ai_request(request.user)
             error_text = "Something went wrong while working on your request. Please try again."
             if not preview_only:
                 ChatMessage.objects.create(document=document, role="assistant", content=error_text)
             return Response({"error": error_text}, status=status.HTTP_502_BAD_GATEWAY)
 
         awaiting_confirmation = result.get("awaiting_confirmation", False)
+        if awaiting_confirmation:
+            refund_ai_request(request.user)
 
         if awaiting_confirmation:
             # Preview for a document-modifying intent: don't persist anything yet.

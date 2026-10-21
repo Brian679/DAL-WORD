@@ -4245,3 +4245,55 @@ ul {
     }
 }
 
+
+/* ── Plan / billing menu ─────────────────────────────────────── */
+.plan-pill {
+    border: 1px solid var(--border);
+    background: var(--panel-bg);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.plan-pill--pro {
+    border-color: #1a73e8;
+    color: #1a73e8;
+    font-weight: 600;
+}
+
+.plan-menu {
+    min-width: 240px;
+}
+
+.plan-menu-note {
+    font-size: 11px;
+    font-weight: 400;
+    color: #5f6368;
+    margin-top: 4px;
+}
+
+.plan-menu-option {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    background: none;
+    border: none;
+    padding: 8px 6px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+}
+
+.plan-menu-option:hover:not(:disabled) {
+    background: #f1f3f4;
+}
+
+.plan-menu-price {
+    color: #5f6368;
+}

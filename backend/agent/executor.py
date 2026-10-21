@@ -143,7 +143,17 @@ def update_table_of_contents(document: Document) -> Document:
     return _save(document, "update-table-of-contents")
 
 
-def run_action(document: Document, action: str, payload: dict[str, Any]) -> Document:
+# The payload field naming the section each action works on, if any.
+_SECTION_FIELD = {
+    "enhance_section": "query",
+    "generate_chart": "query",
+    "generate_image": "query",
+    "insert_section": "after_query",
+}
+
+
+def validate_action(document: Document, action: str, payload: Any) -> None:
+    """Raise ActionError for anything the caller can fix, before any work is done."""
     if action not in _REQUIRED_FIELDS:
         raise ActionError(f"Unsupported action: {action!r}.")
     if not isinstance(payload, dict):
@@ -151,6 +161,12 @@ def run_action(document: Document, action: str, payload: dict[str, Any]) -> Docu
     missing = [f for f in _REQUIRED_FIELDS[action] if not payload.get(f)]
     if missing:
         raise ActionError(f"Missing payload field(s) for {action}: {', '.join(missing)}.")
+    if action in _SECTION_FIELD:
+        _find_section_or_fail(document, payload[_SECTION_FIELD[action]])
+
+
+def run_action(document: Document, action: str, payload: dict[str, Any]) -> Document:
+    validate_action(document, action, payload)
     if action == "enhance_section":
         return enhance_section(document, payload["query"], payload["instruction"])
     if action == "generate_outline":
