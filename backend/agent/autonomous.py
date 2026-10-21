@@ -69,8 +69,8 @@ def _intent_description(intent: str, target_section: str | None, topic: str | No
     tp = topic or ""
     _descriptions: dict[str, str] = {
         "write_section":    f"Write the **{t or 'target'}** section",
-        "write_dissertation": f"Write the full dissertation on **{tp}**",
-        "write_document":   f"Plan and write a complete document on **{tp or 'the topic'}**",
+        "write_dissertation": f"Create an outline for **{tp}** to write section by section",
+        "write_document":   f"Create an outline for **{tp or 'the topic'}** to write section by section",
         "enhance_section":  f"Improve and polish {'the **' + t + '** section' if t else 'the document content'}",
         "enhance_document": "Improve the entire document — structure, clarity, and academic quality",
         "address_comments": "Read all inline reviewer comments and address each one in the document",
@@ -3500,18 +3500,6 @@ def _sections_to_nodes(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
-def llm_chapters_to_flat_steps(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert LLM plan chapters to the flat step list shown in the frontend todo."""
-    steps: list[dict[str, Any]] = [{"step": "Creating dissertation to-do list", "status": "done"}]
-    first = True
-    for chapter in chapters:
-        step_status = "in_progress" if first else "pending"
-        first = False
-        steps.append({"step": f"Writing {chapter.get('title', 'Chapter')}", "status": step_status})
-        _sections_to_steps(steps, chapter.get("sections", []), depth=1)
-    return steps
-
-
 def _sections_to_steps(
     steps: list[dict[str, Any]], sections: list[dict[str, Any]], depth: int
 ) -> None:
@@ -4500,42 +4488,6 @@ def _cited_reference_list(citation_pool: list[Any], full_text: str, style: str) 
 
     cited_pool = filter_cited_pool(full_text, citation_pool, style=style)
     return _format_reference_list(cited_pool, style=style)
-
-
-def _compute_bibliography(citation_pool: list[Any], sections: list[dict[str, Any]], style: str) -> tuple[list[Any], str]:
-    """Filter citation_pool down to only what's actually cited across `sections`
-    — excluding the References/Bibliography section itself, since that section is
-    the OUTPUT of this filtering, not an input to it (its own [n]-style markers
-    would otherwise look like extra in-text citations). Returns (cited_pool, bibtex_text)."""
-    from .research_layer import build_bibtex, filter_cited_pool
-
-    body_text = "\n\n".join(
-        s.get("content", "") or "" for s in sections
-        if "reference" not in (s.get("title") or "").lower()
-        and "bibliograph" not in (s.get("title") or "").lower()
-    )
-    cited_pool = filter_cited_pool(body_text, citation_pool, style=style)
-    return cited_pool, build_bibtex(cited_pool)
-
-
-def _ensure_references_section(sections_plan: list[dict[str, Any]], do_citations: bool) -> list[dict[str, Any]]:
-    """If a document needs citation grounding but its plan has no References/
-    Bibliography section, append one. The planning LLM (or the offline
-    fallback plan, which never includes one) may omit it, but the citation
-    pipeline always needs somewhere in the body to put the compiled,
-    cited-only list — without this, it would only ever be reachable by
-    asking for "the bibtex" conversationally, not as part of the document."""
-    if not do_citations:
-        return sections_plan
-    has_one = any(
-        "reference" in (s.get("title") or "").lower() or "bibliograph" in (s.get("title") or "").lower()
-        for s in sections_plan
-    )
-    if has_one:
-        return sections_plan
-    return sections_plan + [
-        {"title": "References", "word_count": 150, "notes": "List the sources cited in this document"}
-    ]
 
 
 def _execute_subsection_nodes(
@@ -10874,12 +10826,11 @@ def run_agent(
             reply, updated = _run_copilot_loop(document, generation_message, plan, target_section, topic)
         elif intent == "write_section":
             reply, updated = _write_section(document, target_section, topic, generation_message, plan)
-        elif intent == "write_dissertation":
-            reply, updated = _write_dissertation(document, topic, generation_message, plan)
-        elif intent in ("write_document", "write_article", "write_report",
+        elif intent in ("write_dissertation", "write_document", "write_article", "write_report",
                         "write_assignment", "write_presentation", "write_spreadsheet"):
-            # All non-dissertation document writing funnels through the unified AI planner
-            reply, updated = _plan_and_write_document(document, topic, generation_message, plan)
+            # DAL Word doesn't write whole documents in one go; it sets up an outline
+            # and helps section by section.
+            reply, updated = _outline_instead_of_full_draft(document, topic, plan)
         elif intent == "create_outline":
             reply, updated = _create_outline(document, topic, plan)
         elif intent == "add_chart":
@@ -12604,363 +12555,6 @@ def _llm_writing_plan(instruction: str, topic: str, doc_context: str = "") -> di
     }
 
 
-def writing_plan_to_flat_steps(writing_plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """Convert an `_llm_writing_plan` result into the flat todo-list format the
-    frontend renders (mirrors `llm_chapters_to_flat_steps` for dissertations).
-
-    Mirrors the do_citations/do_review gating in `_plan_and_write_document` so the
-    preview shown before writing starts has the same shape as the live run."""
-    needs_todo = writing_plan.get("needs_todo", True)
-    do_citations = bool(needs_todo and writing_plan.get("needs_citations", True))
-    do_review = bool(needs_todo)
-    sections_plan = _ensure_references_section(writing_plan.get("sections", []), do_citations)
-
-    # No upfront "Researching sources" step — each section is written plain
-    # first, then grounded against literature scoped to what it discusses (see
-    # _plan_and_write_document), so the first real step is always "Writing X".
-    steps: list[dict[str, Any]] = [{"step": "Planning your document", "status": "done"}]
-
-    first = True
-    for section in sections_plan:
-        title = section.get("title", "Section")
-        steps.append({
-            "step": f"Writing {title}",
-            "status": "in_progress" if first else "pending",
-        })
-        if do_review:
-            steps.append({"step": f"Reviewing {title}", "status": "pending"})
-        first = False
-    return steps
-
-
-def _plan_and_write_document(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    """Unified flexible document writer.
-
-    The LLM reads the user's raw instruction and decides:
-      - what kind of document it is
-      - how many sections and what to write in each
-      - whether to show a detailed to-do list (for long pieces)
-    No fixed templates. No pre-defined document types.
-
-    Long pieces (needs_todo) get the same research-grounding and self-review
-    pass `_write_dissertation` already runs per chapter: real citations are
-    retrieved and repaired when the document needs them, and each section is
-    auto-reviewed and tightened, with what changed reported in the reply.
-    Short pieces are unaffected — no extra retrieval, review, or progress
-    writes happen when needs_todo is False.
-    """
-    plan.clear()
-    plan.append({"step": "Planning your document", "status": "pending"})
-
-    doc_context = _full_context_for_generation(document)
-
-    # Parse user-provided guidelines to pass into every section
-    user_guidelines = _parse_user_guidelines(instruction)
-    _style_note = (
-        f"Citation style: {user_guidelines['citation_style']}. "
-        f"Academic level: {user_guidelines['academic_level']}. "
-    )
-    if user_guidelines.get("focus_notes"):
-        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
-
-    # ── Step 1: Let the LLM design the entire plan ────────────────────────────
-    # Reuse the plan generated by DocumentPlanView (shown to the user as a
-    # todo list before writing started) instead of calling the LLM twice.
-    stored_plan = None
-    try:
-        stored_plan = (document.content or {}).get("_document_plan_sections")
-    except Exception:
-        pass
-
-    if stored_plan and isinstance(stored_plan, dict) and stored_plan.get("sections"):
-        writing_plan = stored_plan
-        logger.info("_plan_and_write_document: using pre-generated plan (%d sections)", len(stored_plan["sections"]))
-    else:
-        writing_plan = _llm_writing_plan(instruction, topic, doc_context)
-
-    doc_title = writing_plan["document_title"]
-    doc_type = writing_plan["document_type"]
-    needs_todo = writing_plan["needs_todo"]
-    sections_plan = writing_plan["sections"]
-    estimated_words = writing_plan["estimated_words"]
-
-    needs_citations = writing_plan.get("needs_citations")
-    if needs_citations is None:
-        # Backward compat: a plan cached by DocumentPlanView before this field
-        # existed won't have the key — fall back to a document_type heuristic.
-        needs_citations = doc_type in {
-            "essay", "report", "article", "assignment", "proposal", "case_study", "lab_report", "review",
-        }
-    do_citations = bool(needs_todo and needs_citations)
-    do_review = bool(needs_todo)
-    sections_plan = _ensure_references_section(sections_plan, do_citations)
-
-    logger.info(
-        "_plan_and_write_document: type=%s estimated=%d words needs_todo=%s do_citations=%s sections=%d level=%s style=%s",
-        doc_type, estimated_words, needs_todo, do_citations, len(sections_plan),
-        user_guidelines["academic_level"], user_guidelines["citation_style"],
-    )
-
-    # Build the to-do list — always show section steps so the user sees progress
-    for item in sections_plan:
-        plan.append({"step": f"Writing {item['title']}", "status": "pending"})
-        if do_review:
-            plan.append({"step": f"Reviewing {item['title']}", "status": "pending"})
-    _done(plan, 0)
-
-    design = _research_design(instruction, topic, document)
-    sections: list[dict[str, Any]] = []
-    review_notes: list[str] = []
-
-    # ── Citation accumulator ──────────────────────────────────────────────────
-    # Starts empty. Each section is written PLAIN (no pre-fetched pool, no
-    # pressure to cite from a fixed list), then — once its own text actually
-    # exists — grounded against literature retrieved specifically for what THAT
-    # section discusses (see ground_section_text in research_layer.py). Sources
-    # it actually ends up citing are added here, so by the time the loop reaches
-    # the References section, this holds the real, section-targeted bibliography
-    # for the whole document instead of one generic topic-level pool fetched
-    # before anything was written.
-    citation_pool: list[Any] = []
-    _cited_keys: set[str] = set()
-
-    def _content_snapshot() -> dict[str, Any]:
-        snapshot: dict[str, Any] = {
-            "topic": topic,
-            "sections": sections,
-            "document_type": doc_type,
-            "document_title": doc_title,
-        }
-        if do_citations:
-            snapshot["_research_sources_count"] = len(citation_pool)
-            from dataclasses import asdict
-
-            cited_pool, bibtex_text = _compute_bibliography(
-                citation_pool, sections, user_guidelines["citation_style"],
-            )
-            snapshot["bibliography"] = [asdict(p) for p in cited_pool]
-            snapshot["bibliography_bibtex"] = bibtex_text
-        return snapshot
-
-    def _broadcast_activity(label: str) -> None:
-        if not needs_todo:
-            return
-        try:
-            content = _content_snapshot()
-            content["_current_activity"] = label
-            document.content = content
-            document.save(update_fields=["content", "updated_at"])
-        except Exception:
-            pass
-
-    plan_cursor = 1
-
-    # ── Step 2: Write (and, for long pieces, review) each section ────────────
-    for item in sections_plan:
-        title = item["title"]
-        wc = item["word_count"]
-        notes = item.get("notes", "")
-        section_guide = _subsection_guidelines(title, topic, design)
-        context_so_far = _full_context_for_generation(document)
-
-        lowered_title = title.lower()
-        is_reference_section = do_citations and ("reference" in lowered_title or "bibliograph" in lowered_title)
-
-        if is_reference_section:
-            # ── References/Bibliography: citation grounding only runs after
-            # every other section has been written and humanised (below), so
-            # citation_pool is still empty here. Leave a placeholder; it's
-            # overwritten with the real, verified list once grounding has run.
-            _broadcast_activity(f"Writing {title}")
-            text = "References will be compiled once the rest of the document has been written."
-            _done(plan, plan_cursor)
-            plan_cursor += 1
-            if do_review:
-                _done(plan, plan_cursor)
-                plan_cursor += 1
-        else:
-            _broadcast_activity(f"Writing {title}")
-            try:
-                text = generate_section_content(
-                    title=title,
-                    topic=topic,
-                    context=(
-                        f"{section_guide}\n\n"
-                        f"Document type: {doc_type}\n"
-                        f"Full user request: {instruction[:600]}\n"
-                        f"Research design: {design}\n"
-                        f"Writing note for this section: {notes}\n"
-                        f"GUIDELINES TO FOLLOW: {_style_note}\n\n"
-                        f"Document written so far:\n{context_so_far[-3500:]}"
-                    ),
-                    word_count=wc,
-                )
-                if _looks_like_meta_commentary(text):
-                    raise ValueError("Generated body reads like document meta-commentary, not section prose.")
-            except Exception:
-                text = _fallback_subsection_text(
-                    topic, doc_type.capitalize(), title,
-                    objectives=(document.content or {}).get("research_objectives"),
-                    target_words=wc,
-                    research_design=design,
-                    sample_size=_infer_sample_size(document),
-                    document=document,
-                )
-
-            _done(plan, plan_cursor)
-            plan_cursor += 1
-
-            if do_review:
-                _broadcast_activity(f"Reviewing {title}")
-                text, section_review_notes = _review_and_revise_chapter(
-                    title, text, [], topic, design, [],
-                )
-                review_notes.extend(section_review_notes)
-                _done(plan, plan_cursor)
-                plan_cursor += 1
-
-            # Humanise before any citation grounding ever sees this section —
-            # grounding is deferred to a pass after every section is written
-            # (below), so in-text citation markers land in the final wording
-            # instead of being shuffled or dropped by a later humanising rewrite.
-
-        sections.append({"title": title, "content": text})
-        document.content = _content_snapshot()
-        _save(document, f"doc-step:{re.sub(r'[^a-z0-9]+', '-', title.lower())[:40]}")
-
-    # ── Citation grounding ────────────────────────────────────────────────────
-    # Now that every section has been written, reviewed, and humanised, ground
-    # each one (other than the References/Bibliography placeholder above)
-    # against literature retrieved specifically for what THAT section
-    # discusses, accumulating whatever it actually cites into the document-wide
-    # pool. Deferred until the whole document exists so the humanising pass
-    # above never gets a chance to reshuffle or drop an in-text citation marker.
-    if do_citations:
-        for section in sections:
-            lowered = (section.get("title") or "").lower()
-            if "reference" in lowered or "bibliograph" in lowered:
-                continue
-            section_text = (section.get("content") or "").strip()
-            if not section_text:
-                continue
-            _broadcast_activity(f"Finding sources for {section['title']}")
-            try:
-                from .research_layer import ground_section_text
-
-                grounded_text, section_sources = ground_section_text(
-                    section["title"], section_text, topic, document.id, style=user_guidelines["citation_style"],
-                )
-                section["content"] = grounded_text
-                for src in section_sources:
-                    key = (src.doi or src.title or "").lower()
-                    if key and key not in _cited_keys:
-                        _cited_keys.add(key)
-                        citation_pool.append(src)
-            except Exception as exc:
-                logger.warning("_plan_and_write_document: citation grounding failed for '%s': %s", section["title"], exc)
-
-        # ── References/Bibliography: now built directly from verified papers
-        # actually cited above — never asked of the LLM, so there is nothing
-        # here for it to hallucinate.
-        full_text_so_far = "\n\n".join(
-            s.get("content", "") or "" for s in sections
-            if "reference" not in (s.get("title") or "").lower()
-            and "bibliograph" not in (s.get("title") or "").lower()
-        )
-        for section in sections:
-            lowered = (section.get("title") or "").lower()
-            if "reference" not in lowered and "bibliograph" not in lowered:
-                continue
-            real_references = _cited_reference_list(citation_pool, full_text_so_far, user_guidelines["citation_style"])
-            if real_references:
-                section["content"] = (
-                    "The following references were retrieved from open scholarly databases "
-                    "(Crossref, arXiv, PubMed, Semantic Scholar) and ranked as directly relevant "
-                    "to this study topic:\n\n" + real_references
-                )
-            elif citation_pool:
-                # Sources were retrieved but none matched an in-text citation closely
-                # enough — never leave the "will be compiled" placeholder in a
-                # finished document.
-                section["content"] = (
-                    "Sources were retrieved from open scholarly databases (Crossref, arXiv, "
-                    "PubMed, Semantic Scholar) but none could be confidently matched to an "
-                    "in-text citation in this document — add references manually before submission."
-                )
-            else:
-                section["content"] = (
-                    "No verified external sources could be retrieved (e.g. no network access) — "
-                    "add references manually before submission."
-                )
-
-        document.content = _content_snapshot()
-        _save(document, "doc-step:grounding-citations")
-
-    document.content = _content_snapshot()
-    document.title = doc_title
-    document.save(update_fields=["content", "title", "updated_at"])
-    DocumentVersion.objects.create(
-        document=document,
-        content=document.content,
-        note=f"{doc_type}-generated",
-    )
-    _all_done(plan)
-
-    total_words = sum(len(s["content"].split()) for s in sections)
-    todo_note = " A writing plan was created and each section written in sequence." if needs_todo else ""
-    citation_note = ""
-    if do_citations:
-        cited_count = len((document.content or {}).get("bibliography") or [])
-        if cited_count:
-            citation_note = (
-                f" {cited_count} of {len(citation_pool)} retrieved sources were actually cited in-text; "
-                "they were compiled into the References list and a BibTeX library "
-                '(ask for "the bibtex" to get it).'
-            )
-        elif citation_pool:
-            citation_note = (
-                f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
-                "Semantic Scholar, but none could be confidently matched to an in-text citation — "
-                "check citations manually before submission."
-            )
-        else:
-            citation_note = (
-                " No verified external sources could be retrieved (e.g. no network access) — "
-                "in-text citations should be checked manually before submission."
-            )
-    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
-    reply = (
-        f"'{doc_title}' is complete — {len(sections)} sections, ~{total_words:,} words."
-        f"{todo_note}{citation_note}{review_note}"
-    )
-    return reply, True
-
-
-# Legacy thin wrappers so old LLM classifications still route correctly
-def _write_ai_document(
-    document: Document,
-    topic: str,
-    instruction: str,
-    doc_type: str,
-    plan: list,
-) -> tuple[str, bool]:
-    return _plan_and_write_document(document, topic, instruction or topic, plan)
-
-
-def _write_article(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    return _plan_and_write_document(document, topic, instruction or f"Write an academic article on {topic}", plan)
-
-
 def _review_and_revise_chapter(
     chapter_title: str,
     chapter_text: str,
@@ -13038,281 +12632,28 @@ def _review_and_revise_chapter(
     return text, notes
 
 
-def _write_dissertation(
-    document: Document,
-    topic: str,
-    instruction: str,
-    plan: list,
-) -> tuple[str, bool]:
-    """Write a full dissertation.
-
-    Flow:
-    1. Call the LLM to generate a tailored chapter/section plan (no hardcoded template).
-    2. Convert that plan into the internal blueprint format.
-    3. Walk each chapter and subsection, writing content via LLM.
-    4. Persist progress after every subsection so the frontend polling sees live updates.
-    """
-    plan.clear()
-    plan.append({"step": "Creating dissertation to-do list", "status": "pending"})
-
-    design = _research_design(instruction, topic, document)
-
-    # ── Parse user-provided guidelines (style, level, word count, notes) ─
-    user_guidelines = _parse_user_guidelines(instruction)
-    logger.info(
-        "_write_dissertation: guidelines — level=%s style=%s target_words=%s",
-        user_guidelines["academic_level"],
-        user_guidelines["citation_style"],
-        user_guidelines.get("target_words"),
+def _outline_instead_of_full_draft(document: Document, topic: str, plan: list) -> tuple[str, bool]:
+    """Answer a "write the whole thing" request with an outline to work through."""
+    note = (
+        "DAL Word doesn't write whole dissertations or assignments for you. "
+        "It helps you plan, research and write your own, section by section."
     )
-
-    # ── Step 0: Intent parsing via PlannerAgent ───────────────────────────
-    from .planner import PlannerAgent as _PlannerAgent
-    _planner = _PlannerAgent()
-    objectives_early = _extract_objectives(document, topic)
-    intent_spec = _planner.parse_intent(
-        message=instruction,
-        topic=topic,
-        research_design=design,
-        objectives=objectives_early,
-        intent="write_dissertation",
+    has_content = any(
+        (s.get("content") or "").strip() for s in (document.content or {}).get("sections", [])
     )
-    logger.info(
-        "_write_dissertation: IntentSpec parsed — topic=%s design=%s objectives=%d",
-        intent_spec.topic[:60], intent_spec.research_design, len(intent_spec.objectives),
+    if has_content or not (topic or "").strip():
+        _all_done(plan)
+        return (
+            f"{note} Pick a section and ask me to suggest sources, give feedback, "
+            "or help you draft a paragraph from your own notes.",
+            False,
+        )
+    reply, updated = _create_outline(document, topic, plan)
+    return (
+        f"{note} I've set up an outline to start from:\n\n{reply}\n\n"
+        "Next, ask me to find sources for a chapter or to help you draft a section.",
+        updated,
     )
-
-    # ── Step 1: Generate the full plan via LLM ────────────────────────────
-    # Check if a plan was already generated by the DissertationPlanView and cached
-    stored_chapters: list | None = None
-    try:
-        stored_chapters = (document.content or {}).get("_dissertation_plan_chapters")
-    except Exception:
-        pass
-
-    if stored_chapters and isinstance(stored_chapters, list) and len(stored_chapters) >= 3:
-        llm_chapters = stored_chapters
-        logger.info("_write_dissertation: using pre-generated plan (%d chapters)", len(llm_chapters))
-    else:
-        logger.info("_write_dissertation: calling LLM to generate plan for topic=%s", topic[:80])
-        llm_chapters = generate_dissertation_plan_llm(
-            topic, instruction, design,
-            objectives=objectives_early,
-            guidelines=user_guidelines,
-        )
-
-    chapter_blueprints = llm_chapters_to_blueprints(llm_chapters, design, objectives_early, topic, instruction)
-
-    # ── Step 2: Build the flat step list ─────────────────────────────────
-    for chapter in chapter_blueprints:
-        plan.append({"step": f"Writing {chapter['title']}", "status": "pending"})
-        _append_node_plan_steps(plan, chapter["nodes"], depth=1)
-        plan.append({"step": f"  Reviewing {chapter['title']} for consistency", "status": "pending"})
-
-    _done(plan, 0)  # mark "Creating dissertation to-do list" done
-
-    # ── Step 3: Write each chapter ────────────────────────────────────────
-    objectives = _extract_objectives(document, topic)
-    sections: list[dict[str, Any]] = []
-    plan_cursor = [1]
-    figure_counter = [_next_caption_number(document, "figure")]
-    table_counter = [_next_caption_number(document, "table")]
-
-    # Build a compact guidelines string to inject into each subsection prompt
-    _style_note = (
-        f"Citation style: {user_guidelines['citation_style']}. "
-        f"Academic level: {user_guidelines['academic_level']}. "
-    )
-    if user_guidelines.get("focus_notes"):
-        _style_note += f"Additional requirements: {user_guidelines['focus_notes'][:300]}. "
-    # Prepend to the raw instruction so ContentGenerator sees it
-    enriched_instruction = f"{_style_note}\n\n{instruction}"
-
-    # ── Citation accumulator ──────────────────────────────────────────────────
-    # Starts empty — each chapter is drafted plain, then grounded against
-    # literature retrieved specifically for what THAT chapter discusses (not one
-    # generic topic-level pool fetched before anything was written). See the
-    # post-chapter grounding step in the loop below and ground_section_text() in
-    # research_layer.py.
-    citation_pool: list[Any] = []
-    _cited_keys: set[str] = set()
-
-    # Apportion a whole-document length budget (50-100 flexible pages, or the user's
-    # explicit request) across chapters by weight, rather than reapplying the same
-    # document-wide page count to every chapter independently.
-    chapter_word_budget = _dissertation_word_budget(chapter_blueprints, instruction)
-    logger.info(
-        "_write_dissertation: chapter word budget — %s",
-        ", ".join(f"{t[:30]}={w}" for t, w in chapter_word_budget.items()),
-    )
-
-    review_notes: list[str] = []
-    for chapter in chapter_blueprints:
-        chapter_title = chapter["title"]
-        ch_num = _chapter_number_from_title(chapter_title)
-        ch_word_count = chapter_word_budget.get(
-            chapter_title, _chapter_word_count_target(ch_num, instruction, chapter["nodes"]),
-        )
-
-        _done(plan, plan_cursor[0])
-        plan_cursor[0] += 1
-
-        # Add chapter placeholder so the frontend polling sees incremental progress.
-        section_payload: dict[str, Any] = {"title": chapter_title, "content": ""}
-        sections.append(section_payload)
-        document.content = {
-            "topic": topic,
-            "research_design": design,
-            "research_objectives": objectives,
-            "sections": sections,
-        }
-        _save(document, f"dissertation-step:{chapter_title}:start")
-
-        def _persist_subsection_progress(partial_text: str, partial_blocks: list[dict[str, str]], node_title: str) -> None:
-            safe_node = re.sub(r"[^a-zA-Z0-9_.-]+", "-", node_title).strip("-")[:60] or "subsection"
-            section_payload["content"] = partial_text if partial_text.strip() else ""
-            if partial_blocks:
-                section_payload["blocks"] = partial_blocks
-            elif "blocks" in section_payload:
-                section_payload.pop("blocks", None)
-            document.content = {
-                "topic": topic,
-                "research_design": design,
-                "research_objectives": objectives,
-                "sections": sections,
-            }
-            _save(document, f"dissertation-step:{chapter_title}:{safe_node}")
-
-        current_context = _full_context_for_generation(document)
-        chapter_text, _, chapter_blocks = _execute_subsection_nodes(
-            nodes=chapter["nodes"],
-            document=document,
-            section_title=chapter_title,
-            topic=topic,
-            research_design=design,
-            rolling_context=current_context,
-            plan=plan,
-            plan_cursor=plan_cursor,
-            figure_counter=figure_counter,
-            table_counter=table_counter,
-            on_node_completed=_persist_subsection_progress,
-            default_word_count=ch_word_count,
-            user_instruction=enriched_instruction,
-            citation_pool=citation_pool,
-        )
-
-        chapter_text, chapter_review_notes = _review_and_revise_chapter(
-            chapter_title, chapter_text, chapter_blocks, topic, design, objectives,
-        )
-        review_notes.extend(chapter_review_notes)
-
-        # Humanise before citation grounding ever sees this chapter — grounding is
-        # deferred to a pass after every chapter is written (below), so in-text
-        # citation markers land in the final wording instead of being shuffled or
-        # dropped by a later humanising rewrite.
-
-        _done(plan, plan_cursor[0])
-        plan_cursor[0] += 1
-
-        section_payload["content"] = chapter_text if chapter_text.strip() else ""
-        if chapter_blocks:
-            section_payload["blocks"] = chapter_blocks
-        elif "blocks" in section_payload:
-            section_payload.pop("blocks", None)
-
-        document.content = {
-            "topic": topic,
-            "research_design": design,
-            "research_objectives": objectives,
-            "sections": sections,
-        }
-        _save(document, f"dissertation-step:{chapter_title}")
-
-    # ── Citation grounding ────────────────────────────────────────────────────
-    # Now that every chapter has been written, reviewed, and humanised, ground
-    # each one against literature retrieved specifically for what THAT chapter
-    # discusses, accumulating whatever it actually cites into the document-wide
-    # pool. Deferred until the whole dissertation exists so the humanising pass
-    # above never gets a chance to reshuffle or drop an in-text citation marker.
-    for section_payload in sections:
-        ground_title = section_payload.get("title", "")
-        ground_text = section_payload.get("content", "")
-        if not ground_text.strip():
-            continue
-        try:
-            from .research_layer import ground_section_text
-
-            ground_text, chapter_sources = ground_section_text(
-                ground_title, ground_text, topic, document.id, style=user_guidelines["citation_style"],
-            )
-            section_payload["content"] = ground_text
-            for src in chapter_sources:
-                key = (src.doi or src.title or "").lower()
-                if key and key not in _cited_keys:
-                    _cited_keys.add(key)
-                    citation_pool.append(src)
-        except Exception as exc:
-            logger.warning("_write_dissertation: citation grounding failed for '%s': %s", ground_title, exc)
-
-    document.content = {
-        "topic": topic,
-        "research_design": design,
-        "research_objectives": objectives,
-        "sections": sections,
-    }
-    _save(document, "dissertation-step:grounding-citations")
-
-    # Now that every chapter has its final content, replace the static
-    # Table of Contents / List of Figures / List of Tables placeholders in
-    # Preliminary Pages with real entries computed from what was actually
-    # written, and insert page breaks between each preliminary-page item.
-    _refresh_preliminary_pages(sections)
-    from dataclasses import asdict
-
-    cited_pool, bibtex_text = _compute_bibliography(
-        citation_pool, sections, user_guidelines["citation_style"],
-    )
-    document.content = {
-        "topic": topic,
-        "research_design": design,
-        "research_objectives": objectives,
-        "sections": sections,
-        "bibliography": [asdict(p) for p in cited_pool],
-        "bibliography_bibtex": bibtex_text,
-    }
-    _save(document, "dissertation-step:table-of-contents")
-
-    document.title = f"Dissertation: {topic}"
-    document.save(update_fields=["title", "updated_at"])
-    _all_done(plan)
-
-    citation_note = ""
-    if cited_pool:
-        citation_note = (
-            f" {len(cited_pool)} of {len(citation_pool)} retrieved sources were actually cited in-text; "
-            "they were compiled into the References chapter and a BibTeX library "
-            '(ask for "the bibtex" to get it).'
-        )
-    elif citation_pool:
-        citation_note = (
-            f" {len(citation_pool)} real sources were retrieved from Crossref, arXiv, PubMed, and "
-            "Semantic Scholar, but none could be confidently matched to an in-text citation — "
-            "check citations manually before submission."
-        )
-    else:
-        citation_note = (
-            " No verified external sources could be retrieved (e.g. no network access) — "
-            "in-text citations and the References section use a consistent set of simulated sources that "
-            "must be replaced with verified literature before submission."
-        )
-    review_note = f" Self-review pass: {' '.join(review_notes)}" if review_notes else ""
-    reply = (
-        f"Dissertation generation complete for '{topic}' using a {design.replace('_', ' ')} design. "
-        "The AI generated a tailored chapter and section plan, wrote each section sequentially, then "
-        "reviewed each chapter for consistency."
-        f"{citation_note}{review_note}"
-    )
-    return reply, True
 
 
 def _create_outline(document: Document, topic: str, plan: list) -> tuple[str, bool]:
@@ -13367,18 +12708,6 @@ def _extract_user_chart_data(text: str) -> dict[str, Any] | None:
         if len(values) >= 2:
             return {"series": values, "x_labels": None}
     return None
-
-
-def _write_structured_document(
-    document: Document,
-    topic: str,
-    kind: str,
-    plan: list,
-    instruction: str = "",
-) -> tuple[str, bool]:
-    """Route report/assignment/presentation/spreadsheet through the unified AI planner."""
-    effective = instruction or f"Write a {kind} on {topic}"
-    return _plan_and_write_document(document, topic, effective, plan)
 
 
 def _add_chart(document: Document, target: str | None, plan: list, instruction: str = "") -> tuple[str, bool]:

@@ -241,7 +241,6 @@ export default function App() {
             chart_type: 'line',
             title: `${query} trend overview`,
           })}
-          onGenerateDissertation={(topic) => runAction('generate_dissertation', { topic })}
           onManualSave={async (sections, extra) => {
             if (!currentDoc) return;
             const nextContent = {

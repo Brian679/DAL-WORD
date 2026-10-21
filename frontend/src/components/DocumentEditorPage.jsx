@@ -74,7 +74,7 @@ import {
   AlertTriangle,
   ShieldAlert,
 } from 'lucide-react';
-import { chatWithDocument, getDocument, getDissertationPlan, getDocumentPlan, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx, exportDocumentBibtex, API_ORIGIN } from '../api/client';
+import { chatWithDocument, detectAIContent, checkPlagiarism, runAgentAction, exportDocumentDocx, exportDocumentBibtex, API_ORIGIN } from '../api/client';
 
 const sampleParagraph = `An analysis of revenue streams focusing on rates as the main source of income at city level.
 
@@ -92,12 +92,9 @@ const PAPER_SIZES = [
   { name: 'Legal', w: 816, h: 1344 },
 ];
 const DEFAULT_PAGE_MARGINS_IN = { top: '1', bottom: '1', left: '1.25', right: '1.25' };
-const DISSERTATION_REQUEST_RE = /(full|complete|entire).{0,30}(dissertation|thesis|project)|write.{0,20}(dissertation|thesis|project)|generate.{0,20}(dissertation|thesis|project)/i;
 // Assignments, essays, reports, articles, etc. — anything else worth asking
 // the agent "does this need a todo list?" before writing. Dissertations are
 // handled separately above since they always need one.
-const LONG_DOCUMENT_REQUEST_RE = /(write|draft|create|generate|compose|produce|do)\b.{0,25}\b(assignment|essay|report|article|paper|case\s*stud(?:y|ies)|proposal|review|brief|memo)\b/i;
-
 const IMPROVE_STYLES = [
   {
     label: 'Clarity',
@@ -131,170 +128,6 @@ const IMPROVE_STYLES = [
 
 function normalizeStep(step = '') {
   return step.replace(/^[-\s]+/, '').trim();
-}
-
-function looksLikeDissertationRequest(text = '') {
-  return DISSERTATION_REQUEST_RE.test((text || '').trim());
-}
-
-function looksLikeLongDocumentRequest(text = '') {
-  return LONG_DOCUMENT_REQUEST_RE.test((text || '').trim());
-}
-
-function createFallbackPreviewPlan() {
-  // Minimal fallback used only when the dynamic plan endpoint is unavailable.
-  return [
-    { step: 'Creating dissertation to-do list', status: 'done' },
-    { step: 'Writing Chapter 1: Introduction', status: 'in_progress' },
-    { step: 'Writing Chapter 2: Literature Review', status: 'pending' },
-    { step: 'Writing Chapter 3: Methodology', status: 'pending' },
-    { step: 'Writing Chapter 4: Results and Discussion', status: 'pending' },
-    { step: 'Writing Chapter 5: Conclusion and Recommendations', status: 'pending' },
-    { step: 'Writing References', status: 'pending' },
-    { step: 'Writing Appendices', status: 'pending' },
-  ];
-}
-
-function escapeRegExp(value = '') {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function derivePlanFromDocument(previewPlan = [], sections = [], docMeta = {}) {
-  const chapterMap = new Map(
-    (sections || []).map((section) => [String(section?.title || '').toLowerCase(), String(section?.content || '')])
-  );
-  const normalized = previewPlan.map((item) => ({ ...item, status: 'pending' }));
-
-  if (!normalized.length) return normalized;
-  normalized[0].status = 'done';
-
-  for (let idx = 1; idx < normalized.length; idx += 1) {
-    const stepLabel = normalizeStep(normalized[idx].step || '');
-    const researchMatch = stepLabel.match(/^researching\s+sources$/i);
-    const reviewMatch = stepLabel.match(/^reviewing\s+(.+?)(?:\s+for\s+consistency)?$/i);
-    const chapterMatch = stepLabel.match(/^writing\s+(chapter\s*\d+:[^]+)$/i);
-    const subsectionMatch = stepLabel.match(/^writing\s+(\d+\.\d+(?:\.\d+)?\s+.+)$/i);
-
-    if (researchMatch) {
-      const sourcesCount = docMeta?._research_sources_count;
-      if (sourcesCount !== undefined && sourcesCount !== null) {
-        normalized[idx].status = 'done';
-      }
-      continue;
-    }
-
-    if (reviewMatch) {
-      // A section/chapter's content is only persisted after its review pass
-      // completes, so the same content-length check used for "Writing" steps
-      // also proves the review step is done.
-      const reviewedContent = chapterMap.get(reviewMatch[1].toLowerCase().trim()) || '';
-      if (reviewedContent.trim().length > 24) {
-        normalized[idx].status = 'done';
-      }
-      continue;
-    }
-
-    if (chapterMatch) {
-      const chapterTitle = chapterMatch[1].toLowerCase();
-      const chapterContent = chapterMap.get(chapterTitle) || '';
-      if (chapterContent.trim().length > 24) {
-        normalized[idx].status = 'done';
-      }
-      continue;
-    }
-
-    if (subsectionMatch) {
-      const subsectionTitle = subsectionMatch[1];
-      const chapterNoMatch = subsectionTitle.match(/^(\d+)\./);
-      const chapterNo = chapterNoMatch ? chapterNoMatch[1] : null;
-      const chapterEntry = Array.from(chapterMap.entries()).find(([title]) =>
-        chapterNo ? title.startsWith(`chapter ${chapterNo}:`) : false
-      );
-      const chapterContent = chapterEntry ? chapterEntry[1] : '';
-      const subsectionRe = new RegExp(`(^|\\n)${escapeRegExp(subsectionTitle)}(\\n|$)`, 'i');
-      if (subsectionRe.test(chapterContent)) {
-        normalized[idx].status = 'done';
-      }
-      continue;
-    }
-
-    // Plain "Writing <Section Title>" steps — used by the generic
-    // assignment/essay/report planner, which has no "Chapter N:" prefix.
-    const genericMatch = stepLabel.match(/^writing\s+(.+)$/i);
-    if (genericMatch) {
-      const sectionContent = chapterMap.get(genericMatch[1].toLowerCase().trim()) || '';
-      if (sectionContent.trim().length > 24) {
-        normalized[idx].status = 'done';
-      }
-    }
-  }
-
-  const firstPending = normalized.findIndex((item, index) => index > 0 && item.status !== 'done');
-  if (firstPending >= 0) {
-    normalized[firstPending].status = 'in_progress';
-    for (let idx = firstPending + 1; idx < normalized.length; idx += 1) {
-      if (normalized[idx].status !== 'done') normalized[idx].status = 'pending';
-    }
-  }
-
-  return normalized;
-}
-
-function buildSummaryFromPlan(plan = [], stage = 'Execution in progress') {
-  const todoList = plan.map((item) => normalizeStep(item.step || '')).filter(Boolean);
-  const completed = plan.filter((item) => item.status === 'done').length;
-  const pending = Math.max(todoList.length - completed, 0);
-  const completionPercent = todoList.length ? Math.round((completed / todoList.length) * 100) : 0;
-  const nextTasks = plan
-    .filter((item) => item.status === 'in_progress' || item.status === 'pending')
-    .map((item) => normalizeStep(item.step || ''))
-    .slice(0, 6);
-
-  return {
-    stage,
-    intent: 'write_dissertation',
-    todo_list: todoList,
-    completion_percent: completionPercent,
-    tasks_completed: completed,
-    tasks_pending: pending,
-    next_tasks: nextTasks,
-    done_brief: todoList.filter((_, idx) => idx < completed).slice(0, 3).join(', ') || 'No task details',
-  };
-}
-
-function statusLabel(step = '') {
-  return normalizeStep(step).replace(/^Writing\s+/i, '');
-}
-
-function buildWorkflowFromPlan(plan = [], previous = null) {
-  const current = plan.find((item) => item.status === 'in_progress');
-  const completedItems = plan.filter((item) => item.status === 'done').map((item) => statusLabel(item.step || ''));
-  const previousStatuses = Array.isArray(previous?.statuses) ? previous.statuses : [];
-  const updates = Array.isArray(previous?.updates) ? [...previous.updates] : [];
-
-  plan.forEach((item, idx) => {
-    const prevStatus = previousStatuses[idx];
-    const nowStatus = item.status;
-    const label = statusLabel(item.step || '');
-    if (prevStatus !== 'done' && nowStatus === 'done' && label !== 'Creating dissertation to-do list') {
-      updates.unshift(`Completed: ${label}`);
-    }
-  });
-
-  const prevCurrent = previous?.currentStep;
-  const nowCurrent = current ? statusLabel(current.step || '') : '';
-  if (nowCurrent && nowCurrent !== prevCurrent) {
-    updates.unshift(`Now doing: ${nowCurrent}`);
-  }
-
-  const capped = updates.filter(Boolean).slice(0, 12);
-  return {
-    statuses: plan.map((item) => item.status || 'pending'),
-    currentStep: nowCurrent,
-    completedCount: completedItems.length,
-    totalCount: plan.length,
-    updates: capped,
-  };
 }
 
 /* ── Inline markdown renderer ────────────────────────────────── */
@@ -928,7 +761,6 @@ export default function DocumentEditorPage({
   onEnhanceSection,
   onGenerateImage,
   onGenerateChart,
-  onGenerateDissertation,
   onManualSave,
   onDocumentChanged,
 }) {
@@ -1793,102 +1625,6 @@ export default function DocumentEditorPage({
     });
   }
 
-  function startDissertationProgressPolling(docId, chatId, messageId, previewPlan) {
-    clearProgressPolling();
-    workflowStateRef.current[messageId] = buildWorkflowFromPlan(previewPlan, null);
-
-    progressPollRef.current = setInterval(async () => {
-      if (progressPollBusyRef.current) return;
-      progressPollBusyRef.current = true;
-      try {
-        const latestDoc = await getDocument(docId);
-        const sections = Array.isArray(latestDoc?.content?.sections) ? latestDoc.content.sections : [];
-        setDraftSections(
-          sections.map((section) => ({
-            title: section?.title || '',
-            content: section?.content || '',
-            blocks: Array.isArray(section?.blocks) ? section.blocks : [],
-          }))
-        );
-        setIsDirty(false);
-
-        const planFromDoc = derivePlanFromDocument(previewPlan, sections, latestDoc?.content || {});
-        const activeStep = planFromDoc.find((item) => item.status === 'in_progress');
-        const stageLabel = activeStep
-          ? `Generating ${normalizeStep(activeStep.step).replace(/^Writing\s+/i, '')}...`
-          : 'Finalizing dissertation...';
-
-        // Read subsection-level activity written by backend before each node
-        const subsectionActivity = latestDoc?.content?._current_activity || null;
-
-        const previousWorkflow = workflowStateRef.current[messageId] || null;
-        const nextWorkflow = buildWorkflowFromPlan(planFromDoc, previousWorkflow);
-        // Attach current subsection activity so AgentActivityBar can display it
-        if (subsectionActivity) nextWorkflow.currentActivity = subsectionActivity;
-        workflowStateRef.current[messageId] = nextWorkflow;
-
-        updateAssistantMessage(chatId, messageId, (msg) => ({
-          ...msg,
-          plan: planFromDoc,
-          summary: buildSummaryFromPlan(planFromDoc, stageLabel),
-          workflow: nextWorkflow,
-        }));
-      } catch {
-        // Continue polling; transient network errors are expected while backend is busy.
-      } finally {
-        progressPollBusyRef.current = false;
-      }
-    }, 1200);
-  }
-
-  async function playbackDissertationResult(chatId, messageId, result, previewPlan, beforeSections = []) {
-    const generatedSections = Array.isArray(result?.document?.content?.sections)
-      ? result.document.content.sections
-      : [];
-
-    if (!generatedSections.length) {
-      updateAssistantMessage(chatId, messageId, (msg) => ({
-        ...msg,
-        text: result.reply,
-        summary: buildSummaryFromResult(result),
-        plan: Array.isArray(result.plan) ? result.plan : msg.plan || [],
-        research: result?.research || null,
-      }));
-      return;
-    }
-
-    setDraftSections(
-      generatedSections.map((section) => ({
-        title: section?.title || '',
-        content: section?.content || '',
-        blocks: Array.isArray(section?.blocks) ? section.blocks : [],
-      }))
-    );
-    setIsDirty(false);
-    const editedTitles = detectEditedSections(beforeSections, generatedSections);
-    setHighlightedSections(editedTitles);
-
-    const finalPlan = (Array.isArray(result.plan) && result.plan.length)
-      ? result.plan.map((item) => ({ ...item, status: 'done' }))
-      : derivePlanFromDocument(previewPlan, generatedSections, result?.document?.content || {}).map((item) => ({ ...item, status: 'done' }));
-    const finalWorkflow = buildWorkflowFromPlan(finalPlan, workflowStateRef.current[messageId] || null);
-    finalWorkflow.updates = [`Completed: Dissertation generation finished`, ...finalWorkflow.updates].slice(0, 12);
-    workflowStateRef.current[messageId] = finalWorkflow;
-    updateAssistantMessage(chatId, messageId, (msg) => ({
-      ...msg,
-      text: result.reply,
-      plan: finalPlan,
-      summary: buildSummaryFromPlan(finalPlan, 'All planned tasks completed; document updated'),
-      workflow: finalWorkflow,
-      research: result?.research || null,
-      changeSet: {
-        pending: true,
-        editedSections: editedTitles,
-        beforeSections: cloneSections(beforeSections),
-      },
-    }));
-  }
-
   function _applyAiHighlights(result) {
     const editor = richEditorRef.current;
     if (!editor) return;
@@ -2380,8 +2116,6 @@ export default function DocumentEditorPage({
     const userMsg = { id: Date.now(), role: 'user', text: displayText };
     const currentChatId = activeChatId;
     const beforeAgentSections = cloneSections(draftSections);
-    const dissertationRequest = looksLikeDissertationRequest(userText);
-    const genericDocRequest = !dissertationRequest && looksLikeLongDocumentRequest(userText);
     const progressMessageId = Date.now() + 1;
     // Send the writing-controls guidelines to the agent without cluttering
     // the visible chat bubble with the raw [Citation style: ...] prefix.
@@ -2400,124 +2134,11 @@ export default function DocumentEditorPage({
     setInputValue('');
     setIsThinking(true);
 
-    let previewPlan = [];
-    if (dissertationRequest) {
-      // Show an immediate placeholder so the user sees something straight away.
-      const placeholderPlan = createFallbackPreviewPlan();
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat.id === currentChatId
-            ? {
-                ...chat,
-                messages: [
-                  ...chat.messages,
-                  {
-                    id: progressMessageId,
-                    role: 'assistant',
-                    text: 'Generating your personalised dissertation plan...',
-                    summary: buildSummaryFromPlan(placeholderPlan, 'AI is creating your todo list...'),
-                    plan: placeholderPlan,
-                    workflow: {
-                      currentStep: 'Generating todo list',
-                      completedCount: 0,
-                      totalCount: placeholderPlan.length,
-                      statuses: placeholderPlan.map((item) => item.status),
-                      updates: ['AI is generating a tailored chapter plan for your topic...'],
-                    },
-                  },
-                ],
-              }
-            : chat
-        )
-      );
-      setLiveProgressMsgId(progressMessageId);
-
-      // Call the LLM plan endpoint — this is where the AI generates the tailored todo structure.
-      const planResult = await getDissertationPlan(currentDocument?.id, effectiveText);
-      previewPlan = planResult?.plan?.length ? planResult.plan : createFallbackPreviewPlan();
-
-      const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
-      const stageLabel = firstInProgress
-        ? `Starting: ${statusLabel(firstInProgress.step || '')}...`
-        : 'Writing dissertation...';
-
-      // Replace placeholder with the real AI-generated plan.
-      updateAssistantMessage(currentChatId, progressMessageId, (msg) => ({
-        ...msg,
-        text: 'Dissertation plan ready. Starting to write...',
-        summary: buildSummaryFromPlan(previewPlan, stageLabel),
-        plan: previewPlan,
-        workflow: {
-          currentStep: statusLabel(firstInProgress?.step || ''),
-          completedCount: previewPlan.filter((item) => item.status === 'done').length,
-          totalCount: previewPlan.length,
-          statuses: previewPlan.map((item) => item.status),
-          updates: [
-            'Todo list generated by AI',
-            `Now doing: ${statusLabel(firstInProgress?.step || '')}`,
-          ],
-        },
-      }));
-
-      startDissertationProgressPolling(currentDocument?.id, currentChatId, progressMessageId, previewPlan);
-    }
-
-    // Assignments/essays/reports/articles don't always need a visible todo
-    // list — only long ones do. Ask the agent to plan the document first; it
-    // decides (via needs_todo) whether the piece is substantial enough to
-    // show progress, and only then do we surface the same todo-list UI used
-    // for dissertations.
-    let showPlanUi = dissertationRequest;
-    if (genericDocRequest) {
-      const docPlanResult = await getDocumentPlan(currentDocument?.id, effectiveText);
-      if (docPlanResult?.needs_todo && docPlanResult?.plan?.length) {
-        showPlanUi = true;
-        previewPlan = docPlanResult.plan;
-        const firstInProgress = previewPlan.find((item) => item.status === 'in_progress');
-        const stageLabel = firstInProgress
-          ? `Starting: ${statusLabel(firstInProgress.step || '')}...`
-          : 'Writing document...';
-
-        setChats((prev) =>
-          prev.map((chat) =>
-            chat.id === currentChatId
-              ? {
-                  ...chat,
-                  messages: [
-                    ...chat.messages,
-                    {
-                      id: progressMessageId,
-                      role: 'assistant',
-                      text: `This looks like a substantial ${docPlanResult.document_type || 'document'} (~${docPlanResult.estimated_words || ''} words) — generating a todo list before writing.`,
-                      summary: buildSummaryFromPlan(previewPlan, stageLabel),
-                      plan: previewPlan,
-                      workflow: {
-                        currentStep: statusLabel(firstInProgress?.step || ''),
-                        completedCount: previewPlan.filter((item) => item.status === 'done').length,
-                        totalCount: previewPlan.length,
-                        statuses: previewPlan.map((item) => item.status),
-                        updates: [
-                          'Todo list generated by AI',
-                          `Now doing: ${statusLabel(firstInProgress?.step || '')}`,
-                        ],
-                      },
-                    },
-                  ],
-                }
-              : chat
-          )
-        );
-        setLiveProgressMsgId(progressMessageId);
-        startDissertationProgressPolling(currentDocument?.id, currentChatId, progressMessageId, previewPlan);
-      }
-    }
-
     try {
-      // ── Step 1: Preview (non-dissertation only) ──────────────────────────
       // Send directly without preview_only so the backend executes immediately
       const result = await chatWithDocument(
         currentDocument?.id, effectiveText, selectedModel,
-        showPlanUi ? attachedFile : null,
+        null,
         /* previewOnly = */ false,
         { groundedResearch, verifyCitations: groundedResearch },
       );
@@ -2528,9 +2149,7 @@ export default function DocumentEditorPage({
       }
       clearProgressPolling();
 
-      if (showPlanUi) {
-        await playbackDissertationResult(currentChatId, progressMessageId, result, previewPlan, beforeAgentSections);
-      } else {
+      {
         const assistantMsgId = Date.now() + 1;
         setChats((prev) =>
           prev.map((chat) =>

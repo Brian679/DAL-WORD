@@ -10,12 +10,8 @@ from rest_framework.views import APIView
 
 from documents.models import Document, ChatMessage
 from documents.serializers import DocumentSerializer
-from tasks.dissertation_tasks import generate_dissertation_sections
 
-from .autonomous import (
-    run_agent, generate_dissertation_plan_llm, llm_chapters_to_flat_steps, _research_design,
-    _llm_writing_plan, _full_context_for_generation, writing_plan_to_flat_steps,
-)
+from .autonomous import run_agent
 from .agents_v2 import run_multi_agent_supervision
 from .academic_runtime import ClaimGraphBuilder, CoherenceChecker, EvaluationEngine, WorkflowEngine
 from .executor import run_action
@@ -258,15 +254,6 @@ class ChatView(APIView):
         return Response(response_data)
 
 
-class GenerateDissertationView(APIView):
-    def post(self, request, document_id: int):
-        if not Document.objects.filter(pk=document_id, user=request.user).exists():
-            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
-        topic = request.data.get("topic", "Untitled Topic")
-        task = generate_dissertation_sections.delay(document_id=document_id, topic=topic)
-        return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
-
-
 class ResearchWorkflowView(APIView):
     """Run retrieval + specialist-agent supervision for research-grounded writing."""
 
@@ -318,91 +305,6 @@ class ResearchWorkflowView(APIView):
                 ],
             }
         )
-
-
-class DissertationPlanView(APIView):
-    """Call the LLM to generate a tailored dissertation chapter plan.
-
-    The plan is returned to the frontend so the user sees a topic-specific
-    todo list immediately, before writing begins. The generated chapter
-    structure is also cached inside the document so the write step reuses it.
-    """
-
-    def post(self, request, document_id: int):
-        message = (request.data.get("message") or "").strip()
-        topic = (request.data.get("topic") or message[:300]).strip()
-        if not topic and not message:
-            return Response({"error": "message or topic required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            document = Document.objects.get(pk=document_id, user=request.user)
-        except Document.DoesNotExist:
-            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        # Detect research design from the message so the plan is appropriate
-        research_design = _research_design(message, topic, document)
-
-        # Ask the LLM to generate the chapter plan
-        try:
-            llm_chapters = generate_dissertation_plan_llm(topic, message, research_design)
-        except Exception as exc:
-            logger.error("DissertationPlanView LLM call failed: %s", exc, exc_info=True)
-            return Response({"error": "Plan generation failed"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        # Cache the plan in the document so _write_dissertation can reuse it
-        existing = document.content or {}
-        existing["_dissertation_plan_chapters"] = llm_chapters
-        document.content = existing
-        document.save(update_fields=["content"])
-
-        # Convert to the flat step format the frontend uses
-        flat_steps = llm_chapters_to_flat_steps(llm_chapters)
-        return Response({"plan": flat_steps, "chapters": llm_chapters})
-
-
-class DocumentPlanView(APIView):
-    """Call the LLM to decide, for a non-dissertation write request (assignment,
-    essay, report, article, ...), how many sections it needs and whether the
-    piece is substantial enough to warrant a visible todo list before writing.
-
-    Mirrors DissertationPlanView: the plan is cached on the document so the
-    actual write step (_plan_and_write_document) reuses it instead of asking
-    the LLM twice.
-    """
-
-    def post(self, request, document_id: int):
-        message = (request.data.get("message") or "").strip()
-        topic = (request.data.get("topic") or message[:300]).strip()
-        if not topic and not message:
-            return Response({"error": "message or topic required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            document = Document.objects.get(pk=document_id, user=request.user)
-        except Document.DoesNotExist:
-            return Response({"error": "document not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        doc_context = _full_context_for_generation(document)
-        try:
-            writing_plan = _llm_writing_plan(message, topic, doc_context)
-        except Exception as exc:
-            logger.error("DocumentPlanView LLM call failed: %s", exc, exc_info=True)
-            return Response({"error": "Plan generation failed"}, status=status.HTTP_502_BAD_GATEWAY)
-
-        # Cache the plan so _plan_and_write_document can reuse it
-        existing = document.content or {}
-        existing["_document_plan_sections"] = writing_plan
-        document.content = existing
-        document.save(update_fields=["content"])
-
-        flat_steps = writing_plan_to_flat_steps(writing_plan)
-        return Response({
-            "plan": flat_steps,
-            "needs_todo": writing_plan["needs_todo"],
-            "sections": writing_plan["sections"],
-            "document_type": writing_plan["document_type"],
-            "document_title": writing_plan["document_title"],
-            "estimated_words": writing_plan["estimated_words"],
-        })
 
 
 class AIDetectView(APIView):
